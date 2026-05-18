@@ -14,6 +14,7 @@ TST004 = false
 BEN003 = false
 BEN001 = false
 SEM011 = false
+SEM013 = false
 TST006 = false
 SEC003 = false
 SEC014 = false
@@ -26,6 +27,7 @@ SEC011 = false
 SEC007 = false
 SEC010 = false
 SEC017 = false
+SEM016 = false
 TST003 = false
 
 [rules.severity]
