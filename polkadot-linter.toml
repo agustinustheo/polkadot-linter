@@ -1,0 +1,117 @@
+# Example project-level configuration for polkadot-linter.
+
+[general]
+exclude = ["*.lock", ".git/**", "target/**"]
+include = []
+default_severity = "warning"
+
+[rules]
+[rules.enabled]
+BEN002 = false
+VAL001 = false
+SEC008 = false
+TST004 = false
+BEN003 = false
+BEN001 = false
+SEM011 = false
+TST006 = false
+SEC003 = false
+SEC014 = false
+TST005 = false
+SEC001 = false
+SEC005 = false
+SEC009 = false
+SEM006 = false
+SEC011 = false
+SEC007 = false
+SEC010 = false
+SEC017 = false
+TST003 = false
+
+[rules.severity]
+TST002 = "error"
+
+[validation_order]
+severity = "warning"
+heavy_operations = [
+	"::contains_key(",
+	"::count(",
+	"::decode_len(",
+	"::get(",
+	"::iter(",
+	"::iter_keys(",
+	"::iter_prefix(",
+	"::try_get(",
+	"CountedStorageMap::get",
+	"StorageDoubleMap::get",
+	"StorageMap::get",
+	"StorageNMap::get",
+	"StorageValue::get",
+	"T::DbWeight::get()",
+]
+cheap_validations = [
+	".is_empty()",
+	".is_none()",
+	".is_some()",
+	".is_zero()",
+	"ensure!",
+	"ensure_none",
+	"ensure_root",
+	"ensure_signed",
+]
+
+[test_smells]
+severity = "warning"
+max_setup_ratio = 5.0
+internal_field_patterns = [
+	'\._\w+',
+	'\.buffer\b',
+	'\.cache\b',
+	'\.counter\b',
+	'\.flag\b',
+	'\.inner\b',
+	'\.state\b',
+]
+
+[mock_usage]
+severity = "warning"
+max_mock_expectations = 10
+max_mock_ratio = 3.0
+mock_patterns = [
+	"MOCK",
+	"Mock",
+	"MockBuilder",
+	"mock",
+	"new_test_ext",
+	"with_mock",
+]
+
+[benchmarking]
+severity = "warning"
+sensitive_paths = [
+	"pallets/*/src/lib.rs",
+	"pallets/*/src/weights.rs",
+	"runtime/src/**",
+]
+verification_patterns = [
+	"assert_has_event",
+	"assert_last_event",
+	"verify",
+]
+dispatchable_patterns = [
+	"#[pallet::call]",
+	"#[pallet::call_index",
+	"pub fn ",
+]
+
+[terminology]
+severity = "advisory"
+check_identifiers = false
+check_strings = true
+
+[terminology.british_english]
+# "optimisation" = "optimization"
+# "initialise" = "initialize"
+
+[terminology.forbidden_terms]
+# "substrate" = "Polkadot SDK"

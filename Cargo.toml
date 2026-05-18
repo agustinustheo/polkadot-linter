@@ -1,0 +1,40 @@
+[workspace]
+
+[package]
+name = "polkadot-linter"
+version = "1.0.0"
+edition = "2021"
+description = "A Polkadot SDK-specific linter for repeatable, project-specific checks"
+license = "GPL-3.0-only"
+readme = "README.md"
+keywords = ["linter", "polkadot", "substrate", "frame", "pallet"]
+categories = ["development-tools", "command-line-utilities"]
+exclude = ["tests/", "polkadot-linter.toml"]
+
+[lib]
+name = "polkadot_linter"
+path = "src/lib.rs"
+
+[[bin]]
+name = "polkadot-linter"
+path = "src/main.rs"
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
+quote = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+glob = "0.3"
+regex = "1"
+colored = "2"
+walkdir = "2"
+log = "0.4"
+env_logger = "0.11"
+
+[dev-dependencies]
+tempfile = "3"
+insta = "1"
+pretty_assertions = "1"

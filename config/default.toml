@@ -1,0 +1,137 @@
+# polkadot-linter — Polkadot SDK-specific linter configuration
+# See docs/rules_traceability.md for the mapping from reviewer complaints to rules.
+
+[general]
+exclude = ["*.lock", ".git/**", "target/**"]
+include = []
+default_severity = "warning"
+
+[rules]
+# Override individual rule enablement: rule_id = true/false
+[rules.enabled]
+# All rules enabled by default
+
+# Override individual rule severity: rule_id = "advisory"|"warning"|"error"
+[rules.severity]
+# TST002 (assert_ok on apply_extrinsic) is error-level because it silently hides failures
+TST002 = "error"
+
+# ---------------------------------------------------------------------------
+# Rule family: Validation order (VAL001)
+# ---------------------------------------------------------------------------
+[validation_order]
+severity = "warning"
+
+# Known expensive/heavy operations — Polkadot SDK storage reads
+heavy_operations = [
+	"::contains_key(",
+	"::count(",
+	"::decode_len(",
+	"::get(",
+	"::iter(",
+	"::iter_keys(",
+	"::iter_prefix(",
+	"::try_get(",
+	"CountedStorageMap::get",
+	"StorageDoubleMap::get",
+	"StorageMap::get",
+	"StorageNMap::get",
+	"StorageValue::get",
+	"T::DbWeight::get()",
+]
+
+# Known cheap validation operations
+cheap_validations = [
+	".is_empty()",
+	".is_none()",
+	".is_some()",
+	".is_zero()",
+	"ensure!",
+	"ensure_none",
+	"ensure_root",
+	"ensure_signed",
+]
+
+# ---------------------------------------------------------------------------
+# Rule family: Test smells (TST001-TST005)
+# ---------------------------------------------------------------------------
+[test_smells]
+severity = "warning"
+max_setup_ratio = 5.0
+
+# Patterns in assertions that suggest testing implementation details
+internal_field_patterns = [
+	'\._\w+',      # underscore-prefixed private fields
+	'\.buffer\b',
+	'\.cache\b',
+	'\.counter\b',
+	'\.flag\b',
+	'\.inner\b',
+	'\.state\b',
+]
+
+# ---------------------------------------------------------------------------
+# Rule family: Mock usage (MOK001)
+# ---------------------------------------------------------------------------
+[mock_usage]
+severity = "warning"
+max_mock_expectations = 10
+max_mock_ratio = 3.0
+
+mock_patterns = [
+	"MOCK",
+	"Mock",
+	"MockBuilder",
+	"mock",
+	"new_test_ext",
+	"with_mock",
+]
+
+# ---------------------------------------------------------------------------
+# Rule family: Benchmarking compliance (BEN001-BEN002)
+# ---------------------------------------------------------------------------
+[benchmarking]
+severity = "warning"
+
+sensitive_paths = [
+	"pallets/*/src/lib.rs",
+	"pallets/*/src/weights.rs",
+	"runtime/src/**",
+]
+
+verification_patterns = [
+	"assert_has_event",
+	"assert_last_event",
+	"verify",
+]
+
+dispatchable_patterns = [
+	"#[pallet::call]",
+	"#[pallet::call_index",
+	"pub fn ",
+]
+
+# ---------------------------------------------------------------------------
+# Rule family: Terminology (TRM001)
+# ---------------------------------------------------------------------------
+[terminology]
+severity = "advisory"
+check_identifiers = false
+check_strings = true
+
+# Google English preferred spellings (forbidden -> preferred)
+# Note: this project uses Google English, which is generally American English
+# with some exceptions. Adjust as needed.
+[terminology.british_english]
+# These map non-preferred -> preferred spellings
+# Uncomment and customise for your project:
+# "optimisation" = "optimization"
+# "initialise" = "initialize"
+# "finalise" = "finalize"
+# "colour" = "color"
+# "behaviour" = "behavior"
+# "favour" = "favor"
+
+# Project-specific forbidden terms
+[terminology.forbidden_terms]
+# "substrate" = "Polkadot SDK"
