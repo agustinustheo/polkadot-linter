@@ -843,6 +843,112 @@ mod tests {
 }
 
 // ==========================================================================
+// SEM013: Custom invalidity enums should use #[repr(u8)]
+// ==========================================================================
+#[test]
+fn sem013_detects_missing_repr_u8() {
+    let bad = include_str!("fixtures/bad_sem013.rs");
+    let diags = check_fixture("pallets/foo/src/extension.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM013"),
+        "SEM013 should fire on custom invalidity enums without #[repr(u8)]"
+    );
+}
+
+#[test]
+fn sem013_allows_repr_u8() {
+    let good = include_str!("fixtures/good_sem013.rs");
+    let diags = check_fixture("pallets/foo/src/extension.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM013"),
+        "SEM013 should NOT fire when #[repr(u8)] is present"
+    );
+}
+
+// ==========================================================================
+// SEM014: SubmitTransaction logs should use LOG_TARGET
+// ==========================================================================
+#[test]
+fn sem014_detects_missing_log_target() {
+    let bad = include_str!("fixtures/bad_sem014.rs");
+    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM014"),
+        "SEM014 should fire when SubmitTransaction logging omits target: LOG_TARGET"
+    );
+}
+
+#[test]
+fn sem014_allows_multiline_log_target() {
+    let good = include_str!("fixtures/good_sem014.rs");
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM014"),
+        "SEM014 should NOT fire when target: LOG_TARGET is present on a following line"
+    );
+}
+
+#[test]
+fn sem014_ignores_unrelated_logs() {
+    let code = r#"
+fn log_other_issue() {
+    log::warn!("background cleanup skipped");
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEM014"),
+        "SEM014 should ignore log macros unrelated to SubmitTransaction"
+    );
+}
+
+// ==========================================================================
+// SEM015: #[pallet::authorize] should have #[pallet::weight_of_authorize]
+// ==========================================================================
+#[test]
+fn sem015_detects_missing_weight_of_authorize() {
+    let bad = include_str!("fixtures/bad_sem015.rs");
+    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM015"),
+        "SEM015 should fire when #[pallet::authorize] has no companion #[pallet::weight_of_authorize]"
+    );
+}
+
+#[test]
+fn sem015_allows_weight_of_authorize() {
+    let good = include_str!("fixtures/good_sem015.rs");
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM015"),
+        "SEM015 should NOT fire when #[pallet::weight_of_authorize] is present"
+    );
+}
+
+// ==========================================================================
+// SEM016: CreateAuthorizedTransaction should include AuthorizeCall::new()
+// ==========================================================================
+#[test]
+fn sem016_detects_missing_authorize_call() {
+    let bad = include_str!("fixtures/bad_sem016.rs");
+    let diags = check_fixture("pallets/foo/src/mock.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM016"),
+        "SEM016 should fire when create_extension omits AuthorizeCall::new()"
+    );
+}
+
+#[test]
+fn sem016_allows_generic_authorize_call() {
+    let good = include_str!("fixtures/good_sem016.rs");
+    let diags = check_fixture("runtime/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM016"),
+        "SEM016 should NOT fire when create_extension includes frame_system::AuthorizeCall::<Runtime>::new()"
+    );
+}
+
+// ==========================================================================
 // TST006: Extrinsic without event
 // ==========================================================================
 #[test]
