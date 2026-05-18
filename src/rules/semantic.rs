@@ -8,7 +8,7 @@ use syn::{
     visit::{self, Visit},
     Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprMethodCall, File as SynFile, FnArg,
     GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Pat,
-    PathArguments, Token, Type, TypePath, UseTree,
+    PathArguments, Token, Type, TypePath, UseTree, Visibility,
 };
 
 use crate::{
@@ -319,20 +319,29 @@ fn attr_expr(attr: &Attribute) -> Option<Expr> {
 }
 
 fn use_tree_has_disallowed_glob(tree: &UseTree) -> bool {
-    match tree {
-        UseTree::Glob(_) => true,
-        UseTree::Group(group) => group.items.iter().any(use_tree_has_disallowed_glob),
-        UseTree::Name(_) | UseTree::Rename(_) => false,
-        UseTree::Path(path) => {
-            if matches!(&*path.tree, UseTree::Glob(_))
-                && (path.ident == "super" || path.ident.to_string().contains("prelude"))
-            {
-                false
-            } else {
-                use_tree_has_disallowed_glob(&path.tree)
+    fn walk(tree: &UseTree, allow_glob: bool) -> bool {
+        match tree {
+            UseTree::Glob(_) => !allow_glob,
+            UseTree::Group(group) => group.items.iter().any(|item| walk(item, allow_glob)),
+            UseTree::Name(_) | UseTree::Rename(_) => false,
+            UseTree::Path(path) => {
+                let allow_nested_glob = allow_glob
+                    || path.ident == "super"
+                    || path.ident.to_string().contains("prelude");
+                walk(&path.tree, allow_nested_glob)
             }
         }
     }
+
+    walk(tree, false)
+}
+
+fn has_public_visibility(visibility: &Visibility) -> bool {
+    !matches!(visibility, Visibility::Inherited)
+}
+
+fn is_storage_iteration_call_path(path: &syn::Path) -> bool {
+    matches!(path_last_ident(path).as_deref(), Some("iter" | "drain")) && path_owner_name(path).is_some()
 }
 
 struct MacroNameVisitor<'a> {
@@ -737,6 +746,7 @@ impl LintRule for NoWildcardImports {
 
             fn visit_item_use(&mut self, node: &'ast syn::ItemUse) {
                 if self.block_depth == 0
+                    && !has_public_visibility(&node.vis)
                     && !is_masked_span(self.mask, node.span())
                     && use_tree_has_disallowed_glob(&node.tree)
                 {
@@ -808,26 +818,26 @@ impl LintRule for ParameteriseWeightFunctions {
 
         let ast = ast_file(ctx)?;
 
+        fn is_unparameterised_weight_mul(node: &ExprMethodCall) -> bool {
+            if node.method != "saturating_mul" {
+                return false;
+            }
+            let Expr::Call(receiver_call) = &*node.receiver else {
+                return false;
+            };
+            let Expr::Path(expr_path) = &*receiver_call.func else {
+                return false;
+            };
+            receiver_call.args.is_empty() && path_has_segment(&expr_path.path, "WeightInfo")
+        }
+
         struct WeightExprVisitor {
             found: bool,
         }
 
         impl<'ast> Visit<'ast> for WeightExprVisitor {
             fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-                if self.found || node.method != "saturating_mul" {
-                    visit::visit_expr_method_call(self, node);
-                    return;
-                }
-                let Expr::Call(receiver_call) = &*node.receiver else {
-                    visit::visit_expr_method_call(self, node);
-                    return;
-                };
-                let Expr::Path(expr_path) = &*receiver_call.func else {
-                    visit::visit_expr_method_call(self, node);
-                    return;
-                };
-                if receiver_call.args.is_empty() && path_has_segment(&expr_path.path, "WeightInfo")
-                {
+                if !self.found && is_unparameterised_weight_mul(node) {
                     self.found = true;
                 }
                 visit::visit_expr_method_call(self, node);
@@ -843,6 +853,30 @@ impl LintRule for ParameteriseWeightFunctions {
         }
 
         impl WeightInfoVisitor<'_> {
+            fn push_diag(&mut self, span: Span) {
+                self.diagnostics.push(Diagnostic {
+                    rule_id: self.rule_id.to_string(),
+                    rule_name: self.rule_name.to_string(),
+                    category: RuleCategory::Semantic,
+                    severity: self.severity,
+                    file: self.file.to_path_buf(),
+                    line: span_line(span),
+                    column: Some(span_column(span)),
+                    end_line: None,
+                    message: "Weight function called without parameter then multiplied"
+                        .to_string(),
+                    explanation:
+                        "Use parameterised benchmarks: `T::WeightInfo::foo(n)` captures \
+                        constant overhead that does not scale with the input, unlike \
+                        `T::WeightInfo::foo().saturating_mul(n)` which misses it."
+                            .to_string(),
+                    suggestion: Some(
+                        "Pass the scaling parameter directly: `T::WeightInfo::foo(n)`"
+                            .to_string(),
+                    ),
+                });
+            }
+
             fn inspect_attrs(&mut self, attrs: &[Attribute]) {
                 for attr in attrs {
                     if !attr_path_matches(attr, &["pallet", "weight"]) {
@@ -854,27 +888,7 @@ impl LintRule for ParameteriseWeightFunctions {
                     let mut finder = WeightExprVisitor { found: false };
                     finder.visit_expr(&expr);
                     if finder.found {
-                        self.diagnostics.push(Diagnostic {
-                            rule_id: self.rule_id.to_string(),
-                            rule_name: self.rule_name.to_string(),
-                            category: RuleCategory::Semantic,
-                            severity: self.severity,
-                            file: self.file.to_path_buf(),
-                            line: span_line(attr.span()),
-                            column: Some(span_column(attr.span())),
-                            end_line: None,
-                            message: "Weight function called without parameter then multiplied"
-                                .to_string(),
-                            explanation:
-                                "Use parameterised benchmarks: `T::WeightInfo::foo(n)` captures \
-                                constant overhead that does not scale with the input, unlike \
-                                `T::WeightInfo::foo().saturating_mul(n)` which misses it."
-                                    .to_string(),
-                            suggestion: Some(
-                                "Pass the scaling parameter directly: `T::WeightInfo::foo(n)`"
-                                    .to_string(),
-                            ),
-                        });
+                        self.push_diag(attr.span());
                     }
                 }
             }
@@ -889,6 +903,13 @@ impl LintRule for ParameteriseWeightFunctions {
             fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
                 self.inspect_attrs(&item_fn.attrs);
                 visit::visit_impl_item_fn(self, item_fn);
+            }
+
+            fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+                if is_unparameterised_weight_mul(node) {
+                    self.push_diag(node.span());
+                }
+                visit::visit_expr_method_call(self, node);
             }
         }
 
@@ -1130,59 +1151,36 @@ impl LintRule for SpStdDeprecated {
             return None;
         }
 
-        let ast = ast_file(ctx)?;
+        let diagnostics = ctx
+            .content
+            .lines()
+            .enumerate()
+            .filter_map(|(idx, line)| {
+                let sanitized = strip_strings_and_line_comments(line);
+                sanitized.contains("sp_std::").then(|| Diagnostic {
+                    rule_id: self.id().to_string(),
+                    rule_name: self.name().to_string(),
+                    category: RuleCategory::Semantic,
+                    severity: config.rule_severity(self.id(), Severity::Warning),
+                    file: ctx.path.clone(),
+                    line: idx + 1,
+                    column: sanitized.find("sp_std::").map(|col| col + 1),
+                    end_line: None,
+                    message: "`sp_std` is deprecated — use `alloc` instead".to_string(),
+                    explanation: "`sp_std` was deprecated in polkadot-sdk. Use \
+                        `extern crate alloc; use alloc::vec::Vec;` for `no_std` compatibility."
+                        .to_string(),
+                    suggestion: Some(
+                        "Replace `sp_std::vec::Vec` with `alloc::vec::Vec`".to_string(),
+                    ),
+                })
+            })
+            .collect::<Vec<_>>();
 
-        struct SpStdVisitor<'a> {
-            diagnostics: Vec<Diagnostic>,
-            file: &'a Path,
-            severity: Severity,
-            rule_id: &'a str,
-            rule_name: &'a str,
-        }
-
-        impl<'ast> Visit<'ast> for SpStdVisitor<'_> {
-            fn visit_path(&mut self, path: &'ast syn::Path) {
-                if path
-                    .segments
-                    .first()
-                    .map(|segment| segment.ident == "sp_std")
-                    .unwrap_or(false)
-                {
-                    self.diagnostics.push(Diagnostic {
-                        rule_id: self.rule_id.to_string(),
-                        rule_name: self.rule_name.to_string(),
-                        category: RuleCategory::Semantic,
-                        severity: self.severity,
-                        file: self.file.to_path_buf(),
-                        line: span_line(path.span()),
-                        column: Some(span_column(path.span())),
-                        end_line: None,
-                        message: "`sp_std` is deprecated — use `alloc` instead".to_string(),
-                        explanation: "`sp_std` was deprecated in polkadot-sdk. Use \
-                            `extern crate alloc; use alloc::vec::Vec;` for `no_std` compatibility."
-                            .to_string(),
-                        suggestion: Some(
-                            "Replace `sp_std::vec::Vec` with `alloc::vec::Vec`".to_string(),
-                        ),
-                    });
-                }
-                visit::visit_path(self, path);
-            }
-        }
-
-        let mut visitor = SpStdVisitor {
-            diagnostics: Vec::new(),
-            file: &ctx.path,
-            severity: config.rule_severity(self.id(), Severity::Warning),
-            rule_id: self.id(),
-            rule_name: self.name(),
-        };
-        visitor.visit_file(ast);
-
-        if visitor.diagnostics.is_empty() {
+        if diagnostics.is_empty() {
             None
         } else {
-            Some(visitor.diagnostics)
+            Some(diagnostics)
         }
     }
 }
@@ -2900,8 +2898,44 @@ impl LintRule for RawArithmeticInFallible {
         fn is_fallible_output(output: &syn::ReturnType) -> bool {
             match output {
                 syn::ReturnType::Default => false,
-                syn::ReturnType::Type(_, ty) => compact_tokens(ty).contains("Result"),
+                syn::ReturnType::Type(_, ty) => {
+                    let compact = compact_tokens(ty);
+                    compact.contains("Result")
+                        || compact.contains("DispatchResult")
+                        || compact.contains("TransactionValidity")
+                        || compact.contains("ApplyExtrinsicResult")
+                }
             }
+        }
+
+        fn is_arithmetic_operand_char(ch: char) -> bool {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | ')' | ']')
+        }
+
+        fn is_arithmetic_rhs_char(ch: char) -> bool {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '(')
+        }
+
+        fn contains_raw_arithmetic_tokens(tokens: &str) -> bool {
+            let chars: Vec<char> = tokens.chars().collect();
+            for (idx, ch) in chars.iter().enumerate() {
+                if !matches!(ch, '+' | '-' | '*') {
+                    continue;
+                }
+                if idx == 0 || idx + 1 >= chars.len() {
+                    continue;
+                }
+                let prev = chars[idx - 1];
+                let next = chars[idx + 1];
+                if !is_arithmetic_operand_char(prev) || !is_arithmetic_rhs_char(next) {
+                    continue;
+                }
+                if matches!(prev, '<' | '>' | '=' | '!') || matches!(next, '=' | '>') {
+                    continue;
+                }
+                return true;
+            }
+            false
         }
 
         struct ArithmeticVisitor<'a> {
@@ -2945,6 +2979,51 @@ impl LintRule for RawArithmeticInFallible {
                     });
                 }
                 visit::visit_expr_binary(self, expr_binary);
+            }
+
+            fn visit_macro(&mut self, mac: &'ast Macro) {
+                if is_masked_span(self.mask, mac.span()) {
+                    visit::visit_macro(self, mac);
+                    return;
+                }
+                let Some(name) = path_last_ident(&mac.path) else {
+                    visit::visit_macro(self, mac);
+                    return;
+                };
+                if name == "ensure" {
+                    let tokens = strip_strings_and_line_comments(&mac.tokens.to_string())
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect::<String>();
+                    if contains_raw_arithmetic_tokens(&tokens)
+                        && !tokens.contains("checked_")
+                        && !tokens.contains("saturating_")
+                        && !tokens.contains("overflowing_")
+                        && !tokens.contains("wrapping_")
+                    {
+                        self.diagnostics.push(Diagnostic {
+                            rule_id: self.rule_id.to_string(),
+                            rule_name: self.rule_name.to_string(),
+                            category: RuleCategory::Semantic,
+                            severity: self.severity,
+                            file: self.file.to_path_buf(),
+                            line: span_line(mac.span()),
+                            column: Some(span_column(mac.span())),
+                            end_line: None,
+                            message: "Raw arithmetic in fallible function — wrapping overflow risk"
+                                .to_string(),
+                            explanation: "In release builds, integer overflow wraps silently \
+                                (e.g., 255u8 + 1 = 0). Since this function returns Result, \
+                                use `checked_add`/`saturating_add` to handle overflow explicitly."
+                                .to_string(),
+                            suggestion: Some(
+                                "Replace `a + b` with `a.checked_add(b).ok_or(Error::Overflow)?` or `a.saturating_add(b)`"
+                                    .to_string(),
+                            ),
+                        });
+                    }
+                }
+                visit::visit_macro(self, mac);
             }
         }
 
@@ -3359,21 +3438,11 @@ impl LintRule for StorageIterationInDispatchables {
         impl<'ast> Visit<'ast> for IterationFinder {
             fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
                 if let Some(path) = expr_call_path(expr_call) {
-                    if matches!(path_last_ident(path).as_deref(), Some("iter" | "drain")) {
+                    if is_storage_iteration_call_path(path) {
                         self.found_span = Some(expr_call.span());
                     }
                 }
                 visit::visit_expr_call(self, expr_call);
-            }
-
-            fn visit_expr_method_call(&mut self, expr_method_call: &'ast ExprMethodCall) {
-                if matches!(
-                    expr_method_call.method.to_string().as_str(),
-                    "iter" | "drain"
-                ) {
-                    self.found_span = Some(expr_method_call.span());
-                }
-                visit::visit_expr_method_call(self, expr_method_call);
             }
         }
 

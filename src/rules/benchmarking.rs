@@ -185,6 +185,15 @@ fn collect_benchmark_names(content: &str) -> HashSet<String> {
     benchmark_names
 }
 
+fn has_matching_benchmark_name(benchmark_names: &HashSet<String>, target_name: &str) -> bool {
+    benchmark_names.iter().any(|benchmark_name| {
+        benchmark_name == target_name
+            || benchmark_name
+                .strip_prefix(target_name)
+                .is_some_and(|suffix| suffix.starts_with('_'))
+    })
+}
+
 fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
     if let Some(ast) = parse_ast(content) {
         struct ExtrinsicVisitor {
@@ -716,7 +725,7 @@ impl LintRule for ExtrinsicWithoutBenchmark {
 
         let mut diagnostics = Vec::new();
         for (fn_name, line) in &extrinsic_fns {
-            if !benchmark_names.contains(fn_name) {
+            if !has_matching_benchmark_name(&benchmark_names, fn_name) {
                 diagnostics.push(Diagnostic {
                     rule_id: self.id().to_string(),
                     rule_name: self.name().to_string(),

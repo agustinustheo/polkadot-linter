@@ -237,6 +237,32 @@ fn sem004_skips_benchmark_files() {
     );
 }
 
+#[test]
+fn sem004_allows_public_reexports() {
+    let good = r#"
+pub use pallet::*;
+pub use types::*;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM004"),
+        "SEM004 should NOT fire on public wildcard re-exports"
+    );
+}
+
+#[test]
+fn sem004_allows_nested_prelude_globs() {
+    let good = r#"
+use frame_system::pallet_prelude::{BlockNumberFor, *};
+use xcm::latest::prelude::{Junction::*, Location, NetworkId};
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM004"),
+        "SEM004 should NOT fire on standard prelude wildcard imports"
+    );
+}
+
 // ==========================================================================
 // SEM005: Parameterised weight functions
 // ==========================================================================
@@ -260,6 +286,20 @@ fn sem005_allows_parameterised_weight() {
     );
 }
 
+#[test]
+fn sem005_detects_weight_multiplication_outside_weight_attr() {
+    let bad = r#"
+pub fn replay_missing_roots_worst_case_weight<T: Config>(chunks: u32) -> Weight {
+    T::WeightInfo::send_replay_request().saturating_mul(chunks.into())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM005"),
+        "SEM005 should fire when a zero-arg WeightInfo call is multiplied in normal code"
+    );
+}
+
 // ==========================================================================
 // TST001: Prefer assert_noop
 // ==========================================================================
@@ -280,6 +320,23 @@ fn tst001_allows_assert_noop() {
     assert!(
         !has_rule(&diags, "TST001"),
         "TST001 should NOT fire on good fixture"
+    );
+}
+
+#[test]
+fn tst001_detects_unwrap_err_inside_assert_macro() {
+    let bad = r#"
+#[test]
+fn manual_error_assertion() {
+    let result = call();
+    assert!(result.is_err(), "should fail");
+    assert_eq!(result.unwrap_err(), Error::<Test>::Boom.into());
+}
+"#;
+    let diags = check_fixture("tests/test.rs", bad);
+    assert!(
+        has_rule(&diags, "TST001"),
+        "TST001 should fire when unwrap_err is used inside another assertion macro"
     );
 }
 
@@ -615,6 +672,22 @@ fn sem008_allows_alloc() {
     );
 }
 
+#[test]
+fn sem008_detects_grouped_sp_std_usage() {
+    let bad = r#"
+use sp_std::{vec, vec::Vec};
+
+fn build() -> Vec<u32> {
+    sp_std::vec![1, 2, 3]
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
+    assert!(
+        has_rule(&diags, "SEM008"),
+        "SEM008 should fire on grouped sp_std imports and macro usage"
+    );
+}
+
 // ==========================================================================
 // SEM009: Redundant contains_key before remove
 // ==========================================================================
@@ -854,6 +927,48 @@ fn submit() {}
     assert!(
         !has_rule(&diags, "BEN003"),
         "BEN003 should not fire when the extrinsic has a sibling benchmark"
+    );
+}
+
+#[test]
+fn ben003_allows_benchmark_variants_for_one_extrinsic() {
+    let root = std::env::temp_dir().join(format!(
+        "polkadot-linter-ben003-variants-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let pallet_dir = root.join("pallets/foo/src");
+    std::fs::create_dir_all(&pallet_dir).unwrap();
+
+    let lib_path = pallet_dir.join("lib.rs");
+    let bench_path = pallet_dir.join("benchmarking.rs");
+    let lib = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn unload_recycler_into_coins(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let benches = r#"
+#[benchmark]
+fn unload_recycler_into_coins_1_2() {}
+
+#[benchmark]
+fn unload_recycler_into_coins_3_8() {}
+"#;
+
+    std::fs::write(&lib_path, lib).unwrap();
+    std::fs::write(&bench_path, benches).unwrap();
+
+    let diags = check_fixture_path(lib_path, lib);
+    assert!(
+        !has_rule(&diags, "BEN003"),
+        "BEN003 should treat benchmark variants as coverage for the extrinsic"
     );
 }
 
@@ -1244,6 +1359,38 @@ pub fn calculate_share(
     assert!(has_rule(&diags, "SEC009"), "SEC009 should detect raw arithmetic when the return type is declared on a multi-line signature");
 }
 
+#[test]
+fn sec009_detects_dispatch_result_alias() {
+    let code = r#"
+pub fn timeout(now: u32, since: u32, timeout: u32) -> DispatchResultWithPostInfo {
+    ensure!(now > since + timeout, Error::<T>::TooEarly);
+    Ok(().into())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC009"),
+        "SEC009 should detect raw arithmetic in fallible return aliases like DispatchResultWithPostInfo"
+    );
+}
+
+#[test]
+fn sec009_ignores_ensure_without_arithmetic() {
+    let code = r#"
+pub fn validate<T>(first_alias: &u32, value: u32) -> DispatchResultWithPostInfo {
+    ensure!(SomeMap::<T>::contains_key((value, *first_alias)), Error::<T>::Missing);
+    ensure!(value >= 1, Error::<T>::TooSmall);
+    ensure!(value == 1, "proof-of-ink count mismatch");
+    Ok(().into())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC009"),
+        "SEC009 should NOT fire on ensure! checks that only use deref or comparisons"
+    );
+}
+
 // ==========================================================================
 // VAL003: Storage write before validation
 // ==========================================================================
@@ -1348,6 +1495,27 @@ fn sec011_allows_bounded_access_patterns() {
     assert!(
         !has_rule(&diags, "SEC011"),
         "SEC011 should NOT fire on bounded storage access"
+    );
+}
+
+#[test]
+fn sec011_allows_in_memory_iteration() {
+    let good = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let split_into = vec![1u32, 2u32, 3u32];
+        let _sum: u32 = split_into.iter().copied().sum();
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEC011"),
+        "SEC011 should NOT fire on iteration over in-memory collections"
     );
 }
 

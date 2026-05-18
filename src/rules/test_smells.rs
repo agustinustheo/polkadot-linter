@@ -95,6 +95,7 @@ impl LintRule for AssertNoop {
         }
 
         let ast = ast_file(ctx)?;
+        let mut diagnostics = Vec::new();
 
         struct AssertNoopFnVisitor {
             assert_lines: Vec<usize>,
@@ -181,11 +182,52 @@ impl LintRule for AssertNoop {
             rule_name: self.name(),
         };
         visitor.visit_file(ast);
+        diagnostics.extend(visitor.diagnostics);
 
-        if visitor.diagnostics.is_empty() {
+        let lines: Vec<&str> = ctx.content.lines().collect();
+        for (idx, line) in lines.iter().enumerate() {
+            if !line.contains(".is_err()") {
+                continue;
+            }
+            if lines
+                .iter()
+                .skip(idx + 1)
+                .take(4)
+                .any(|candidate| candidate.contains(".unwrap_err()"))
+            {
+                diagnostics.push(Diagnostic {
+                    rule_id: self.id().to_string(),
+                    rule_name: self.name().to_string(),
+                    category: RuleCategory::TestSmell,
+                    severity: config.rule_severity(self.id(), Severity::Warning),
+                    file: ctx.path.clone(),
+                    line: idx + 1,
+                    column: line.find(".is_err()").map(|col| col + 1),
+                    end_line: None,
+                    message: "Manual `is_err()` + `unwrap_err()` pattern; prefer `assert_noop!`"
+                        .to_string(),
+                    explanation:
+                        "Project convention: use `assert_noop!` for dispatch error assertions. \
+                        It checks both the error and that storage was not modified."
+                            .to_string(),
+                    suggestion: Some(
+                        "Replace with `assert_noop!(call, Error::<T>::YourError)`".to_string(),
+                    ),
+                });
+            }
+        }
+        diagnostics.sort_by_key(|diag| (diag.line, diag.column.unwrap_or(0)));
+        diagnostics.dedup_by(|a, b| {
+            a.rule_id == b.rule_id
+                && a.line == b.line
+                && a.column == b.column
+                && a.message == b.message
+        });
+
+        if diagnostics.is_empty() {
             None
         } else {
-            Some(visitor.diagnostics)
+            Some(diagnostics)
         }
     }
 }
