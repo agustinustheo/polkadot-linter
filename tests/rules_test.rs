@@ -386,6 +386,22 @@ fn tst003_allows_module_level_imports() {
     );
 }
 
+#[test]
+fn tst003_ignores_top_level_test_function_imports() {
+    let code = r#"
+#[test]
+fn helper_heavy_test() {
+    use crate::mock::Test;
+    let _ = core::mem::size_of::<Test>();
+}
+"#;
+    let diags = check_fixture("tests/test.rs", code);
+    assert!(
+        !has_rule(&diags, "TST003"),
+        "TST003 should ignore imports at the top level of a test function body"
+    );
+}
+
 // ==========================================================================
 // TST004: Pays::Yes error path
 // ==========================================================================
@@ -482,6 +498,45 @@ fn noop() {
 		has_rule(&diags, "BEN002"),
 		"BEN002 should still fire when benchmark only mentions assertion macros inside a string literal"
 	);
+}
+
+#[test]
+fn ben002_allows_ensure_postconditions_outside_measured_block() {
+    let code = r#"
+#[benchmark]
+fn rename_sub() -> Result<(), BenchmarkError> {
+    #[extrinsic_call]
+    _(RawOrigin::Signed(caller), value);
+
+    ensure!(SomeMap::<T>::contains_key(value), "value not written");
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert!(
+        !has_rule(&diags, "BEN002"),
+        "BEN002 should accept ensure! postconditions outside the measured block"
+    );
+}
+
+#[test]
+fn ben002_does_not_treat_assertions_inside_block_as_verification() {
+    let code = r#"
+#[benchmark]
+fn authorize_only() -> Result<(), BenchmarkError> {
+    #[block]
+    {
+        assert_ok!(Pallet::<T>::authorize_call());
+    }
+
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert!(
+        has_rule(&diags, "BEN002"),
+        "BEN002 should still require a postcondition outside #[block]"
+    );
 }
 
 #[test]
