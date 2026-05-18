@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, ExprCall, File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, Macro, TraitItem,
+    Attribute, File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, TraitItem,
 };
 
 use super::semantic::strip_strings_and_line_comments;
@@ -22,13 +22,6 @@ fn path_last_ident(path: &syn::Path) -> Option<String> {
     path.segments
         .last()
         .map(|segment| segment.ident.to_string())
-}
-
-fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
-    match &*expr_call.func {
-        syn::Expr::Path(expr_path) => Some(&expr_path.path),
-        _ => None,
-    }
 }
 
 fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
@@ -304,7 +297,8 @@ fn find_block_end_from(lines: &[&str], start: usize) -> usize {
 }
 
 fn has_verification_in_text(body_lines: &[&str], verification_patterns: &[String]) -> bool {
-    let sanitized_body = body_lines
+    let body_outside_measured_blocks = body_lines_outside_measured_blocks(body_lines);
+    let sanitized_body = body_outside_measured_blocks
         .iter()
         .map(|line| strip_strings_and_line_comments(line))
         .collect::<Vec<_>>();
@@ -323,9 +317,55 @@ fn has_verification_in_text(body_lines: &[&str], verification_patterns: &[String
             || line.contains("assert_ok!(")
             || line.contains("assert_noop!(")
             || line.contains("assert_err!(")
+            || line.contains("ensure!(")
             || line.contains("assert_last_event(")
             || line.contains("assert_has_event(")
     })
+}
+
+fn body_lines_outside_measured_blocks<'a>(body_lines: &'a [&'a str]) -> Vec<&'a str> {
+    let mut kept = Vec::with_capacity(body_lines.len());
+    let mut pending_block = false;
+    let mut in_block = false;
+    let mut block_depth: i32 = 0;
+
+    for line in body_lines {
+        let trimmed = line.trim();
+        if trimmed.starts_with("#[block]") {
+            pending_block = true;
+            continue;
+        }
+
+        if pending_block {
+            let open = line.chars().filter(|&c| c == '{').count() as i32;
+            let close = line.chars().filter(|&c| c == '}').count() as i32;
+            if open > 0 {
+                in_block = true;
+                pending_block = false;
+                block_depth += open;
+                block_depth -= close;
+                if block_depth <= 0 {
+                    in_block = false;
+                    block_depth = 0;
+                }
+            }
+            continue;
+        }
+
+        if in_block {
+            block_depth += line.chars().filter(|&c| c == '{').count() as i32;
+            block_depth -= line.chars().filter(|&c| c == '}').count() as i32;
+            if block_depth <= 0 {
+                in_block = false;
+                block_depth = 0;
+            }
+            continue;
+        }
+
+        kept.push(*line);
+    }
+
+    kept
 }
 
 // ---------------------------------------------------------------------------
@@ -466,102 +506,6 @@ impl LintRule for BenchmarkVerification {
 
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.content.lines().collect();
-        if let Some(ast) = parse_ast(ctx.content) {
-            struct AssertionVisitor {
-                found_assertion: bool,
-            }
-
-            impl<'ast> Visit<'ast> for AssertionVisitor {
-                fn visit_macro(&mut self, mac: &'ast Macro) {
-                    if matches!(
-                        path_last_ident(&mac.path).as_deref(),
-                        Some(
-                            "assert"
-                                | "assert_eq"
-                                | "assert_ne"
-                                | "assert_ok"
-                                | "assert_noop"
-                                | "assert_err"
-                        )
-                    ) {
-                        self.found_assertion = true;
-                    }
-                    visit::visit_macro(self, mac);
-                }
-
-                fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
-                    if expr_call_path(expr_call)
-                        .and_then(path_last_ident)
-                        .map(|name| {
-                            matches!(name.as_str(), "assert_last_event" | "assert_has_event")
-                        })
-                        .unwrap_or(false)
-                    {
-                        self.found_assertion = true;
-                    }
-                    visit::visit_expr_call(self, expr_call);
-                }
-            }
-
-            struct BenchAstVisitor<'a> {
-                diagnostics: Vec<Diagnostic>,
-                file: &'a std::path::Path,
-                severity: Severity,
-                rule_id: &'a str,
-                rule_name: &'a str,
-            }
-
-            impl<'ast> Visit<'ast> for BenchAstVisitor<'_> {
-                fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
-                    if has_attr(&item_fn.attrs, &["benchmark"]) {
-                        let mut assertion_visitor = AssertionVisitor {
-                            found_assertion: false,
-                        };
-                        assertion_visitor.visit_block(&item_fn.block);
-                        if !assertion_visitor.found_assertion {
-                            self.diagnostics.push(Diagnostic {
-                                rule_id: self.rule_id.to_string(),
-                                rule_name: self.rule_name.to_string(),
-                                category: RuleCategory::Benchmark,
-                                severity: self.severity,
-                                file: self.file.to_path_buf(),
-                                line: span_line(item_fn.span()),
-                                column: None,
-                                end_line: None,
-                                message: format!(
-                                    "Benchmark `{}` has no verification/postcondition check",
-                                    item_fn.sig.ident
-                                ),
-                                explanation: "Benchmarks should include a `verify` block that asserts \
-                                    the expected state change occurred. Without verification, a benchmark \
-                                    can silently measure a no-op."
-                                    .to_string(),
-                                suggestion: Some(
-                                    "Add a `verify { ... }` block with assertions like `assert_last_event` or `assert_has_event`"
-                                        .to_string(),
-                                ),
-                            });
-                        }
-                    }
-                    visit::visit_item_fn(self, item_fn);
-                }
-            }
-
-            let mut visitor = BenchAstVisitor {
-                diagnostics: Vec::new(),
-                file: &ctx.path,
-                severity: config.rule_severity(self.id(), Severity::Warning),
-                rule_id: self.id(),
-                rule_name: self.name(),
-            };
-            visitor.visit_file(&ast);
-            if !visitor.diagnostics.is_empty() {
-                return Some(visitor.diagnostics);
-            }
-            if ctx.content.contains("#[benchmark]") {
-                return None;
-            }
-        }
 
         let mut in_benchmarks_macro = false;
         let mut macro_depth: i32 = 0;

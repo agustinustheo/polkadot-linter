@@ -355,7 +355,7 @@ impl LintRule for ImportsInsideClosures {
             }
 
             fn visit_item_use(&mut self, item_use: &'ast syn::ItemUse) {
-                if self.block_depth >= 1 {
+                if self.block_depth >= 2 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
                         rule_name: self.rule_name.to_string(),
