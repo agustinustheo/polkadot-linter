@@ -341,7 +341,8 @@ fn has_public_visibility(visibility: &Visibility) -> bool {
 }
 
 fn is_storage_iteration_call_path(path: &syn::Path) -> bool {
-    matches!(path_last_ident(path).as_deref(), Some("iter" | "drain")) && path_owner_name(path).is_some()
+    matches!(path_last_ident(path).as_deref(), Some("iter" | "drain"))
+        && path_owner_name(path).is_some()
 }
 
 struct MacroNameVisitor<'a> {
@@ -863,16 +864,13 @@ impl LintRule for ParameteriseWeightFunctions {
                     line: span_line(span),
                     column: Some(span_column(span)),
                     end_line: None,
-                    message: "Weight function called without parameter then multiplied"
-                        .to_string(),
-                    explanation:
-                        "Use parameterised benchmarks: `T::WeightInfo::foo(n)` captures \
+                    message: "Weight function called without parameter then multiplied".to_string(),
+                    explanation: "Use parameterised benchmarks: `T::WeightInfo::foo(n)` captures \
                         constant overhead that does not scale with the input, unlike \
                         `T::WeightInfo::foo().saturating_mul(n)` which misses it."
-                            .to_string(),
+                        .to_string(),
                     suggestion: Some(
-                        "Pass the scaling parameter directly: `T::WeightInfo::foo(n)`"
-                            .to_string(),
+                        "Pass the scaling parameter directly: `T::WeightInfo::foo(n)`".to_string(),
                     ),
                 });
             }
@@ -1816,6 +1814,436 @@ impl LintRule for AllowDeadCodeInPallet {
         }
 
         let mut visitor = DeadCodeVisitor {
+            mask: &test_mask,
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+        };
+        visitor.visit_file(ast);
+
+        if visitor.diagnostics.is_empty() {
+            None
+        } else {
+            Some(visitor.diagnostics)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SEM013: Custom invalidity enums should use #[repr(u8)]
+// ---------------------------------------------------------------------------
+
+pub struct CustomInvalidityReprU8;
+
+impl LintRule for CustomInvalidityReprU8 {
+    fn id(&self) -> &str {
+        "SEM013"
+    }
+    fn name(&self) -> &str {
+        "custom-invalidity-repr-u8"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if should_skip_production_rule(ctx) {
+            return None;
+        }
+
+        fn is_custom_invalidity_enum(name: &str) -> bool {
+            name == "CustomInvalidity" || name == "CustomValidity" || name.contains("Invalidity")
+        }
+
+        fn has_repr_u8(attrs: &[Attribute]) -> bool {
+            attrs.iter().any(|attr| {
+                attr_path_matches(attr, &["repr"])
+                    && attr
+                        .to_token_stream()
+                        .to_string()
+                        .chars()
+                        .filter(|c| !c.is_whitespace())
+                        .collect::<String>()
+                        .contains("repr(u8)")
+            })
+        }
+
+        let test_mask = cfg_test_module_mask(ctx.content);
+        let ast = ast_file(ctx)?;
+
+        struct CustomInvalidityVisitor<'a> {
+            mask: &'a [bool],
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+        }
+
+        impl<'ast> Visit<'ast> for CustomInvalidityVisitor<'_> {
+            fn visit_item_enum(&mut self, item_enum: &'ast ItemEnum) {
+                if is_masked_span(self.mask, item_enum.span()) {
+                    return;
+                }
+
+                let enum_name = item_enum.ident.to_string();
+                if !is_custom_invalidity_enum(&enum_name) || has_repr_u8(&item_enum.attrs) {
+                    return;
+                }
+
+                self.diagnostics.push(Diagnostic {
+                    rule_id: self.rule_id.to_string(),
+                    rule_name: self.rule_name.to_string(),
+                    category: RuleCategory::Semantic,
+                    severity: self.severity,
+                    file: self.file.to_path_buf(),
+                    line: span_line(item_enum.span()),
+                    column: Some(span_column(item_enum.span())),
+                    end_line: None,
+                    message: format!(
+                        "`{}` should declare `#[repr(u8)]` before converting to `InvalidTransaction::Custom`",
+                        enum_name
+                    ),
+                    explanation: "Custom invalidity enums are often converted into \
+                        `InvalidTransaction::Custom(e as u8)`. Without `#[repr(u8)]`, the \
+                        discriminant layout is implicit, which makes downstream debugging and \
+                        compatibility reasoning harder."
+                        .to_string(),
+                    suggestion: Some("Add `#[repr(u8)]` above the enum declaration".to_string()),
+                });
+            }
+        }
+
+        let mut visitor = CustomInvalidityVisitor {
+            mask: &test_mask,
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+        };
+        visitor.visit_file(ast);
+
+        if visitor.diagnostics.is_empty() {
+            None
+        } else {
+            Some(visitor.diagnostics)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SEM014: SubmitTransaction logs should use target: LOG_TARGET
+// ---------------------------------------------------------------------------
+
+pub struct SubmitTransactionLogTarget;
+
+impl LintRule for SubmitTransactionLogTarget {
+    fn id(&self) -> &str {
+        "SEM014"
+    }
+    fn name(&self) -> &str {
+        "submit-transaction-log-target"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if should_skip_production_rule(ctx) {
+            return None;
+        }
+
+        fn is_log_macro_line(line: &str) -> bool {
+            [
+                "log::trace!(",
+                "log::debug!(",
+                "log::info!(",
+                "log::warn!(",
+                "log::error!(",
+            ]
+            .iter()
+            .any(|needle| line.contains(needle))
+        }
+
+        let mut diagnostics = Vec::new();
+        let lines: Vec<&str> = ctx.content.lines().collect();
+        let test_mask = cfg_test_module_mask(ctx.content);
+
+        for (i, line) in lines.iter().enumerate() {
+            if test_mask[i]
+                || !line.contains("SubmitTransaction::<")
+                || !line.contains("submit_transaction")
+            {
+                continue;
+            }
+
+            let search_end = (i + 12).min(lines.len());
+            for j in i..search_end {
+                if test_mask[j] || !is_log_macro_line(lines[j]) {
+                    continue;
+                }
+
+                let log_end = (j + 5).min(lines.len()).saturating_sub(1);
+                let log_window = (j..=log_end)
+                    .filter(|&k| !test_mask[k])
+                    .map(|k| lines[k])
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                if !log_window.contains("target:") {
+                    diagnostics.push(Diagnostic {
+                        rule_id: self.id().to_string(),
+                        rule_name: self.name().to_string(),
+                        category: RuleCategory::Semantic,
+                        severity: config.rule_severity(self.id(), Severity::Advisory),
+                        file: ctx.path.clone(),
+                        line: j + 1,
+                        column: None,
+                        end_line: Some(log_end + 1),
+                        message: "`SubmitTransaction` logging should include `target: LOG_TARGET`"
+                            .to_string(),
+                        explanation: "Offchain transaction submission failures are much easier \
+                            to trace when pallet logs emit through a stable `LOG_TARGET`. Reviewer \
+                            feedback repeatedly called this out for OCW cleanup and submission paths."
+                            .to_string(),
+                        suggestion: Some(
+                            "Add `target: LOG_TARGET,` to the nearby `log::...!` macro".to_string(),
+                        ),
+                    });
+                }
+                break;
+            }
+        }
+
+        if diagnostics.is_empty() {
+            None
+        } else {
+            Some(diagnostics)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SEM015: #[pallet::authorize] should have #[pallet::weight_of_authorize]
+// ---------------------------------------------------------------------------
+
+pub struct MissingWeightOfAuthorize;
+
+impl LintRule for MissingWeightOfAuthorize {
+    fn id(&self) -> &str {
+        "SEM015"
+    }
+    fn name(&self) -> &str {
+        "missing-weight-of-authorize"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if should_skip_production_rule(ctx) {
+            return None;
+        }
+
+        fn authorize_attr(attrs: &[Attribute]) -> Option<&Attribute> {
+            attrs
+                .iter()
+                .find(|attr| attr_path_matches(attr, &["pallet", "authorize"]))
+        }
+
+        fn has_weight_of_authorize(attrs: &[Attribute]) -> bool {
+            attrs
+                .iter()
+                .any(|attr| attr_path_matches(attr, &["pallet", "weight_of_authorize"]))
+        }
+
+        let test_mask = cfg_test_module_mask(ctx.content);
+        let ast = ast_file(ctx)?;
+
+        struct AuthorizeWeightVisitor<'a> {
+            mask: &'a [bool],
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+        }
+
+        impl AuthorizeWeightVisitor<'_> {
+            fn inspect_attrs(&mut self, attrs: &[Attribute], fallback_span: Span) {
+                let Some(authorize_attr) = authorize_attr(attrs) else {
+                    return;
+                };
+                if is_masked_span(self.mask, authorize_attr.span())
+                    || has_weight_of_authorize(attrs)
+                {
+                    return;
+                }
+
+                let span = authorize_attr.span();
+                self.diagnostics.push(Diagnostic {
+                    rule_id: self.rule_id.to_string(),
+                    rule_name: self.rule_name.to_string(),
+                    category: RuleCategory::Semantic,
+                    severity: self.severity,
+                    file: self.file.to_path_buf(),
+                    line: span_line(span),
+                    column: Some(span_column(span)),
+                    end_line: Some(span_line(fallback_span)),
+                    message: "`#[pallet::authorize]` is missing a companion `#[pallet::weight_of_authorize(...)]` attribute"
+                        .to_string(),
+                    explanation: "Authorized calls benchmark validation separately from execution. \
+                        Without `#[pallet::weight_of_authorize(...)]`, the authorize path has no \
+                        dedicated weight hook and can silently drift from the real validation cost."
+                        .to_string(),
+                    suggestion: Some(
+                        "Add `#[pallet::weight_of_authorize(T::WeightInfo::authorize_your_call())]` near the call attributes".to_string(),
+                    ),
+                });
+            }
+        }
+
+        impl<'ast> Visit<'ast> for AuthorizeWeightVisitor<'_> {
+            fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
+                self.inspect_attrs(&item_fn.attrs, item_fn.sig.ident.span());
+                visit::visit_item_fn(self, item_fn);
+            }
+
+            fn visit_impl_item(&mut self, item: &'ast ImplItem) {
+                if let ImplItem::Fn(item_fn) = item {
+                    self.inspect_attrs(&item_fn.attrs, item_fn.sig.ident.span());
+                }
+                visit::visit_impl_item(self, item);
+            }
+        }
+
+        let mut visitor = AuthorizeWeightVisitor {
+            mask: &test_mask,
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+        };
+        visitor.visit_file(ast);
+
+        if visitor.diagnostics.is_empty() {
+            None
+        } else {
+            Some(visitor.diagnostics)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SEM016: CreateAuthorizedTransaction should include AuthorizeCall::new()
+// ---------------------------------------------------------------------------
+
+pub struct MissingAuthorizeCallInCreateAuthorizedTransaction;
+
+impl LintRule for MissingAuthorizeCallInCreateAuthorizedTransaction {
+    fn id(&self) -> &str {
+        "SEM016"
+    }
+    fn name(&self) -> &str {
+        "missing-authorizecall-in-create-authorized-transaction"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if !ctx.is_rust {
+            return None;
+        }
+
+        let test_mask = cfg_test_module_mask(ctx.content);
+        let ast = ast_file(ctx)?;
+
+        struct AuthorizeCallVisitor {
+            found: bool,
+        }
+
+        impl<'ast> Visit<'ast> for AuthorizeCallVisitor {
+            fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
+                if let Some(path) = expr_call_path(expr_call) {
+                    if path_has_segment(path, "AuthorizeCall")
+                        && path_last_ident(path).as_deref() == Some("new")
+                    {
+                        self.found = true;
+                    }
+                }
+                visit::visit_expr_call(self, expr_call);
+            }
+        }
+
+        struct CreateAuthorizedTransactionVisitor<'a> {
+            mask: &'a [bool],
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+        }
+
+        impl<'ast> Visit<'ast> for CreateAuthorizedTransactionVisitor<'_> {
+            fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                if is_masked_span(self.mask, item_impl.span()) {
+                    return;
+                }
+
+                let Some((_, trait_path, _)) = &item_impl.trait_ else {
+                    return;
+                };
+                if !path_has_segment(trait_path, "CreateAuthorizedTransaction") {
+                    return;
+                }
+
+                for impl_item in &item_impl.items {
+                    let ImplItem::Fn(item_fn) = impl_item else {
+                        continue;
+                    };
+                    if item_fn.sig.ident != "create_extension"
+                        || is_masked_span(self.mask, item_fn.span())
+                    {
+                        continue;
+                    }
+
+                    let mut authorize_call_visitor = AuthorizeCallVisitor { found: false };
+                    authorize_call_visitor.visit_block(&item_fn.block);
+                    if authorize_call_visitor.found {
+                        continue;
+                    }
+
+                    self.diagnostics.push(Diagnostic {
+                        rule_id: self.rule_id.to_string(),
+                        rule_name: self.rule_name.to_string(),
+                        category: RuleCategory::Semantic,
+                        severity: self.severity,
+                        file: self.file.to_path_buf(),
+                        line: span_line(item_fn.sig.ident.span()),
+                        column: Some(span_column(item_fn.sig.ident.span())),
+                        end_line: None,
+                        message: "`CreateAuthorizedTransaction::create_extension()` should include `AuthorizeCall::new()`"
+                            .to_string(),
+                        explanation: "`AuthorizeCall` routes `#[pallet::authorize]` closures through the \
+                            transaction validation pipeline. Omitting it can make authorized OCW or \
+                            mock transactions bypass the authorize stage entirely."
+                            .to_string(),
+                        suggestion: Some(
+                            "Add `frame_system::AuthorizeCall::<T>::new()` (or `AuthorizeCall::new()`) to the returned extension tuple".to_string(),
+                        ),
+                    });
+                }
+
+                visit::visit_item_impl(self, item_impl);
+            }
+        }
+
+        let mut visitor = CreateAuthorizedTransactionVisitor {
             mask: &test_mask,
             diagnostics: Vec::new(),
             file: &ctx.path,
