@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal && rustup default 1.93.0
+
+      - name: Check tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name=="polkadot-linter") | .version')"
+          test "$TAG" = "$PKG" || { echo "tag $TAG != Cargo.toml $PKG"; exit 1; }
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Publish to crates.io
+        run: cargo publish -p polkadot-linter --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
