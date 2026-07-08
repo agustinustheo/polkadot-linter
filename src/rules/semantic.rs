@@ -35,7 +35,7 @@ fn is_pure_test_path(path: &Path) -> bool {
 }
 
 fn should_skip_production_rule(ctx: &FileContext) -> bool {
-    !ctx.is_rust || ctx.is_benchmark_file || is_pure_test_path(&ctx.path)
+    !ctx.is_rust || ctx.is_benchmark_file || ctx.is_test_file || is_pure_test_path(&ctx.path)
 }
 
 fn is_module_declaration(trimmed: &str) -> bool {
