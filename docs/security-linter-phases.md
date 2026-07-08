@@ -50,6 +50,8 @@ analysis model.
 
 Expected work:
 
+- introduce a FRAME domain model for pallet dispatchables, origins, and weight
+  attributes instead of re-parsing those concepts independently inside each rule
 - define a domain model for dispatchables, origins, weights, storage, hooks,
   events, and migrations
 - rewrite the retained security rules around that model
