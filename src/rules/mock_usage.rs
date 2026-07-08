@@ -71,14 +71,12 @@ impl MockStats<'_> {
 
 impl<'ast> Visit<'ast> for MockStats<'_> {
     fn visit_macro(&mut self, mac: &'ast Macro) {
-        match macro_name(mac).as_deref() {
-            Some(
-                "assert" | "assert_eq" | "assert_ne" | "assert_ok" | "assert_err" | "assert_noop"
-                | "assert_matches" | "assert_last_event" | "assert_has_event",
-            ) => {
-                self.assert_lines.insert(span_line(mac.span()));
-            }
-            _ => {}
+        if let Some(
+            "assert" | "assert_eq" | "assert_ne" | "assert_ok" | "assert_err" | "assert_noop"
+            | "assert_matches" | "assert_last_event" | "assert_has_event",
+        ) = macro_name(mac).as_deref()
+        {
+            self.assert_lines.insert(span_line(mac.span()));
         }
         visit::visit_macro(self, mac);
     }

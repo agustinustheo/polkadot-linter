@@ -88,6 +88,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEC015` | Security | `dispatch-bypass-filter` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
 | `SEC016` | Security | `unguarded-migration` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. |
 | `SEC017` | Security | `unbounded-vec-in-event` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
+| `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. |
 
 ## Configuration
 
@@ -118,6 +119,18 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 - `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.
 
 The full schema and defaults remain in [`config/default.toml`](config/default.toml).
+
+## Security Roadmap
+
+The security rules are being improved in explicit phases. The current focus is
+stabilizing the existing `syn`-based tool, not redesigning the engine yet.
+See [`docs/security-linter-phases.md`](docs/security-linter-phases.md).
+
+For repeatable SEC-rule corpus runs against the pinned SDK checkout, use:
+
+```bash
+scripts/benchmark-sec-rules.sh
+```
 
 ## Output Formats
 

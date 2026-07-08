@@ -76,6 +76,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::DispatchBypassFilterInProduction),
         Box::new(semantic::MissingStorageVersionCheckInRuntimeUpgrade),
         Box::new(semantic::VecInEvents),
+        Box::new(semantic::MissingWeightForUnboundedInput),
     ];
 
     // Filter disabled rules
