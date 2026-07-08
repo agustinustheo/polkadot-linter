@@ -37,6 +37,8 @@ layer.
 
 Expected work:
 
+- add a cargo/rustc-backed project model so scans understand declared target
+  roles even when file paths do not follow `tests/` or `benches/` conventions
 - evaluate `rustc`/Clippy-style analysis as the backend for hard rules
 - resolve types, cfg gates, macro expansion, and call targets where needed
 - reimplement high-noise rules that cannot be fixed reliably with `syn` alone

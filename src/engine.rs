@@ -6,6 +6,7 @@ use walkdir::WalkDir;
 use crate::{
     config::Config,
     diagnostics::Diagnostic,
+    project_model::{ProjectModel, SourceTargetKind},
     rules::{self, LintRule},
 };
 
@@ -66,6 +67,14 @@ impl LintEngine {
 
     pub fn scan(&self, root: &Path) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
+        let project_model = ProjectModel::discover(root);
+        if let Some(model) = &project_model {
+            log::debug!(
+                "Loaded project model for {} with {} rustc cfgs",
+                root.display(),
+                model.rustc_cfgs().len()
+            );
+        }
 
         for entry in WalkDir::new(root)
             .follow_links(false)
@@ -110,14 +119,26 @@ impl LintEngine {
                 }
             };
 
+            let source_target_kinds = project_model
+                .as_ref()
+                .map(|model| model.target_kinds_for_file(path))
+                .unwrap_or_default();
+
             let file_ctx = FileContext {
                 path: path.to_path_buf(),
                 rel_path: rel_path.to_path_buf(),
                 content: &content,
                 is_rust,
                 is_text,
-                is_test_file: Self::is_test_file(path, &content),
-                is_benchmark_file: Self::is_benchmark_file(path),
+                is_test_file: source_target_kinds
+                    .iter()
+                    .any(|kind| matches!(kind, SourceTargetKind::Test))
+                    || Self::is_test_file(path, &content),
+                is_benchmark_file: source_target_kinds
+                    .iter()
+                    .any(|kind| matches!(kind, SourceTargetKind::Bench))
+                    || Self::is_benchmark_file(path),
+                source_target_kinds,
                 ast: if is_rust {
                     syn::parse_file(&content).ok()
                 } else {
@@ -176,5 +197,6 @@ pub struct FileContext<'a> {
     pub is_text: bool,
     pub is_test_file: bool,
     pub is_benchmark_file: bool,
+    pub source_target_kinds: Vec<SourceTargetKind>,
     pub ast: Option<SynFile>,
 }

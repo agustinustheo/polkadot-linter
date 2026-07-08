@@ -1,5 +1,20 @@
 use std::path::PathBuf;
 
+fn fixture_is_test_file(path: &str) -> bool {
+    path.starts_with("tests/")
+        || path.starts_with("test/")
+        || path.contains("/tests/")
+        || path.contains("/test/")
+        || path.contains("integration_tests")
+        || path.contains("integration-tests")
+        || path.ends_with("_test.rs")
+        || path.ends_with("_tests.rs")
+        || path.ends_with("tests.rs")
+        || path.ends_with("test.rs")
+        || path.ends_with("mock.rs")
+        || path.ends_with("testing_utils.rs")
+}
+
 /// Helper: create a FileContext and run a specific rule against fixture content.
 fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnostics::Diagnostic> {
     let config = polkadot_linter::config::Config::default();
@@ -14,10 +29,9 @@ fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnost
         content,
         is_rust,
         is_text,
-        is_test_file: content.contains("#[test]")
-            || content.contains("#[cfg(test)]")
-            || filename.contains("test"),
+        is_test_file: fixture_is_test_file(filename),
         is_benchmark_file: filename.contains("benchmarking"),
+        source_target_kinds: Vec::new(),
         ast: if is_rust {
             syn::parse_file(content).ok()
         } else {
@@ -50,10 +64,9 @@ fn check_fixture_with_config(
         content,
         is_rust,
         is_text: !is_rust,
-        is_test_file: content.contains("#[test]")
-            || content.contains("#[cfg(test)]")
-            || filename.contains("test"),
+        is_test_file: fixture_is_test_file(filename),
         is_benchmark_file: filename.contains("benchmarking"),
+        source_target_kinds: Vec::new(),
         ast: if is_rust {
             syn::parse_file(content).ok()
         } else {
@@ -84,10 +97,9 @@ fn check_fixture_path(
         content,
         is_rust,
         is_text: !is_rust,
-        is_test_file: content.contains("#[test]")
-            || content.contains("#[cfg(test)]")
-            || path_str.contains("test"),
+        is_test_file: fixture_is_test_file(&path_str),
         is_benchmark_file: path_str.contains("benchmarking"),
+        source_target_kinds: Vec::new(),
         ast: if is_rust {
             syn::parse_file(content).ok()
         } else {
@@ -2019,4 +2031,92 @@ fn config_rule_disable_works() {
     let bad = include_str!("fixtures/bad_sem003.rs");
     let diags = check_fixture_with_config("src/lib.rs", bad, &config);
     assert!(!has_rule(&diags, "SEM003"), "SEM003 should be disabled");
+}
+
+#[test]
+fn engine_uses_cargo_test_targets_for_custom_test_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[package]
+name = "custom-test-target"
+version = "0.1.0"
+edition = "2021"
+
+[[test]]
+name = "driver"
+path = "support/test_driver.rs"
+"#,
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("support")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn lib_helper() {}\n").unwrap();
+    std::fs::write(
+        root.join("support/test_driver.rs"),
+        r#"
+pub fn helper() {
+    debug_assert!(true);
+}
+"#,
+    )
+    .unwrap();
+
+    let config = polkadot_linter::config::Config::default();
+    let mut engine = polkadot_linter::engine::LintEngine::new(config);
+    engine.filter_rules(&["SEC002".to_string()]);
+
+    let diags = engine.scan(root);
+    assert!(
+        !has_rule(&diags, "SEC002"),
+        "SEC002 should skip files declared as cargo test targets even when their path does not match test heuristics"
+    );
+}
+
+#[test]
+fn engine_uses_cargo_bench_targets_for_custom_bench_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        r#"
+[package]
+name = "custom-bench-target"
+version = "0.1.0"
+edition = "2021"
+
+[[bench]]
+name = "driver"
+path = "support/bench_driver.rs"
+"#,
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("support")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn lib_helper() {}\n").unwrap();
+    std::fs::write(
+        root.join("support/bench_driver.rs"),
+        r#"
+pub fn helper() {
+    debug_assert!(true);
+}
+"#,
+    )
+    .unwrap();
+
+    let config = polkadot_linter::config::Config::default();
+    let mut engine = polkadot_linter::engine::LintEngine::new(config);
+    engine.filter_rules(&["SEC002".to_string()]);
+
+    let diags = engine.scan(root);
+    assert!(
+        !has_rule(&diags, "SEC002"),
+        "SEC002 should skip files declared as cargo bench targets even when their path does not match benchmark heuristics"
+    );
 }
