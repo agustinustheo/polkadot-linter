@@ -1,0 +1,3 @@
+[submodule ".repos/polkadot-sdk"]
+	path = .repos/polkadot-sdk
+	url = https://github.com/paritytech/polkadot-sdk.git

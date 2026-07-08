@@ -147,6 +147,7 @@ impl LintEngine {
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         path_str.contains("/tests/")
             || path_str.contains("/test/")
+            || path_str.contains("/test-utils/")
             || path_str.contains("integration_tests")
             || path_str.contains("integration-tests")
             || path_str.ends_with("_test.rs")

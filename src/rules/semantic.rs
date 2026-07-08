@@ -23,6 +23,7 @@ fn is_pure_test_path(path: &Path) -> bool {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     path_str.contains("/tests/")
         || path_str.contains("/test/")
+        || path_str.contains("/test-utils/")
         || path_str.contains("integration_tests")
         || path_str.contains("integration-tests")
         || path_str.contains("send-tx/")
@@ -262,6 +263,38 @@ fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
     visitor.found
 }
 
+fn pat_ident_name(pat: &Pat) -> Option<String> {
+    match pat {
+        Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+        Pat::Reference(reference) => pat_ident_name(&reference.pat),
+        Pat::Type(pat_type) => pat_ident_name(&pat_type.pat),
+        Pat::Paren(paren) => pat_ident_name(&paren.pat),
+        _ => None,
+    }
+}
+
+fn expr_root_ident(expr: &Expr) -> Option<String> {
+    match strip_expr_wrappers(expr) {
+        Expr::Path(expr_path) => path_last_ident(&expr_path.path),
+        Expr::MethodCall(method_call) => expr_root_ident(&method_call.receiver),
+        Expr::Field(field) => expr_root_ident(&field.base),
+        _ => None,
+    }
+}
+
+fn unbounded_vec_param_name(arg: &FnArg) -> Option<String> {
+    let FnArg::Typed(pat_type) = arg else {
+        return None;
+    };
+    if type_contains_named(&pat_type.ty, &["Vec"])
+        && !type_contains_named(&pat_type.ty, &["BoundedVec", "WeakBoundedVec"])
+    {
+        pat_ident_name(&pat_type.pat)
+    } else {
+        None
+    }
+}
+
 fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
     match &*expr_call.func {
         Expr::Path(expr_path) => expr_path
@@ -353,11 +386,7 @@ struct MacroNameVisitor<'a> {
 impl<'ast> Visit<'ast> for MacroNameVisitor<'_> {
     fn visit_macro(&mut self, mac: &'ast Macro) {
         if let Some(name) = path_last_ident(&mac.path) {
-            if self
-                .names
-                .iter()
-                .any(|candidate| *candidate == name.as_str())
-            {
+            if self.names.contains(&name.as_str()) {
                 self.matches.push((name.to_string(), mac.span()));
             }
         }
@@ -2297,6 +2326,26 @@ impl LintRule for UnboundedVecInExtrinsic {
             rule_name: &'a str,
         }
 
+        struct OriginGuardVisitor {
+            has_signed_guard: bool,
+            has_privileged_guard: bool,
+        }
+
+        impl<'ast> Visit<'ast> for OriginGuardVisitor {
+            fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+                if let Some(path) = expr_call_path(node) {
+                    match path_last_ident(path).as_deref() {
+                        Some("ensure_signed") => self.has_signed_guard = true,
+                        Some("ensure_root" | "ensure_none" | "ensure_origin") => {
+                            self.has_privileged_guard = true;
+                        }
+                        _ => {}
+                    }
+                }
+                visit::visit_expr_call(self, node);
+            }
+        }
+
         impl<'ast> Visit<'ast> for ExtrinsicVisitor<'_> {
             fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
                 if !has_attr(&item.attrs, &["pallet", "call"])
@@ -2317,16 +2366,20 @@ impl LintRule for UnboundedVecInExtrinsic {
                         continue;
                     }
 
-                    let has_unbounded_vec = method.sig.inputs.iter().any(|arg| match arg {
-                        FnArg::Typed(pat_type) => {
-                            type_contains_named(&pat_type.ty, &["Vec"])
-                                && !type_contains_named(
-                                    &pat_type.ty,
-                                    &["BoundedVec", "WeakBoundedVec"],
-                                )
-                        }
-                        FnArg::Receiver(_) => false,
-                    });
+                    let mut origin_guard = OriginGuardVisitor {
+                        has_signed_guard: false,
+                        has_privileged_guard: false,
+                    };
+                    origin_guard.visit_block(&method.block);
+                    if origin_guard.has_privileged_guard && !origin_guard.has_signed_guard {
+                        continue;
+                    }
+
+                    let has_unbounded_vec = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .any(|arg| unbounded_vec_param_name(arg).is_some());
 
                     if has_unbounded_vec {
                         self.diagnostics.push(Diagnostic {
@@ -4568,6 +4621,163 @@ impl LintRule for VecInEvents {
         }
 
         let mut visitor = EventVisitor {
+            mask: &test_mask,
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+        };
+        visitor.visit_file(ast);
+
+        if visitor.diagnostics.is_empty() {
+            None
+        } else {
+            Some(visitor.diagnostics)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SEC018: Weight attributes that ignore unbounded input lengths
+// ---------------------------------------------------------------------------
+
+pub struct MissingWeightForUnboundedInput;
+
+impl LintRule for MissingWeightForUnboundedInput {
+    fn id(&self) -> &str {
+        "SEC018"
+    }
+    fn name(&self) -> &str {
+        "missing-weight-for-unbounded-input"
+    }
+    fn family(&self) -> &str {
+        "security"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if should_skip_production_rule(ctx) {
+            return None;
+        }
+
+        let test_mask = cfg_test_module_mask(ctx.content);
+        let ast = ast_file(ctx)?;
+
+        fn is_weight_attr(attr: &Attribute) -> bool {
+            attr_path_matches(attr, &["pallet", "weight"])
+        }
+
+        fn attr_accounts_for_param(attr: &Attribute, param_name: &str) -> bool {
+            let Some(expr) = attr_expr(attr) else {
+                return false;
+            };
+
+            struct ParamLengthVisitor<'a> {
+                param_name: &'a str,
+                found: bool,
+            }
+
+            impl<'ast> Visit<'ast> for ParamLengthVisitor<'_> {
+                fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+                    if matches!(
+                        node.method.to_string().as_str(),
+                        "len" | "encoded_size" | "using_encoded"
+                    ) && expr_root_ident(&node.receiver).as_deref() == Some(self.param_name)
+                    {
+                        self.found = true;
+                    }
+
+                    visit::visit_expr_method_call(self, node);
+                }
+            }
+
+            let mut visitor = ParamLengthVisitor {
+                param_name,
+                found: false,
+            };
+            visitor.visit_expr(&expr);
+            visitor.found
+        }
+
+        struct WeightInputVisitor<'a> {
+            mask: &'a [bool],
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+        }
+
+        impl<'ast> Visit<'ast> for WeightInputVisitor<'_> {
+            fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
+                if !has_attr(&item.attrs, &["pallet", "call"])
+                    || is_masked_span(self.mask, item.span())
+                {
+                    return;
+                }
+
+                for impl_item in &item.items {
+                    let method = match impl_item {
+                        ImplItem::Fn(method) => method,
+                        _ => continue,
+                    };
+
+                    if !has_attr(&method.attrs, &["pallet", "call_index"])
+                        || is_masked_span(self.mask, method.span())
+                    {
+                        continue;
+                    }
+
+                    let unbounded_params = method
+                        .sig
+                        .inputs
+                        .iter()
+                        .filter_map(unbounded_vec_param_name)
+                        .collect::<Vec<_>>();
+                    if unbounded_params.is_empty() {
+                        continue;
+                    }
+
+                    let Some(weight_attr) = method.attrs.iter().find(|attr| is_weight_attr(attr))
+                    else {
+                        continue;
+                    };
+
+                    for param_name in unbounded_params {
+                        if attr_accounts_for_param(weight_attr, &param_name) {
+                            continue;
+                        }
+
+                        self.diagnostics.push(Diagnostic {
+                            rule_id: self.rule_id.to_string(),
+                            rule_name: self.rule_name.to_string(),
+                            category: RuleCategory::Semantic,
+                            severity: self.severity,
+                            file: self.file.to_path_buf(),
+                            line: span_line(method.sig.ident.span()),
+                            column: Some(span_column(method.sig.ident.span())),
+                            end_line: None,
+                            message: format!(
+                                "Extrinsic `{}` accepts unbounded `{}` but its weight does not account for its length",
+                                method.sig.ident, param_name
+                            ),
+                            explanation: "SCALE decoding and pre-dispatch processing happen before \
+                                the call body runs. If an unbounded input length is absent from \
+                                `#[pallet::weight(...)]`, callers can submit larger payloads while \
+                                paying only the fixed base weight."
+                                .to_string(),
+                            suggestion: Some(format!(
+                                "Pass `{param_name}.len() as u32` or an equivalent encoded-size parameter into the benchmarked `WeightInfo` call"
+                            )),
+                        });
+                    }
+                }
+
+                visit::visit_item_impl(self, item);
+            }
+        }
+
+        let mut visitor = WeightInputVisitor {
             mask: &test_mask,
             diagnostics: Vec::new(),
             file: &ctx.path,

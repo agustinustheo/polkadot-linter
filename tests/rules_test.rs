@@ -1183,6 +1183,26 @@ mod tests {
     );
 }
 
+#[test]
+fn sec001_allows_privileged_origin_vec_inputs() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn set_rules(origin: OriginFor<T>, rules: Vec<u8>) -> DispatchResult {
+        T::AdminOrigin::ensure_origin(origin)?;
+        Rules::<T>::put(T::Hashing::hash(&rules));
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 should not report unbounded Vec inputs on privileged-origin dispatchables"
+    );
+}
+
 // ==========================================================================
 // SEC002: debug_assert in production code
 // ==========================================================================
@@ -1838,6 +1858,134 @@ fn sec017_allows_bounded_event_payloads() {
     assert!(
         !has_rule(&diags, "SEC017"),
         "SEC017 should NOT fire on bounded event payloads"
+    );
+}
+
+// ==========================================================================
+// SEC018: Missing weight term for unbounded input length
+// ==========================================================================
+#[test]
+fn sec018_detects_contract_call_data_missing_from_weight() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(6)]
+    #[pallet::weight(T::WeightInfo::call().saturating_add(*gas_limit))]
+    pub fn call(
+        origin: OriginFor<T>,
+        gas_limit: Weight,
+        data: Vec<u8>,
+    ) -> DispatchResultWithPostInfo {
+        let _ = ensure_signed(origin)?;
+        let _ = data;
+        Ok(().into())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/contracts/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC018"),
+        "SEC018 should fire when a Vec input length is absent from the weight expression"
+    );
+}
+
+#[test]
+fn sec018_detects_multisig_signatories_missing_from_weight() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight({
+        let dispatch_info = call.get_dispatch_info();
+        (
+            T::WeightInfo::as_multi_threshold_1(call.using_encoded(|c| c.len() as u32))
+                .saturating_add(dispatch_info.call_weight),
+            dispatch_info.class,
+        )
+    })]
+    pub fn as_multi_threshold_1(
+        origin: OriginFor<T>,
+        other_signatories: Vec<T::AccountId>,
+        call: Box<<T as Config>::RuntimeCall>,
+    ) -> DispatchResultWithPostInfo {
+        let _ = ensure_signed(origin)?;
+        let _ = other_signatories;
+        let _ = call;
+        Ok(().into())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/multisig/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC018"),
+        "SEC018 should fire when one unbounded Vec parameter is missing even if another input is length-accounted"
+    );
+}
+
+#[test]
+fn sec018_detects_privileged_rules_hash_missing_from_weight() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(8)]
+    #[pallet::weight(T::WeightInfo::found_society())]
+    pub fn found_society(
+        origin: OriginFor<T>,
+        founder: AccountIdLookupOf<T>,
+        rules: Vec<u8>,
+    ) -> DispatchResult {
+        T::FounderSetOrigin::ensure_origin(origin)?;
+        Rules::<T>::put(T::Hashing::hash(&rules));
+        Self::deposit_event(Event::<T>::Founded { founder });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/society/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC018"),
+        "SEC018 should still check privileged calls because pre-dispatch weight must cover input decoding"
+    );
+}
+
+#[test]
+fn sec018_allows_vec_len_in_weight() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::submit(data.len() as u32))]
+    pub fn submit(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = data;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not fire when the Vec length is passed into the weight expression"
+    );
+}
+
+#[test]
+fn sec018_skips_test_utils_runtime_code() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(Weight::zero())]
+    pub fn include_data(origin: OriginFor<T>, _data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("substrate/test-utils/runtime/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should skip test utility runtimes"
     );
 }
 
