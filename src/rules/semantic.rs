@@ -3773,6 +3773,9 @@ impl LintRule for LetUnderscoreResult {
                 || lower.contains("can only fail")
                 || lower.contains("cannot fail")
                 || lower.contains("can't fail")
+                || lower.contains("shouldn't fail")
+                || lower.contains("should not fail")
+                || (lower.contains("don't really care") && lower.contains("fail"))
                 || (lower.contains("best effort")
                     && (lower.contains("error")
                         || lower.contains("result")
@@ -3781,7 +3784,7 @@ impl LintRule for LetUnderscoreResult {
 
         fn nearby_comment_marks_intentional_result_discard(lines: &[&str], line: usize) -> bool {
             let current_idx = line.saturating_sub(1);
-            let start = current_idx.saturating_sub(3);
+            let start = current_idx.saturating_sub(8);
             lines[start..current_idx.min(lines.len())]
                 .iter()
                 .any(|source_line| {
@@ -3797,6 +3800,10 @@ impl LintRule for LetUnderscoreResult {
                 && (lower.contains("log!(")
                     || lower.contains("tracing::")
                     || lower.contains("failures+="))
+        }
+
+        fn try_mutate_uses_unit_error_for_control_flow(rhs: &str) -> bool {
+            rhs.contains("::try_mutate(") && rhs.contains("Err(())") && rhs.contains("Ok(())")
         }
 
         struct LetUnderscoreVisitor<'a> {
@@ -3835,6 +3842,7 @@ impl LintRule for LetUnderscoreResult {
                 if self.result_hints.iter().any(|hint| rhs.contains(hint))
                     && !nearby_comment_marks_intentional_result_discard(self.lines, line)
                     && !map_err_has_explicit_side_effect(&rhs)
+                    && !try_mutate_uses_unit_error_for_control_flow(&rhs)
                 {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
@@ -5770,6 +5778,24 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        let lines = ctx.content.lines().collect::<Vec<_>>();
+
+        fn nearby_comments_mark_idempotent_migration(lines: &[&str], line: usize) -> bool {
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(18);
+            lines[start..current_idx.min(lines.len())]
+                .iter()
+                .filter_map(|source_line| source_line.split_once("//").map(|(_, comment)| comment))
+                .any(|comment| {
+                    let lower = comment.to_ascii_lowercase();
+                    lower.contains("idempotent")
+                        || lower.contains("safe to run multiple times")
+                        || lower.contains("no-op if")
+                        || lower.contains("does not exist yet")
+                        || lower.contains("if out of sync")
+                        || lower.contains("only updates if")
+                })
+        }
 
         struct UpgradeBodyVisitor {
             has_storage_version_check: bool,
@@ -5820,6 +5846,7 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
             severity: Severity,
             rule_id: &'a str,
             rule_name: &'a str,
+            lines: &'a [&'a str],
         }
 
         impl UpgradeVisitor<'_> {
@@ -5836,7 +5863,13 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                 };
                 body_visitor.visit_block(&item_fn.block);
 
-                if body_visitor.has_write && !body_visitor.has_storage_version_check {
+                if body_visitor.has_write
+                    && !body_visitor.has_storage_version_check
+                    && !nearby_comments_mark_idempotent_migration(
+                        self.lines,
+                        span_line(item_fn.sig.ident.span()),
+                    )
+                {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
 						rule_name: self.rule_name.to_string(),
@@ -5902,6 +5935,7 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
             severity: config.rule_severity(self.id(), Severity::Warning),
             rule_id: self.id(),
             rule_name: self.name(),
+            lines: &lines,
         };
         visitor.visit_file(ast);
 
