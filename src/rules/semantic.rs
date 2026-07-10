@@ -4609,14 +4609,15 @@ impl LintRule for IdentityHasherOnCommonKeys {
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
 
-        fn storage_map_type_args(item: &ItemType) -> Option<Vec<Type>> {
+        fn storage_type_args(item: &ItemType) -> Option<(String, Vec<Type>)> {
             let type_path = match &*item.ty {
                 Type::Path(type_path) => type_path,
                 _ => return None,
             };
             let segment = type_path.path.segments.last()?;
             match &segment.arguments {
-                PathArguments::AngleBracketed(args) => Some(
+                PathArguments::AngleBracketed(args) => Some((
+                    segment.ident.to_string(),
                     args.args
                         .iter()
                         .filter_map(|arg| match arg {
@@ -4624,8 +4625,37 @@ impl LintRule for IdentityHasherOnCommonKeys {
                             _ => None,
                         })
                         .collect(),
-                ),
+                )),
                 _ => None,
+            }
+        }
+
+        fn is_common_storage_key_type(ty: &Type) -> bool {
+            type_contains_named(ty, &["AccountId", "Balance", "BlockNumber"])
+                || type_is_named(ty, &["u32", "u64"])
+        }
+
+        fn has_identity_common_key_pair(
+            type_args: &[Type],
+            hasher_idx: usize,
+            key_idx: usize,
+        ) -> bool {
+            type_args
+                .get(hasher_idx)
+                .is_some_and(|ty| type_is_named(ty, &["Identity"]))
+                && type_args
+                    .get(key_idx)
+                    .is_some_and(is_common_storage_key_type)
+        }
+
+        fn storage_uses_identity_on_common_key(storage_kind: &str, type_args: &[Type]) -> bool {
+            match storage_kind {
+                "StorageMap" | "CountedStorageMap" => has_identity_common_key_pair(type_args, 1, 2),
+                "StorageDoubleMap" => {
+                    has_identity_common_key_pair(type_args, 1, 2)
+                        || has_identity_common_key_pair(type_args, 3, 4)
+                }
+                _ => false,
             }
         }
 
@@ -4646,17 +4676,11 @@ impl LintRule for IdentityHasherOnCommonKeys {
                     return;
                 }
 
-                let Some(type_args) = storage_map_type_args(item) else {
+                let Some((storage_kind, type_args)) = storage_type_args(item) else {
                     return;
                 };
 
-                let uses_identity = type_args.iter().any(|ty| type_is_named(ty, &["Identity"]));
-                let uses_common_key = type_args.iter().any(|ty| {
-                    type_contains_named(ty, &["AccountId", "Balance", "BlockNumber"])
-                        || type_is_named(ty, &["u32", "u64"])
-                });
-
-                if uses_identity && uses_common_key {
+                if storage_uses_identity_on_common_key(&storage_kind, &type_args) {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
 						rule_name: self.rule_name.to_string(),

@@ -2759,6 +2759,34 @@ fn sec014_allows_non_identity_hashers() {
     );
 }
 
+#[test]
+fn sec014_only_checks_keys_paired_with_identity_hashers() {
+    let value_only_common_types = r#"
+#[pallet::storage]
+pub type HashToCount<T: Config> = StorageMap<_, Identity, T::Hash, u32, ValueQuery>;
+
+#[pallet::storage]
+pub type HashToAccount<T: Config> =
+    StorageMap<_, Identity, T::Hash, (T::AccountId, BalanceOf<T>), ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", value_only_common_types);
+    assert!(
+        !has_rule(&diags, "SEC014"),
+        "SEC014 should not treat StorageMap value types as identity-hashed keys"
+    );
+
+    let double_map_key = r#"
+#[pallet::storage]
+pub type HashAndIndex<T: Config> =
+    StorageDoubleMap<_, Identity, T::Hash, Identity, u32, (), ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", double_map_key);
+    assert!(
+        has_rule(&diags, "SEC014"),
+        "SEC014 should still report identity-hashed common keys in StorageDoubleMap"
+    );
+}
+
 // ==========================================================================
 // SEC015: dispatch_bypass_filter in production
 // ==========================================================================
