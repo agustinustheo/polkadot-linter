@@ -3570,33 +3570,16 @@ impl LintRule for UncheckedRepatriateReserved {
         let test_mask = cfg_test_module_mask(ctx.content);
         let lines: Vec<&str> = ctx.content.lines().collect();
 
-        fn is_repatriate_reserved_expr(expr: &Expr) -> bool {
-            struct Finder {
-                found: bool,
-            }
-
-            impl<'ast> Visit<'ast> for Finder {
-                fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
-                    if expr_call_path(expr_call)
-                        .map(|path| path_has_exact_ident(path, "repatriate_reserved"))
-                        .unwrap_or(false)
-                    {
-                        self.found = true;
-                    }
-                    visit::visit_expr_call(self, expr_call);
+        fn is_direct_repatriate_reserved_expr(expr: &Expr) -> bool {
+            match strip_expr_wrappers(expr) {
+                Expr::Call(expr_call) => expr_call_path(expr_call)
+                    .map(|path| path_has_exact_ident(path, "repatriate_reserved"))
+                    .unwrap_or(false),
+                Expr::MethodCall(expr_method_call) => {
+                    expr_method_call.method == "repatriate_reserved"
                 }
-
-                fn visit_expr_method_call(&mut self, expr_method_call: &'ast ExprMethodCall) {
-                    if expr_method_call.method == "repatriate_reserved" {
-                        self.found = true;
-                    }
-                    visit::visit_expr_method_call(self, expr_method_call);
-                }
+                _ => false,
             }
-
-            let mut finder = Finder { found: false };
-            finder.visit_expr(expr);
-            finder.found
         }
 
         fn has_remaining_check(lines: &[&str], mask: &[bool], line: usize, name: &str) -> bool {
@@ -3612,6 +3595,27 @@ impl LintRule for UncheckedRepatriateReserved {
                         || lines[j].contains("ensure!")
                         || lines[j].trim_start().starts_with("if ")
                         || lines[j].trim_start().starts_with("match "))
+            })
+        }
+
+        fn has_remaining_accounted_in_transfer_amount(
+            lines: &[&str],
+            mask: &[bool],
+            line: usize,
+            name: &str,
+        ) -> bool {
+            let window_end = (line + 12).min(lines.len());
+            let saturating_sub = format!("saturating_sub({name})");
+            let defensive_saturating_sub = format!("defensive_saturating_sub({name})");
+            (line..window_end).any(|j| {
+                if mask[j] {
+                    return false;
+                }
+                let compact: String = strip_strings_and_line_comments(lines[j])
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                compact.contains(&saturating_sub) || compact.contains(&defensive_saturating_sub)
             })
         }
 
@@ -3635,7 +3639,7 @@ impl LintRule for UncheckedRepatriateReserved {
                     visit::visit_local(self, local);
                     return;
                 };
-                if !is_repatriate_reserved_expr(&init.expr) {
+                if !is_direct_repatriate_reserved_expr(&init.expr) {
                     visit::visit_local(self, local);
                     return;
                 }
@@ -3666,6 +3670,11 @@ impl LintRule for UncheckedRepatriateReserved {
                     Pat::Ident(pat_ident) => {
                         let name = pat_ident.ident.to_string();
                         if !has_remaining_check(
+                            self.lines,
+                            self.mask,
+                            span_line(local.span()),
+                            &name,
+                        ) && !has_remaining_accounted_in_transfer_amount(
                             self.lines,
                             self.mask,
                             span_line(local.span()),
