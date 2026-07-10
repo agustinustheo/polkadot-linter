@@ -28,6 +28,13 @@ fn is_pure_test_path(path: &Path) -> bool {
         || path_str.contains("/mocks/")
         || path_str.contains("/mock/")
         || path_str.contains("/fuzzer/")
+        || path_str.contains("/fixtures/")
+        || path_str.contains("/conformance_tests/")
+        || path_str.contains("/subsystem-bench/")
+        || path_str.contains("/test-common/")
+        || path_str.contains("/test_utils/")
+        || path_str.contains("/testing/")
+        || path_str.contains("/bench/")
         || path_str.contains("/frame/root-offences/")
         || path_str.contains("/parachains/pallets/ping/")
         || path_str.contains("integration_tests")
@@ -36,13 +43,44 @@ fn is_pure_test_path(path: &Path) -> bool {
         || path_str.ends_with("_test.rs")
         || path_str.ends_with("_tests.rs")
         || path_str.ends_with("tests.rs")
+        || file_name == "build.rs"
         || file_name.starts_with("mock_")
         || file_name == "mock.rs"
+        || file_name == "test_utils.rs"
         || file_name == "testing_utils.rs"
 }
 
 fn should_skip_production_rule(ctx: &FileContext) -> bool {
     !ctx.is_rust || ctx.is_benchmark_file || ctx.is_test_file || is_pure_test_path(&ctx.path)
+}
+
+fn is_runtime_or_pallet_security_path(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    let normalized = format!("/{path_str}");
+    if normalized.contains("/substrate/frame/support/")
+        || normalized.contains("/substrate/frame/examples/")
+        || normalized.contains("/proc-macro/")
+        || normalized.contains("/rpc/")
+        || normalized.contains("/rc-client/")
+        || normalized.contains("/ah-client/")
+        || normalized.contains("/reward-curve/")
+        || normalized.contains("/substrate/frame/asset-conversion/ops/")
+    {
+        return false;
+    }
+
+    normalized.contains("/pallets/")
+        || normalized.contains("/runtime/")
+        || normalized.contains("/runtimes/")
+        || normalized.contains("/substrate/frame/")
+        || normalized.contains("/bridges/modules/")
+}
+
+fn is_frame_support_migration_infrastructure(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    let normalized = format!("/{path_str}");
+    normalized.contains("/substrate/frame/support/src/migrations.rs")
+        || normalized.contains("/substrate/frame/support/src/storage/migration.rs")
 }
 
 fn is_module_declaration(trimmed: &str) -> bool {
@@ -56,7 +94,9 @@ fn is_module_declaration(trimmed: &str) -> bool {
 fn is_block_start(trimmed: &str) -> bool {
     is_module_declaration(trimmed)
         || trimmed.starts_with("impl ")
+        || trimmed.starts_with("impl<")
         || trimmed.starts_with("pub impl ")
+        || trimmed.starts_with("pub impl<")
         || trimmed.starts_with("pub fn ")
         || trimmed.starts_with("fn ")
         || trimmed.starts_with("pub(crate) fn ")
@@ -72,7 +112,10 @@ fn is_masked_cfg_attribute(trimmed: &str) -> bool {
     trimmed == "#[cfg(test)]" || trimmed.contains("feature = \"runtime-benchmarks\"")
 }
 
-fn cfg_test_module_mask(content: &str) -> Vec<bool> {
+fn item_mask_by_attr<F>(content: &str, is_masking_attr: F) -> Vec<bool>
+where
+    F: Fn(&str) -> bool,
+{
     let lines: Vec<&str> = content.lines().collect();
     let mut mask = vec![false; lines.len()];
     let mut masked_depth: Option<i32> = None;
@@ -86,13 +129,12 @@ fn cfg_test_module_mask(content: &str) -> Vec<bool> {
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        // Mask #[cfg(test)] and runtime benchmark-only items.
-        if is_masked_cfg_attribute(trimmed) {
+        if is_masking_attr(trimmed) {
             next_item_is_masked = true;
         }
 
         // Skip other attributes between the cfg and the target item.
-        if next_item_is_masked && trimmed.starts_with("#[") && !is_masked_cfg_attribute(trimmed) {
+        if next_item_is_masked && trimmed.starts_with("#[") && !is_masking_attr(trimmed) {
             // keep waiting
         }
 
@@ -126,6 +168,23 @@ fn cfg_test_module_mask(content: &str) -> Vec<bool> {
     }
 
     mask
+}
+
+fn cfg_test_module_mask(content: &str) -> Vec<bool> {
+    item_mask_by_attr(content, is_masked_cfg_attribute)
+}
+
+fn genesis_build_mask(content: &str) -> Vec<bool> {
+    item_mask_by_attr(content, |trimmed| trimmed == "#[pallet::genesis_build]")
+}
+
+fn merge_masks(left: &[bool], right: &[bool]) -> Vec<bool> {
+    let len = left.len().max(right.len());
+    (0..len)
+        .map(|idx| {
+            left.get(idx).copied().unwrap_or(false) || right.get(idx).copied().unwrap_or(false)
+        })
+        .collect()
 }
 
 pub(crate) fn strip_strings_and_line_comments(line: &str) -> String {
@@ -2344,6 +2403,7 @@ impl LintRule for UnboundedVecInExtrinsic {
         let diagnostics = collect_dispatchables(ast, &test_mask)
             .into_iter()
             .filter(|dispatchable| dispatchable.origin != DispatchableOrigin::Privileged)
+            .filter(|dispatchable| !dispatchable.is_deprecated && !dispatchable.has_max_weight())
             .filter(|dispatchable| dispatchable.unbounded_vec_params().next().is_some())
             .map(|dispatchable| Diagnostic {
                 rule_id: self.id().to_string(),
@@ -2397,6 +2457,9 @@ impl LintRule for DebugAssertInProduction {
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
         if should_skip_production_rule(ctx) {
+            return None;
+        }
+        if !is_runtime_or_pallet_security_path(&ctx.path) {
             return None;
         }
 
@@ -2468,6 +2531,13 @@ impl LintRule for MissingDecodeDepthLimit {
         let ast = ast_file(ctx)?;
         let test_mask = cfg_test_module_mask(ctx.content);
 
+        fn is_recursive_runtime_decode(path: &syn::Path) -> bool {
+            let tokens = compact_tokens(path);
+            ["RuntimeCall", "UncheckedExtrinsic", "OpaqueExtrinsic"]
+                .iter()
+                .any(|name| tokens.contains(name))
+        }
+
         struct DecodeVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -2491,6 +2561,7 @@ impl LintRule for MissingDecodeDepthLimit {
                     && !path_has_segment(path, "DecodeLimit")
                     && !path_has_exact_ident(path, "decode_with_depth_limit")
                     && !path_has_exact_ident(path, "decode_all_with_depth_limit")
+                    && is_recursive_runtime_decode(path)
                 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
@@ -2522,28 +2593,9 @@ impl LintRule for MissingDecodeDepthLimit {
                     visit::visit_expr_method_call(self, expr_method_call);
                     return;
                 }
-                if expr_method_call.method == "decode" {
-                    self.diagnostics.push(Diagnostic {
-                        rule_id: self.rule_id.to_string(),
-                        rule_name: self.rule_name.to_string(),
-                        category: RuleCategory::Semantic,
-                        severity: self.severity,
-                        file: self.file.to_path_buf(),
-                        line: span_line(expr_method_call.span()),
-                        column: Some(span_column(expr_method_call.span())),
-                        end_line: None,
-                        message: "`Decode::decode()` without depth limit — risk of stack exhaustion"
-                            .to_string(),
-                        explanation: "Decoding user-supplied data without a recursion depth limit \
-                            allows attackers to craft deeply nested structures (e.g., \
-                            `batch(batch(batch(...)))`) that exhaust the stack. Use \
-                            `decode_with_depth_limit(MAX_DEPTH, &mut input)` instead."
-                            .to_string(),
-                        suggestion: Some(
-                            "Replace with `Decode::decode_with_depth_limit(sp_io::MAX_EXTRINSIC_DEPTH, &mut input)`"
-                                .to_string(),
-                        ),
-                    });
+                if expr_method_call.method == "using_encoded" {
+                    visit::visit_expr(self, &expr_method_call.receiver);
+                    return;
                 }
                 visit::visit_expr_method_call(self, expr_method_call);
             }
@@ -3172,6 +3224,9 @@ impl LintRule for PanicInProduction {
         if should_skip_production_rule(ctx) {
             return None;
         }
+        if !is_runtime_or_pallet_security_path(&ctx.path) {
+            return None;
+        }
 
         // Skip auto-generated weights files
         let path_str = ctx.rel_path.to_string_lossy();
@@ -3186,7 +3241,10 @@ impl LintRule for PanicInProduction {
             return None;
         }
 
-        let test_mask = cfg_test_module_mask(ctx.content);
+        let test_mask = merge_masks(
+            &cfg_test_module_mask(ctx.content),
+            &genesis_build_mask(ctx.content),
+        );
         let ast = ast_file(ctx)?;
 
         struct PanicVisitor<'a> {
@@ -3313,6 +3371,9 @@ impl LintRule for RawArithmeticInFallible {
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
         if should_skip_production_rule(ctx) {
+            return None;
+        }
+        if !is_runtime_or_pallet_security_path(&ctx.path) {
             return None;
         }
 
@@ -3983,6 +4044,9 @@ impl LintRule for UnboundedClearPrefix {
         if should_skip_production_rule(ctx) {
             return None;
         }
+        if is_frame_support_migration_infrastructure(&ctx.path) {
+            return None;
+        }
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
 
@@ -4096,7 +4160,6 @@ impl LintRule for UnboundedStorageCollections {
         if should_skip_production_rule(ctx) {
             return None;
         }
-
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
         if has_pallet_dev_mode(ast) {
@@ -4360,6 +4423,9 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
         if should_skip_production_rule(ctx) {
             return None;
         }
+        if is_frame_support_migration_infrastructure(&ctx.path) {
+            return None;
+        }
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
@@ -4461,15 +4527,30 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                 visit::visit_item_fn(self, item_fn);
             }
 
-            fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
-                let wrapper = ItemFn {
-                    attrs: item_fn.attrs.clone(),
-                    vis: item_fn.vis.clone(),
-                    sig: item_fn.sig.clone(),
-                    block: Box::new(item_fn.block.clone()),
-                };
-                self.inspect_fn(&wrapper);
-                visit::visit_impl_item_fn(self, item_fn);
+            fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                if item_impl
+                    .trait_
+                    .as_ref()
+                    .map(|(_, path, _)| path_has_segment(path, "UncheckedOnRuntimeUpgrade"))
+                    .unwrap_or(false)
+                {
+                    return;
+                }
+
+                for impl_item in &item_impl.items {
+                    let ImplItem::Fn(item_fn) = impl_item else {
+                        continue;
+                    };
+                    let wrapper = ItemFn {
+                        attrs: item_fn.attrs.clone(),
+                        vis: item_fn.vis.clone(),
+                        sig: item_fn.sig.clone(),
+                        block: Box::new(item_fn.block.clone()),
+                    };
+                    self.inspect_fn(&wrapper);
+                }
+
+                visit::visit_item_impl(self, item_impl);
             }
         }
 
