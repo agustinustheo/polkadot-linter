@@ -10,7 +10,7 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprMethodCall, File as SynFile,
+    Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprIf, ExprMethodCall, File as SynFile,
     GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Pat,
     PathArguments, Token, Type, TypePath, UseTree, Visibility,
 };
@@ -4092,6 +4092,24 @@ impl LintRule for RawArithmeticInFallible {
             false
         }
 
+        fn ordered_operand_key(expr: &Expr) -> String {
+            match strip_expr_wrappers(expr) {
+                Expr::Lit(expr_lit) => {
+                    if let Lit::Int(int_lit) = &expr_lit.lit {
+                        int_lit.base10_digits().to_string()
+                    } else {
+                        compact_tokens(expr_lit)
+                    }
+                }
+                Expr::MethodCall(method_call)
+                    if method_call.method == "into" && method_call.args.is_empty() =>
+                {
+                    ordered_operand_key(&method_call.receiver)
+                }
+                stripped => compact_tokens(stripped),
+            }
+        }
+
         fn method_receiver_and_single_arg(expr: &Expr, method: &str) -> Option<(String, String)> {
             let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
                 return None;
@@ -4123,6 +4141,118 @@ impl LintRule for RawArithmeticInFallible {
             same_unordered_operands(&max_operands, &min_operands)
         }
 
+        fn safe_subtraction_from_ordering(expr_binary: &ExprBinary) -> Option<(String, String)> {
+            let left = ordered_operand_key(&expr_binary.left);
+            let right = ordered_operand_key(&expr_binary.right);
+            match expr_binary.op {
+                syn::BinOp::Gt(_) | syn::BinOp::Ge(_) => Some((left, right)),
+                syn::BinOp::Lt(_) | syn::BinOp::Le(_) => Some((right, left)),
+                _ => None,
+            }
+        }
+
+        fn safe_subtraction_from_inverse_ordering(
+            expr_binary: &ExprBinary,
+        ) -> Option<(String, String)> {
+            let left = ordered_operand_key(&expr_binary.left);
+            let right = ordered_operand_key(&expr_binary.right);
+            match expr_binary.op {
+                syn::BinOp::Gt(_) | syn::BinOp::Ge(_) => Some((right, left)),
+                syn::BinOp::Lt(_) | syn::BinOp::Le(_) => Some((left, right)),
+                _ => None,
+            }
+        }
+
+        fn safe_subtraction_from_method_ordering(expr: &Expr) -> Option<(String, String)> {
+            let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            if method_call.args.len() != 1 {
+                return None;
+            }
+            let left = ordered_operand_key(&method_call.receiver);
+            let right = ordered_operand_key(method_call.args.first()?);
+            match method_call.method.to_string().as_str() {
+                "gt" | "ge" => Some((left, right)),
+                "lt" | "le" => Some((right, left)),
+                _ => None,
+            }
+        }
+
+        fn inverse_safe_subtraction(pair: &(String, String)) -> (String, String) {
+            (pair.1.clone(), pair.0.clone())
+        }
+
+        fn safe_subtractions_from_condition(
+            expr: &Expr,
+        ) -> Option<((String, String), (String, String))> {
+            match strip_expr_wrappers(expr) {
+                Expr::Binary(condition) => {
+                    safe_subtraction_from_ordering(condition).map(|then_pair| {
+                        let else_pair = safe_subtraction_from_inverse_ordering(condition)
+                            .unwrap_or_else(|| inverse_safe_subtraction(&then_pair));
+                        (then_pair, else_pair)
+                    })
+                }
+                Expr::MethodCall(_) => {
+                    safe_subtraction_from_method_ordering(expr).map(|then_pair| {
+                        let else_pair = inverse_safe_subtraction(&then_pair);
+                        (then_pair, else_pair)
+                    })
+                }
+                _ => None,
+            }
+        }
+
+        fn subtraction_operands(expr_binary: &ExprBinary) -> Option<(String, String)> {
+            matches!(expr_binary.op, syn::BinOp::Sub(_)).then(|| {
+                (
+                    ordered_operand_key(&expr_binary.left),
+                    ordered_operand_key(&expr_binary.right),
+                )
+            })
+        }
+
+        fn cmp_match_operands(expr: &Expr) -> Option<(String, String)> {
+            let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            if method_call.method != "cmp" || method_call.args.len() != 1 {
+                return None;
+            }
+            Some((
+                ordered_operand_key(&method_call.receiver),
+                ordered_operand_key(method_call.args.first()?),
+            ))
+        }
+
+        fn ordering_pat_name(pat: &Pat) -> Option<String> {
+            match pat {
+                Pat::Ident(ident) => Some(ident.ident.to_string()),
+                Pat::Path(path) => path
+                    .path
+                    .segments
+                    .last()
+                    .map(|segment| segment.ident.to_string()),
+                _ => None,
+            }
+        }
+
+        fn safe_subtractions_from_cmp_arm(
+            operands: &(String, String),
+            pat: &Pat,
+        ) -> Vec<(String, String)> {
+            match ordering_pat_name(pat).as_deref() {
+                Some("Greater") => vec![(operands.0.clone(), operands.1.clone())],
+                Some("Less") => vec![(operands.1.clone(), operands.0.clone())],
+                Some("Equal") => vec![
+                    (operands.0.clone(), operands.1.clone()),
+                    (operands.1.clone(), operands.0.clone()),
+                ],
+                _ => Vec::new(),
+            }
+        }
+
         struct ArithmeticVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -4131,6 +4261,7 @@ impl LintRule for RawArithmeticInFallible {
             rule_name: &'a str,
             mask: &'a [bool],
             skip_overloaded_group_arithmetic: bool,
+            safe_subtractions: Vec<(String, String)>,
         }
 
         impl<'ast> Visit<'ast> for ArithmeticVisitor<'_> {
@@ -4144,6 +4275,8 @@ impl LintRule for RawArithmeticInFallible {
                     syn::BinOp::Add(_) | syn::BinOp::Sub(_) | syn::BinOp::Mul(_)
                 ) && !self.skip_overloaded_group_arithmetic
                     && !max_min_difference_is_nonnegative(expr_binary)
+                    && !subtraction_operands(expr_binary)
+                        .is_some_and(|operands| self.safe_subtractions.contains(&operands))
                 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
@@ -4167,6 +4300,47 @@ impl LintRule for RawArithmeticInFallible {
                     });
                 }
                 visit::visit_expr_binary(self, expr_binary);
+            }
+
+            fn visit_expr_if(&mut self, expr_if: &'ast ExprIf) {
+                let ordered_condition = safe_subtractions_from_condition(&expr_if.cond);
+
+                if let Some((then_pair, _)) = &ordered_condition {
+                    self.safe_subtractions.push(then_pair.clone());
+                    self.visit_block(&expr_if.then_branch);
+                    self.safe_subtractions.pop();
+                } else {
+                    self.visit_block(&expr_if.then_branch);
+                }
+
+                if let Some((_, else_branch)) = &expr_if.else_branch {
+                    if let Some((_, else_pair)) = &ordered_condition {
+                        self.safe_subtractions.push(else_pair.clone());
+                        self.visit_expr(else_branch);
+                        self.safe_subtractions.pop();
+                    } else {
+                        self.visit_expr(else_branch);
+                    }
+                }
+            }
+
+            fn visit_expr_match(&mut self, expr_match: &'ast syn::ExprMatch) {
+                let Some(cmp_operands) = cmp_match_operands(&expr_match.expr) else {
+                    visit::visit_expr_match(self, expr_match);
+                    return;
+                };
+
+                self.visit_expr(&expr_match.expr);
+                for arm in &expr_match.arms {
+                    if let Some((_, guard)) = &arm.guard {
+                        self.visit_expr(guard);
+                    }
+                    let safe_subtractions = safe_subtractions_from_cmp_arm(&cmp_operands, &arm.pat);
+                    let previous_len = self.safe_subtractions.len();
+                    self.safe_subtractions.extend(safe_subtractions);
+                    self.visit_expr(&arm.body);
+                    self.safe_subtractions.truncate(previous_len);
+                }
             }
 
             fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
@@ -4247,6 +4421,7 @@ impl LintRule for RawArithmeticInFallible {
                         rule_name: self.rule_name,
                         mask: self.mask,
                         skip_overloaded_group_arithmetic: false,
+                        safe_subtractions: Vec::new(),
                     };
                     visitor.visit_block(&item_fn.block);
                     self.diagnostics.extend(visitor.diagnostics);
@@ -4265,6 +4440,7 @@ impl LintRule for RawArithmeticInFallible {
                             rule_name: self.rule_name,
                             mask: self.mask,
                             skip_overloaded_group_arithmetic: false,
+                            safe_subtractions: Vec::new(),
                         };
                         visitor.visit_block(&item_fn.block);
                         self.diagnostics.extend(visitor.diagnostics);

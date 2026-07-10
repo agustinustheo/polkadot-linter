@@ -2600,6 +2600,99 @@ pub fn rebalance_delta(current: Balance, target: Balance, raw: Balance) -> Resul
 }
 
 #[test]
+fn sec009_skips_branch_ordered_deposit_deltas() {
+    let code = r#"
+pub fn update_deposit(old_deposit: Balance, new_deposit: Balance, raw: Balance) -> DispatchResult {
+    if old_deposit < new_deposit {
+        T::Currency::reserve(&sender, new_deposit - old_deposit)?;
+    } else if old_deposit > new_deposit {
+        T::Currency::unreserve(&sender, old_deposit - new_deposit);
+    }
+
+    if current >= target {
+        let _delta = current - target;
+    }
+
+    if new_len > old_len {
+        diff.bytes_added = new_len - old_len;
+    } else {
+        diff.bytes_removed = old_len - new_len;
+    }
+
+    let unsafe_delta = raw - new_deposit;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/identity/src/lib.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip branch-ordered nonnegative deltas while reporting unguarded subtraction"
+    );
+}
+
+#[test]
+fn sec009_skips_method_ordered_subtractions() {
+    let code = r#"
+pub fn extract_chain_id(v: U256, max_amount: Balance, spot_price: Balance, raw: Balance) -> Result<Option<U256>, Error> {
+    let chain_id = if v.ge(&35u32.into()) {
+        Some((v - 35) / 2)
+    } else {
+        None
+    };
+
+    if spot_price.le(&max_amount) {
+        let _slack = max_amount - spot_price;
+    } else {
+        let _excess = spot_price - max_amount;
+    }
+
+    let unsafe_delta = raw - max_amount;
+    Ok(chain_id)
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/evm/api/rlp_codec.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip method-ordered deltas while reporting unguarded subtraction"
+    );
+}
+
+#[test]
+fn sec009_skips_cmp_match_ordered_subtractions() {
+    let code = r#"
+pub fn external_to_internal(
+    amount: Balance,
+    ext_decimals: u8,
+    internal_decimals: u8,
+    raw: u8,
+) -> Result<Balance, Error> {
+    use core::cmp::Ordering::*;
+    let scaled = match ext_decimals.cmp(&internal_decimals) {
+        Equal => amount,
+        Less => {
+            let diff = (internal_decimals - ext_decimals) as u32;
+            amount.checked_mul(pow10(diff)?).ok_or(Error::Overflow)?
+        },
+        Greater => {
+            let diff = (ext_decimals - internal_decimals) as u32;
+            amount.checked_div(pow10(diff)?).unwrap_or_default()
+        },
+    };
+    let unsafe_delta = raw - ext_decimals;
+    Ok(scaled)
+}
+"#;
+    let diags = check_fixture("substrate/frame/psm/src/lib.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip cmp-match deltas while still reporting unrelated arithmetic"
+    );
+}
+
+#[test]
 fn sec009_detects_multiline_fallible_signature() {
     let code = r#"
 pub fn calculate_share(
