@@ -33,6 +33,8 @@ SEC002 = false
 SEC006 = false
 SEC015 = false
 SEC016 = false
+SEC012 = false
+SEC013 = false
 
 [rules.severity]
 TST002 = "error"

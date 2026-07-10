@@ -71,3 +71,15 @@ The script writes:
 
 - raw JSON findings
 - a text summary with counts by rule and top files
+
+Current pinned-corpus policy:
+
+- `.repos/polkadot-sdk` is a recorded git submodule pinned to
+  `b18fb34a8ae348df5866e4b718d82871d744e60d`
+- CI checks out the submodule, verifies that exact commit, runs this benchmark,
+  and fails if the SEC finding count rises above the curated ceiling
+- `SEC012` and `SEC013` remain implemented and unit-tested, but are disabled in
+  the project config because the SDK benchmark report showed they are still too
+  noisy for default audit output
+- the default SEC benchmark is currently focused on `SEC018`, with obvious
+  non-findings filtered out before diagnostics are emitted
