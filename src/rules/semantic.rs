@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use proc_macro2::Span;
 use quote::ToTokens;
@@ -16,6 +16,7 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
     frame_model::{collect_dispatchables, DispatchableOrigin},
+    project_model::SourceTargetKind,
     rules::LintRule,
 };
 
@@ -62,8 +63,13 @@ fn should_skip_production_rule(ctx: &FileContext) -> bool {
     !ctx.is_rust
         || ctx.is_benchmark_file
         || ctx.is_test_file
+        || ctx
+            .source_target_kinds
+            .iter()
+            .any(|kind| matches!(kind, SourceTargetKind::ProcMacro))
         || is_pure_test_path(&ctx.path)
         || has_crate_level_non_production_cfg(ctx.content)
+        || is_cfg_gated_module_file(&ctx.path)
 }
 
 fn has_crate_level_non_production_cfg(content: &str) -> bool {
@@ -75,6 +81,115 @@ fn has_crate_level_non_production_cfg(content: &str) -> bool {
         let item_attr = trimmed.replacen("#![", "#[", 1);
         is_masked_cfg_attribute(&item_attr)
     })
+}
+
+fn is_cfg_gated_module_file(path: &Path) -> bool {
+    let Some(module_name) = module_name_for_file(path) else {
+        return false;
+    };
+
+    parent_module_candidates(path).iter().any(|candidate| {
+        fs::read_to_string(candidate)
+            .ok()
+            .is_some_and(|content| module_decl_has_masked_cfg(&content, &module_name))
+    })
+}
+
+fn module_name_for_file(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    if file_name == "mod.rs" {
+        return path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .and_then(|name| name.to_str())
+            .map(ToOwned::to_owned);
+    }
+
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(ToOwned::to_owned)
+}
+
+fn parent_module_candidates(path: &Path) -> Vec<std::path::PathBuf> {
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    if file_name == "mod.rs" {
+        let Some(grandparent) = parent.parent() else {
+            return Vec::new();
+        };
+        return vec![
+            grandparent.join("lib.rs"),
+            grandparent.join("main.rs"),
+            grandparent.join("mod.rs"),
+            grandparent.join(format!(
+                "{}.rs",
+                parent
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("")
+            )),
+        ];
+    }
+
+    let mut candidates = vec![
+        parent.join("mod.rs"),
+        parent.with_extension("rs"),
+        parent.join("lib.rs"),
+        parent.join("main.rs"),
+    ];
+    candidates.dedup();
+    candidates
+}
+
+fn module_decl_has_masked_cfg(content: &str, module_name: &str) -> bool {
+    let mut pending_masked_cfg = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            continue;
+        }
+        if is_masked_cfg_attribute(trimmed) {
+            pending_masked_cfg = true;
+            continue;
+        }
+        if trimmed.starts_with("#[") {
+            continue;
+        }
+        if module_declaration_name(trimmed).as_deref() == Some(module_name) {
+            return pending_masked_cfg;
+        }
+        pending_masked_cfg = false;
+    }
+
+    false
+}
+
+fn module_declaration_name(trimmed: &str) -> Option<String> {
+    let after_mod = if let Some(rest) = trimmed.strip_prefix("mod ") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("pub mod ") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("pub(crate) mod ") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("pub(super) mod ") {
+        rest
+    } else if trimmed.starts_with("pub(in ") {
+        trimmed.split_once(" mod ")?.1
+    } else {
+        return None;
+    };
+
+    let name = after_mod
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+        .collect::<String>();
+    (!name.is_empty()).then_some(name)
 }
 
 fn is_documented_benchmark_test_builder(path: &Path, content: &str) -> bool {
@@ -108,6 +223,8 @@ fn is_runtime_or_pallet_security_path(path: &Path) -> bool {
         || normalized.contains("/uapi/")
         || normalized.contains("/rc-client/")
         || normalized.contains("/ah-client/")
+        || normalized.contains("/polkadot/node/")
+        || normalized.contains("/dev-node/node/")
         || normalized.contains("/reward-curve/")
         || normalized.contains("/substrate/frame/asset-conversion/ops/")
     {
@@ -297,6 +414,16 @@ fn path_last_ident(path: &syn::Path) -> Option<String> {
         .map(|segment| segment.ident.to_string())
 }
 
+fn type_last_ident(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Path(TypePath { path, .. }) => path_last_ident(path),
+        Type::Reference(reference) => type_last_ident(&reference.elem),
+        Type::Paren(paren) => type_last_ident(&paren.elem),
+        Type::Group(group) => type_last_ident(&group.elem),
+        _ => None,
+    }
+}
+
 fn macro_name(mac: &Macro) -> Option<String> {
     path_last_ident(&mac.path)
 }
@@ -326,6 +453,48 @@ fn expect_message_marks_proven_invariant(expr_method_call: &ExprMethodCall) -> b
 
 fn macro_message_marks_proven_invariant(mac: &Macro) -> bool {
     mac.tokens.to_string().to_ascii_lowercase().contains("qed")
+}
+
+fn unwrap_receiver_is_nonzero_literal_new(expr_method_call: &ExprMethodCall) -> bool {
+    if expr_method_call.method != "unwrap" {
+        return false;
+    }
+
+    let Expr::Call(expr_call) = strip_expr_wrappers(&expr_method_call.receiver) else {
+        return false;
+    };
+    let Some(path) = expr_call_path(expr_call) else {
+        return false;
+    };
+    if !path_has_exact_ident(path, "new") || !path_has_segment(path, "NonZero") {
+        return false;
+    }
+
+    let Some(Expr::Lit(expr_lit)) = expr_call.args.first().map(strip_expr_wrappers) else {
+        return false;
+    };
+    let Lit::Int(lit_int) = &expr_lit.lit else {
+        return false;
+    };
+
+    integer_literal_is_nonzero(lit_int)
+}
+
+fn integer_literal_is_nonzero(lit_int: &syn::LitInt) -> bool {
+    let mut digits = lit_int.to_string();
+    if let Some(suffix) = lit_int.suffix().strip_prefix('u') {
+        digits.truncate(digits.len().saturating_sub(suffix.len() + 1));
+    } else if let Some(suffix) = lit_int.suffix().strip_prefix('i') {
+        digits.truncate(digits.len().saturating_sub(suffix.len() + 1));
+    }
+
+    let normalized = digits.replace('_', "");
+    let without_prefix = normalized
+        .strip_prefix("0x")
+        .or_else(|| normalized.strip_prefix("0o"))
+        .or_else(|| normalized.strip_prefix("0b"))
+        .unwrap_or(&normalized);
+    without_prefix.chars().any(|ch| ch != '0')
 }
 
 fn path_has_exact_ident(path: &syn::Path, ident: &str) -> bool {
@@ -486,6 +655,15 @@ fn strip_expr_wrappers(mut expr: &Expr) -> &Expr {
             Expr::Try(expr_try) => &expr_try.expr,
             _ => return expr,
         };
+    }
+}
+
+fn expr_is_top_level_try(expr: &Expr) -> bool {
+    match expr {
+        Expr::Try(_) => true,
+        Expr::Group(group) => expr_is_top_level_try(&group.expr),
+        Expr::Paren(paren) => expr_is_top_level_try(&paren.expr),
+        _ => false,
     }
 }
 
@@ -3211,6 +3389,9 @@ impl LintRule for LetUnderscoreResult {
         if should_skip_production_rule(ctx) {
             return None;
         }
+        if !is_runtime_or_pallet_security_path(&ctx.path) {
+            return None;
+        }
 
         let ast = ast_file(ctx)?;
         let test_mask = cfg_test_module_mask(ctx.content);
@@ -3250,6 +3431,10 @@ impl LintRule for LetUnderscoreResult {
                     visit::visit_local(self, local);
                     return;
                 };
+                if expr_is_top_level_try(&init.expr) {
+                    visit::visit_local(self, local);
+                    return;
+                }
                 let rhs: String = init
                     .expr
                     .to_token_stream()
@@ -3349,6 +3534,16 @@ impl LintRule for PanicInProduction {
             &genesis_build_mask(ctx.content),
         );
         let ast = ast_file(ctx)?;
+        let uninhabited_enums: HashSet<String> = ast
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Enum(item_enum) if item_enum.variants.is_empty() => {
+                    Some(item_enum.ident.to_string())
+                }
+                _ => None,
+            })
+            .collect();
 
         struct PanicVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
@@ -3358,6 +3553,8 @@ impl LintRule for PanicInProduction {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            uninhabited_enums: &'a HashSet<String>,
+            uninhabited_impl_depth: usize,
         }
 
         impl PanicVisitor<'_> {
@@ -3386,17 +3583,33 @@ impl LintRule for PanicInProduction {
         }
 
         impl<'ast> Visit<'ast> for PanicVisitor<'_> {
+            fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                let is_uninhabited_impl = type_last_ident(&item_impl.self_ty)
+                    .as_ref()
+                    .is_some_and(|ident| self.uninhabited_enums.contains(ident));
+                if is_uninhabited_impl {
+                    self.uninhabited_impl_depth += 1;
+                }
+
+                visit::visit_item_impl(self, item_impl);
+
+                if is_uninhabited_impl {
+                    self.uninhabited_impl_depth -= 1;
+                }
+            }
+
             fn visit_expr_method_call(&mut self, expr_method_call: &'ast ExprMethodCall) {
                 if is_masked_span(self.mask, expr_method_call.span()) {
                     visit::visit_expr_method_call(self, expr_method_call);
                     return;
                 }
                 match expr_method_call.method.to_string().as_str() {
-                    "unwrap" => self.push_diag(
-                        expr_method_call.span(),
-                        ".unwrap()",
-                        "Use `.ok_or(Error::...)?`, `.unwrap_or_default()`, or `.defensive()`",
-                    ),
+                    "unwrap" if !unwrap_receiver_is_nonzero_literal_new(expr_method_call) => self
+                        .push_diag(
+                            expr_method_call.span(),
+                            ".unwrap()",
+                            "Use `.ok_or(Error::...)?`, `.unwrap_or_default()`, or `.defensive()`",
+                        ),
                     "expect" if !expect_message_marks_proven_invariant(expr_method_call) => self
                         .push_diag(
                             expr_method_call.span(),
@@ -3420,11 +3633,15 @@ impl LintRule for PanicInProduction {
                         "panic!()",
                         "Return an error or use `defensive!()`",
                     ),
-                    Some("unreachable") if !proven_invariant => self.push_diag(
-                        mac.span(),
-                        "unreachable!()",
-                        "Use `defensive_unreachable!()` or return an error",
-                    ),
+                    Some("unreachable")
+                        if !proven_invariant && self.uninhabited_impl_depth == 0 =>
+                    {
+                        self.push_diag(
+                            mac.span(),
+                            "unreachable!()",
+                            "Use `defensive_unreachable!()` or return an error",
+                        )
+                    }
                     Some("todo") if !proven_invariant => self.push_diag(
                         mac.span(),
                         "todo!()",
@@ -3449,6 +3666,8 @@ impl LintRule for PanicInProduction {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            uninhabited_enums: &uninhabited_enums,
+            uninhabited_impl_depth: 0,
         };
         visitor.visit_file(ast);
 

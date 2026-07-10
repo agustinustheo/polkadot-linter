@@ -10,6 +10,7 @@ use cargo_metadata::{MetadataCommand, TargetKind};
 pub enum SourceTargetKind {
     Lib,
     Bin,
+    ProcMacro,
     Test,
     Bench,
     Example,
@@ -19,6 +20,7 @@ pub enum SourceTargetKind {
 #[derive(Debug, Clone, Default)]
 pub struct ProjectModel {
     file_target_kinds: HashMap<PathBuf, Vec<SourceTargetKind>>,
+    proc_macro_source_roots: Vec<PathBuf>,
     rustc_cfgs: BTreeSet<String>,
 }
 
@@ -33,18 +35,23 @@ impl ProjectModel {
             .ok()?;
 
         let mut file_target_kinds = HashMap::<PathBuf, Vec<SourceTargetKind>>::new();
+        let mut proc_macro_source_roots = Vec::<PathBuf>::new();
         for package in metadata.packages {
             for target in package.targets {
                 let Ok(src_path) = target.src_path.into_std_path_buf().canonicalize() else {
                     continue;
                 };
+                if target.kind.contains(&TargetKind::ProcMacro) {
+                    if let Some(source_root) = src_path.parent() {
+                        proc_macro_source_roots.push(source_root.to_path_buf());
+                    }
+                }
                 let kinds = target
                     .kind
                     .into_iter()
                     .map(|kind| match kind {
-                        TargetKind::Lib | TargetKind::RLib | TargetKind::ProcMacro => {
-                            SourceTargetKind::Lib
-                        }
+                        TargetKind::Lib | TargetKind::RLib => SourceTargetKind::Lib,
+                        TargetKind::ProcMacro => SourceTargetKind::ProcMacro,
                         TargetKind::Bin => SourceTargetKind::Bin,
                         TargetKind::Test => SourceTargetKind::Test,
                         TargetKind::Bench => SourceTargetKind::Bench,
@@ -59,6 +66,7 @@ impl ProjectModel {
 
         Some(Self {
             file_target_kinds,
+            proc_macro_source_roots,
             rustc_cfgs: rustc_cfgs(),
         })
     }
@@ -67,10 +75,20 @@ impl ProjectModel {
         let Ok(path) = path.canonicalize() else {
             return Vec::new();
         };
-        self.file_target_kinds
+        let mut kinds = self
+            .file_target_kinds
             .get(&path)
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if self
+            .proc_macro_source_roots
+            .iter()
+            .any(|root| path.starts_with(root))
+            && !kinds.contains(&SourceTargetKind::ProcMacro)
+        {
+            kinds.push(SourceTargetKind::ProcMacro);
+        }
+        kinds
     }
 
     pub fn rustc_cfgs(&self) -> &BTreeSet<String> {
