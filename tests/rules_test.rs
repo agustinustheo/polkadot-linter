@@ -1818,6 +1818,58 @@ pub fn process_member(who: &T::AccountId) -> DispatchResult {
 }
 
 #[test]
+fn sec007_allows_intentionally_ignored_result_with_comment() {
+    let code = r#"
+pub fn refund_best_effort(who: &T::AccountId) -> DispatchResult {
+    // Ignore errors since this can only fail if the receiver does not exist.
+    let _ = T::Currency::transfer(who, &pot, amount, Preservation::Expendable);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC007"),
+        "SEC007 should allow explicitly documented intentional result discards"
+    );
+}
+
+#[test]
+fn sec007_does_not_treat_unreserve_as_result() {
+    let code = r#"
+pub fn refund_deposit(who: &T::AccountId) {
+    let _ = T::Currency::unreserve(who, deposit);
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC007"),
+        "SEC007 should not report Currency::unreserve, which returns a balance rather than a Result"
+    );
+}
+
+#[test]
+fn sec007_allows_map_err_with_explicit_error_side_effect() {
+    let code = r#"
+pub fn migrate_pool(id: PoolId) {
+    let _ = Pallet::<T>::migrate_to_delegate_stake(id).map_err(|err| {
+        log!(warn, "failed to migrate pool {:?}: {:?}", id, err)
+    });
+
+    let mut failures = 0;
+    let _ = ledger.clone().set_controller_to_stash().map_err(|_| failures += 1);
+
+    let _ = T::Currency::transfer(&from, &to, amount, Preservation::Expendable);
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec007_count = diags.iter().filter(|d| d.rule_id == "SEC007").count();
+    assert_eq!(
+        sec007_count, 1,
+        "SEC007 should allow map_err logging/counting while still reporting silent result discards"
+    );
+}
+
+#[test]
 fn sec007_skips_test_files() {
     let bad = include_str!("fixtures/bad_sec007.rs");
     let diags = check_fixture("pallets/foo/src/tests.rs", bad);
