@@ -2048,6 +2048,24 @@ fn sec009_allows_saturating_arithmetic() {
 }
 
 #[test]
+fn sec009_skips_overloaded_group_arithmetic_in_curve_conversions() {
+    let code = r#"
+pub fn verify_point(p1: G1, p2: G1, scalar: Fr, a: u32, b: u32) -> Result<u32, Error> {
+    let _sum = AffineG1::from_jacobian(p1 + p2);
+    let _mul = AffineG1::from_jacobian(p1 * scalar);
+    let total = a + b;
+    Ok(total)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip overloaded curve arithmetic while still reporting integer arithmetic"
+    );
+}
+
+#[test]
 fn sec009_detects_multiline_fallible_signature() {
     let code = r#"
 pub fn calculate_share(
