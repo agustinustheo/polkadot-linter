@@ -1,0 +1,13 @@
+SEC018	.repos/polkadot-sdk/cumulus/pallets/solo-to-para/src/lib.rs	70	Extrinsic `schedule_migration` accepts unbounded `code` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/cumulus/pallets/solo-to-para/src/lib.rs	70	Extrinsic `schedule_migration` accepts unbounded `head_data` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/polkadot/runtime/rococo/src/validator_manager.rs	72	Extrinsic `register_validators` accepts unbounded `validators` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/polkadot/runtime/rococo/src/validator_manager.rs	89	Extrinsic `deregister_validators` accepts unbounded `validators` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/contracts/src/lib.rs	938	Extrinsic `call` accepts unbounded `data` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/multisig/src/lib.rs	322	Extrinsic `as_multi_threshold_1` accepts unbounded `other_signatories` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/node-authorization/src/lib.rs	388	Extrinsic `add_connections` accepts unbounded `connections` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/node-authorization/src/lib.rs	423	Extrinsic `remove_connections` accepts unbounded `connections` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/people/src/lib.rs	981	Extrinsic `force_recognize_personhood` accepts unbounded `people` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/revive/src/lib.rs	1163	Extrinsic `call` accepts unbounded `data` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/revive/src/lib.rs	1413	Extrinsic `eth_call` accepts unbounded `data` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/society/src/lib.rs	1114	Extrinsic `found_society` accepts unbounded `rules` but its weight does not account for its length
+SEC018	.repos/polkadot-sdk/substrate/frame/state-trie-migration/src/lib.rs	785	Extrinsic `migrate_custom_child` accepts unbounded `root` but its weight does not account for its length

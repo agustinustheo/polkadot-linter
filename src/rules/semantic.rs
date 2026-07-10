@@ -28,6 +28,8 @@ fn is_pure_test_path(path: &Path) -> bool {
         || path_str.contains("/mocks/")
         || path_str.contains("/mock/")
         || path_str.contains("/fuzzer/")
+        || path_str.contains("/frame/root-offences/")
+        || path_str.contains("/parachains/pallets/ping/")
         || path_str.contains("integration_tests")
         || path_str.contains("integration-tests")
         || path_str.contains("send-tx/")
@@ -4613,12 +4615,15 @@ impl LintRule for MissingWeightForUnboundedInput {
         let ast = ast_file(ctx)?;
         let mut diagnostics = Vec::new();
         for dispatchable in collect_dispatchables(ast, &test_mask) {
-            if dispatchable.is_deprecated || dispatchable.has_max_weight() {
+            if dispatchable.is_deprecated
+                || dispatchable.has_max_weight()
+                || dispatchable.consumes_max_block
+            {
                 continue;
             }
 
             for param in dispatchable.unbounded_vec_params() {
-                if param.name.starts_with('_') {
+                if param.name.starts_with('_') || param.is_bounded_in_body {
                     continue;
                 }
 
