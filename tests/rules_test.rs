@@ -1411,6 +1411,48 @@ pub fn normal_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_extended_invariant_comments_for_false_and_result_asserts() {
+    let code = r#"
+pub fn notify_downward_message() {
+    // this should never happen unless the max message size is configured to a
+    // jokingly small number.
+    log::error!(
+        target: "runtime::hrmp",
+        "sending notification failed."
+    );
+    debug_assert!(false);
+}
+
+pub fn payout() {
+    // Should not fail because curator fee is always less than bounty value.
+    let fee_transfer_result = T::Currency::transfer(
+        &source,
+        &dest,
+        fee,
+        AllowDeath,
+    );
+    debug_assert!(fee_transfer_result.is_ok());
+}
+
+pub fn unrelated_assertion() {
+    // Should not fail.
+    log::trace!("step 1");
+    log::trace!("step 2");
+    log::trace!("step 3");
+    log::trace!("step 4");
+    let value = external_value();
+    debug_assert!(value > 0);
+}
+"#;
+    let diags = check_fixture("substrate/frame/child-bounties/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should extend invariant comments only for false/result debug assertions"
+    );
+}
+
+#[test]
 fn sec002_skips_defensive_result_assertions() {
     let code = r#"
 pub fn settle_deposit(who: &T::AccountId, to_refund: Balance, to_slash: Balance) {
@@ -1924,6 +1966,63 @@ pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
         assert!(
             !has_rule(&diags, rule_id),
             "{rule_id} should skip crate-level test-helper-only files"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_cfg_expression_blocks() {
+    let code = r#"
+pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
+    #[cfg(test)]
+    {
+        debug_assert!(first <= second);
+        let _value = Some(first).unwrap();
+        let _sum = first + second;
+    }
+
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip cfg(test) expression blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_cfg_items_after_comments() {
+    let code = r#"
+pub struct Pallet;
+
+#[cfg(any(feature = "runtime-benchmarks", test))]
+// helper code for testing and benchmarking
+impl Pallet {
+    pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
+        debug_assert!(first <= second);
+        let _value = Some(first).unwrap();
+        Ok(first + second)
+    }
+}
+
+pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip cfg-gated items after comments without masking production code"
         );
     }
 }
@@ -2537,6 +2636,61 @@ pub fn bounded_literal(value: Item, other: Item, runtime_values: Vec<Item>) {
     assert_eq!(
         sec008_count, 2,
         "SEC008 should skip only BoundedVec::try_from(vec![...]) when literal length fits the static bound"
+    );
+}
+
+#[test]
+fn sec008_skips_fixed_range_try_into_unwraps() {
+    let code = r#"
+pub fn fixed_ranges(data: &[u8], offset: usize, start: usize, runtime_end: usize) {
+    let _word: &[u8; 32] = data[offset..offset + 32].try_into().unwrap();
+    let _prefix: &[u8; 4] = data[..4].try_into().expect("fixed prefix");
+    let _middle: &[u8; 8] = data[12..20].try_into().unwrap();
+
+    let _open: &[u8; 8] = data[12..].try_into().unwrap();
+    let _runtime: &[u8; 8] = data[start..runtime_end].try_into().unwrap();
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/vm/evm/memory.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only try_into unwraps whose slice range has a static length"
+    );
+}
+
+#[test]
+fn sec008_skips_test_default_config_impls() {
+    let code = r#"
+pub struct TestDefaultConfig;
+
+impl Randomness<Output, BlockNumber> for TestDefaultConfig {
+    fn random(_subject: &[u8]) -> (Output, BlockNumber) {
+        unimplemented!("No default random implementation in TestDefaultConfig")
+    }
+}
+
+impl Time for TestDefaultConfig {
+    type Moment = u64;
+    fn now() -> Self::Moment {
+        unimplemented!("No default time implementation in TestDefaultConfig")
+    }
+}
+
+pub struct ProductionConfig;
+
+impl Time for ProductionConfig {
+    type Moment = u64;
+    fn now() -> Self::Moment {
+        unimplemented!("No production time implementation")
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/contracts/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip TestDefaultConfig impl panics while reporting normal impls"
     );
 }
 
