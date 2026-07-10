@@ -1220,6 +1220,48 @@ impl<T: Config> Pallet<T> {
 }
 
 #[test]
+fn sec001_allows_privileged_origin_or_root_vec_inputs() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn relay_message(origin: OriginFor<T>, messages: Vec<u8>) -> DispatchResult {
+        T::RelayChainOrigin::ensure_origin_or_root(origin)?;
+        Messages::<T>::put(messages);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 should not report unbounded Vec inputs on ensure_origin_or_root dispatchables"
+    );
+}
+
+#[test]
+fn sec001_allows_vec_inputs_bounded_in_body() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let bounded = BoundedVec::<u8, T::MaxValues>::try_from(values)
+            .map_err(|_| Error::<T>::TooManyValues)?;
+        Values::<T>::put(bounded);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 should not report Vec inputs converted to bounded collections in the dispatchable"
+    );
+}
+
+#[test]
 fn sec001_skips_deprecated_dispatchables() {
     let code = r#"
 #[pallet::call]
