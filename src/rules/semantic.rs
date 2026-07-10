@@ -3531,6 +3531,7 @@ impl LintRule for RawArithmeticInFallible {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            skip_overloaded_group_arithmetic: bool,
         }
 
         impl<'ast> Visit<'ast> for ArithmeticVisitor<'_> {
@@ -3542,7 +3543,8 @@ impl LintRule for RawArithmeticInFallible {
                 if matches!(
                     expr_binary.op,
                     syn::BinOp::Add(_) | syn::BinOp::Sub(_) | syn::BinOp::Mul(_)
-                ) {
+                ) && !self.skip_overloaded_group_arithmetic
+                {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
                         rule_name: self.rule_name.to_string(),
@@ -3565,6 +3567,18 @@ impl LintRule for RawArithmeticInFallible {
                     });
                 }
                 visit::visit_expr_binary(self, expr_binary);
+            }
+
+            fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
+                let entering_group_conversion = expr_call_path(expr_call)
+                    .and_then(path_last_ident)
+                    .is_some_and(|name| name == "from_jacobian");
+                let previous = self.skip_overloaded_group_arithmetic;
+                if entering_group_conversion {
+                    self.skip_overloaded_group_arithmetic = true;
+                }
+                visit::visit_expr_call(self, expr_call);
+                self.skip_overloaded_group_arithmetic = previous;
             }
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
@@ -3632,6 +3646,7 @@ impl LintRule for RawArithmeticInFallible {
                         rule_id: self.rule_id,
                         rule_name: self.rule_name,
                         mask: self.mask,
+                        skip_overloaded_group_arithmetic: false,
                     };
                     visitor.visit_block(&item_fn.block);
                     self.diagnostics.extend(visitor.diagnostics);
@@ -3649,6 +3664,7 @@ impl LintRule for RawArithmeticInFallible {
                             rule_id: self.rule_id,
                             rule_name: self.rule_name,
                             mask: self.mask,
+                            skip_overloaded_group_arithmetic: false,
                         };
                         visitor.visit_block(&item_fn.block);
                         self.diagnostics.extend(visitor.diagnostics);
