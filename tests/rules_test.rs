@@ -1219,6 +1219,48 @@ impl<T: Config> Pallet<T> {
     );
 }
 
+#[test]
+fn sec001_skips_deprecated_dispatchables() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[deprecated(note = "use call instead")]
+    pub fn call_old_weight(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = data;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/contracts/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 should not report deprecated compatibility dispatchables"
+    );
+}
+
+#[test]
+fn sec001_skips_max_weight_dispatchables() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(Weight::MAX)]
+    pub fn eth_transact(origin: OriginFor<T>, payload: Vec<u8>) -> DispatchResult {
+        let _ = origin;
+        let _ = payload;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/revive/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 should not report calls intentionally assigned Weight::MAX"
+    );
+}
+
 // ==========================================================================
 // SEC002: debug_assert in production code
 // ==========================================================================
@@ -1247,6 +1289,41 @@ fn sec002_skips_test_files() {
     let bad = include_str!("fixtures/bad_sec002.rs");
     let diags = check_fixture("pallets/foo/src/tests.rs", bad);
     assert!(!has_rule(&diags, "SEC002"), "SEC002 should skip test files");
+}
+
+#[test]
+fn sec002_skips_non_runtime_utility_crates() {
+    let bad = include_str!("fixtures/bad_sec002.rs");
+    for path in [
+        "substrate/client/network/src/protocol/notifications/behaviour.rs",
+        "polkadot/node/core/backing/src/lib.rs",
+        "cumulus/client/consensus/common/src/level_monitor.rs",
+        "cumulus/pallets/parachain-system/proc-macro/src/lib.rs",
+        "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/staking-async/rc-client/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            !has_rule(&diags, "SEC002"),
+            "SEC002 should skip non-runtime utility path {path}"
+        );
+    }
+}
+
+#[test]
+fn sec002_still_lints_runtime_and_pallet_paths() {
+    let bad = include_str!("fixtures/bad_sec002.rs");
+    for path in [
+        "polkadot/runtime/common/src/slots/mod.rs",
+        "substrate/frame/staking/src/pallet/impls.rs",
+        "cumulus/pallets/parachain-system/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            has_rule(&diags, "SEC002"),
+            "SEC002 should still lint runtime/pallet path {path}"
+        );
+    }
 }
 
 // ==========================================================================
@@ -1286,6 +1363,58 @@ pub fn decode_two(mut safe: &[u8], mut unsafe_data: &[u8]) -> DispatchResult {
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     assert!(has_rule(&diags, "SEC003"), "SEC003 should still fire when one decode is unsafe even if another decode uses a depth limit");
+}
+
+#[test]
+fn sec003_allows_decode_of_non_recursive_internal_types() {
+    let code = r#"
+pub struct MigrationState;
+
+pub fn load_state(mut data: &[u8]) -> Result<MigrationState, Error> {
+    let state = MigrationState::decode(&mut data)?;
+    Ok(state)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/migration.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC003"),
+        "SEC003 should not fire on concrete internal types with no recursive runtime-call structure"
+    );
+}
+
+#[test]
+fn sec003_detects_unchecked_extrinsic_decode_without_limit() {
+    let code = r#"
+pub fn decode_extrinsic(mut data: &[u8]) -> DispatchResult {
+    let xt = UncheckedExtrinsic::decode(&mut data)?;
+    Executive::apply_extrinsic(xt)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC003"),
+        "SEC003 should still fire on recursive extrinsic/call decodes without a depth limit"
+    );
+}
+
+#[test]
+fn sec003_allows_runtime_call_decode_from_local_using_encoded_tuple() {
+    let code = r#"
+pub fn notify(pallet_index: u8, call_index: u8, query_id: QueryId, response: Response) -> Weight {
+    let bare = (pallet_index, call_index, query_id, response);
+    if let Ok(call) = bare.using_encoded(|mut bytes| {
+        <T as Config>::RuntimeCall::decode(&mut bytes)
+    }) {
+        return call.get_dispatch_info().call_weight;
+    }
+    Weight::zero()
+}
+"#;
+    let diags = check_fixture("pallets/xcm/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC003"),
+        "SEC003 should not report RuntimeCall decodes from bytes locally produced by using_encoded"
+    );
 }
 
 // ==========================================================================
@@ -1472,6 +1601,100 @@ fn sec008_skips_benchmark_files() {
 }
 
 #[test]
+fn sec008_skips_genesis_build_blocks() {
+    let code = r#"
+#[pallet::genesis_build]
+impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+    fn build(&self) {
+        let first = self.nodes.first().expect("genesis config must include a node");
+        let _ = first;
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC008"),
+        "SEC008 should not report genesis-build panics that fail invalid chain configuration"
+    );
+}
+
+#[test]
+fn sec008_skips_runtime_benchmark_cfg_blocks() {
+    let code = r#"
+#[cfg(feature = "runtime-benchmarks")]
+pub fn benchmark_setup() {
+    let account = MaybeAccount::get().expect("benchmark account exists");
+    let _ = account;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC008"),
+        "SEC008 should not report panic helpers inside runtime-benchmark cfg blocks"
+    );
+}
+
+#[test]
+fn sec008_skips_sdk_support_benchmark_fixture_paths() {
+    let bad = include_str!("fixtures/bad_sec008.rs");
+    for path in [
+        "polkadot/node/subsystem-bench/src/lib.rs",
+        "substrate/frame/support/src/traits/tokens/conformance_tests/regular/mutate.rs",
+        "substrate/frame/revive/fixtures/src/builder.rs",
+        "substrate/client/foo/src/test_utils.rs",
+        "substrate/bin/node/bench/src/construct.rs",
+        "substrate/bin/node/testing/src/bench.rs",
+        "bridges/snowbridge/runtime/test-common/src/lib.rs",
+        "substrate/frame/revive/rpc/build.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            !has_rule(&diags, "SEC008"),
+            "SEC008 should skip SDK support path {path}"
+        );
+    }
+}
+
+#[test]
+fn sec008_skips_non_runtime_utility_crates() {
+    let bad = include_str!("fixtures/bad_sec008.rs");
+    for path in [
+        "substrate/primitives/io/src/lib.rs",
+        "substrate/utils/wasm-builder/src/wasm_project.rs",
+        "polkadot/node/core/pvf/common/src/executor_interface.rs",
+        "substrate/client/state-db/src/lib.rs",
+        "substrate/scripts/ci/node-template-release/src/main.rs",
+        "substrate/frame/support/procedural/src/pallet/parse/tasks.rs",
+        "substrate/frame/examples/kitchensink/src/lib.rs",
+        "cumulus/pallets/parachain-system/proc-macro/src/lib.rs",
+        "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/staking/reward-curve/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            !has_rule(&diags, "SEC008"),
+            "SEC008 should skip non-runtime utility path {path}"
+        );
+    }
+}
+
+#[test]
+fn sec008_still_lints_runtime_and_pallet_paths() {
+    let bad = include_str!("fixtures/bad_sec008.rs");
+    for path in [
+        "polkadot/runtime/parachains/src/builder.rs",
+        "substrate/frame/contracts/src/lib.rs",
+        "bridges/modules/grandpa/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            has_rule(&diags, "SEC008"),
+            "SEC008 should still lint runtime/pallet path {path}"
+        );
+    }
+}
+
+#[test]
 fn sec008_does_not_skip_production_after_cfg_test_use() {
     let code = r#"
 #[cfg(test)]
@@ -1586,6 +1809,42 @@ pub fn validate<T>(first_alias: &u32, value: u32) -> DispatchResultWithPostInfo 
         !has_rule(&diags, "SEC009"),
         "SEC009 should NOT fire on ensure! checks that only use deref or comparisons"
     );
+}
+
+#[test]
+fn sec009_skips_non_runtime_utility_crates() {
+    let bad = include_str!("fixtures/bad_sec009.rs");
+    for path in [
+        "substrate/client/db/src/lib.rs",
+        "substrate/utils/fork-tree/src/lib.rs",
+        "polkadot/node/core/approval-voting/src/lib.rs",
+        "docs/sdk/packages/guides/first-pallet/src/lib.rs",
+        "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/staking-async/rc-client/src/lib.rs",
+        "substrate/frame/asset-conversion/ops/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            !has_rule(&diags, "SEC009"),
+            "SEC009 should skip non-runtime utility path {path}"
+        );
+    }
+}
+
+#[test]
+fn sec009_still_lints_runtime_and_pallet_paths() {
+    let bad = include_str!("fixtures/bad_sec009.rs");
+    for path in [
+        "polkadot/runtime/parachains/src/builder.rs",
+        "substrate/frame/staking/src/pallet/impls.rs",
+        "cumulus/pallets/xcmp-queue/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            has_rule(&diags, "SEC009"),
+            "SEC009 should still lint runtime/pallet path {path}"
+        );
+    }
 }
 
 // ==========================================================================
@@ -1736,6 +1995,31 @@ fn sec012_allows_bounded_clear_prefix() {
     assert!(
         !has_rule(&diags, "SEC012"),
         "SEC012 should NOT fire on bounded clear_prefix calls"
+    );
+}
+
+#[test]
+fn sec012_skips_frame_support_migration_helpers() {
+    let bad = include_str!("fixtures/bad_sec012.rs");
+    for path in [
+        "substrate/frame/support/src/migrations.rs",
+        "substrate/frame/support/src/storage/migration.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(
+            !has_rule(&diags, "SEC012"),
+            "SEC012 should skip FRAME support migration helper path {path}"
+        );
+    }
+}
+
+#[test]
+fn sec012_still_checks_real_pallet_migration_files() {
+    let bad = include_str!("fixtures/bad_sec012.rs");
+    let diags = check_fixture("substrate/frame/staking/src/pallet/impls.rs", bad);
+    assert!(
+        has_rule(&diags, "SEC012"),
+        "SEC012 should still report unbounded clear_prefix in real pallet code"
     );
 }
 
@@ -1928,6 +2212,53 @@ fn sec016_allows_storage_version_guarded_runtime_upgrade() {
     assert!(
         !has_rule(&diags, "SEC016"),
         "SEC016 should NOT fire when on_runtime_upgrade checks StorageVersion"
+    );
+}
+
+#[test]
+fn sec016_allows_unchecked_migration_impls_wrapped_by_versioned_migration() {
+    let code = r#"
+pub type MigrateToV2<T> = frame_support::migrations::VersionedMigration<
+    1,
+    2,
+    UncheckedMigrateToV2<T>,
+    Pallet<T>,
+    T::DbWeight,
+>;
+
+pub struct UncheckedMigrateToV2<T>(PhantomData<T>);
+
+impl<T: Config> UncheckedOnRuntimeUpgrade for UncheckedMigrateToV2<T> {
+    fn on_runtime_upgrade() -> Weight {
+        OldValues::<T>::put(1);
+        T::DbWeight::get().writes(1)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/migration.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should not require a second StorageVersion check inside UncheckedOnRuntimeUpgrade impls"
+    );
+}
+
+#[test]
+fn sec016_skips_frame_support_migration_helpers() {
+    let bad = include_str!("fixtures/bad_sec016.rs");
+    let diags = check_fixture("substrate/frame/support/src/migrations.rs", bad);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should skip generic FRAME support migration helper implementations"
+    );
+}
+
+#[test]
+fn sec016_still_checks_real_pallet_migration_files() {
+    let bad = include_str!("fixtures/bad_sec016.rs");
+    let diags = check_fixture("substrate/frame/assets/src/migration.rs", bad);
+    assert!(
+        has_rule(&diags, "SEC016"),
+        "SEC016 should still report unguarded migrations in real pallet migration files"
     );
 }
 
