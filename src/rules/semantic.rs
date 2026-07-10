@@ -24,6 +24,7 @@ fn is_pure_test_path(path: &Path) -> bool {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     path_str.contains("/tests/")
         || path_str.contains("/test/")
+        || path_str.contains("/test-runtime/")
         || path_str.contains("/test-staking-e2e/")
         || path_str.contains("/test-utils/")
         || path_str.contains("/ui-tests/")
@@ -53,11 +54,27 @@ fn is_pure_test_path(path: &Path) -> bool {
         || file_name == "mock.rs"
         || file_name == "remote_mining.rs"
         || file_name == "test_utils.rs"
+        || file_name == "testing.rs"
         || file_name == "testing_utils.rs"
 }
 
 fn should_skip_production_rule(ctx: &FileContext) -> bool {
-    !ctx.is_rust || ctx.is_benchmark_file || ctx.is_test_file || is_pure_test_path(&ctx.path)
+    !ctx.is_rust
+        || ctx.is_benchmark_file
+        || ctx.is_test_file
+        || is_pure_test_path(&ctx.path)
+        || has_crate_level_non_production_cfg(ctx.content)
+}
+
+fn has_crate_level_non_production_cfg(content: &str) -> bool {
+    content.lines().take(80).any(|line| {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("#![cfg(") {
+            return false;
+        }
+        let item_attr = trimmed.replacen("#![", "#[", 1);
+        is_masked_cfg_attribute(&item_attr)
+    })
 }
 
 fn is_documented_benchmark_test_builder(path: &Path, content: &str) -> bool {
@@ -88,6 +105,7 @@ fn is_runtime_or_pallet_security_path(path: &Path) -> bool {
         || normalized.contains("/substrate/frame/examples/")
         || normalized.contains("/proc-macro/")
         || normalized.contains("/rpc/")
+        || normalized.contains("/uapi/")
         || normalized.contains("/rc-client/")
         || normalized.contains("/ah-client/")
         || normalized.contains("/reward-curve/")

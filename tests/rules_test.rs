@@ -1361,6 +1361,7 @@ fn sec002_skips_non_runtime_utility_crates() {
         "cumulus/client/consensus/common/src/level_monitor.rs",
         "cumulus/pallets/parachain-system/proc-macro/src/lib.rs",
         "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/contracts/uapi/src/host.rs",
         "substrate/frame/staking-async/rc-client/src/lib.rs",
     ] {
         let diags = check_fixture(path, bad);
@@ -1714,6 +1715,26 @@ pub fn benchmark_setup() {
 }
 
 #[test]
+fn production_security_rules_skip_crate_level_non_production_cfg() {
+    let code = r#"
+#![cfg(any(feature = "runtime-benchmarks", test))]
+
+pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(first <= second);
+    let _value = Some(first).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/call_builder.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        assert!(
+            !has_rule(&diags, rule_id),
+            "{rule_id} should skip crate-level test/runtime-benchmark-only files"
+        );
+    }
+}
+
+#[test]
 fn sec008_skips_runtime_benchmark_cfg_multiline_signatures() {
     let code = r#"
 #[cfg(feature = "runtime-benchmarks")]
@@ -1843,6 +1864,8 @@ fn sec008_skips_sdk_support_benchmark_fixture_paths() {
         "substrate/frame/election-provider-multi-phase/test-staking-e2e/src/lib.rs",
         "substrate/frame/election-provider-multi-phase/src/remote_mining.rs",
         "bridges/snowbridge/runtime/test-common/src/lib.rs",
+        "polkadot/runtime/test-runtime/src/xcm_config.rs",
+        "substrate/primitives/runtime/src/testing.rs",
         "substrate/frame/revive/rpc/build.rs",
         "substrate/frame/revive/ui-tests/src/ui/precompiles_ui.rs",
     ] {
@@ -1867,6 +1890,7 @@ fn sec008_skips_non_runtime_utility_crates() {
         "substrate/frame/examples/kitchensink/src/lib.rs",
         "cumulus/pallets/parachain-system/proc-macro/src/lib.rs",
         "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/revive/uapi/src/host/riscv64.rs",
         "substrate/frame/staking/reward-curve/src/lib.rs",
     ] {
         let diags = check_fixture(path, bad);
@@ -2138,6 +2162,7 @@ fn sec009_skips_non_runtime_utility_crates() {
         "polkadot/node/core/approval-voting/src/lib.rs",
         "docs/sdk/packages/guides/first-pallet/src/lib.rs",
         "substrate/frame/revive/rpc/src/cli.rs",
+        "substrate/frame/revive/uapi/src/host/riscv64.rs",
         "substrate/frame/staking-async/rc-client/src/lib.rs",
         "substrate/frame/asset-conversion/ops/src/lib.rs",
     ] {
