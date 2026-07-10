@@ -1776,6 +1776,47 @@ pub fn transfer_deposit(from: &T::AccountId, to: &T::AccountId, amount: Balance)
     );
 }
 
+#[test]
+fn sec006_allows_remaining_accounted_in_transfer_amount() {
+    let code = r#"
+pub fn transfer_deposit(from: &T::AccountId, to: &T::AccountId, amount: Balance) -> DispatchResult {
+    let lost = T::Currency::repatriate_reserved(from, to, amount, BalanceStatus::Free)?;
+    *stored_deposit = amount.saturating_sub(lost);
+
+    let remain = T::Currency::repatriate_reserved(from, to, amount, BalanceStatus::Free)?;
+    let actual = amount.defensive_saturating_sub(remain);
+    log::debug!("actual = {:?}", actual);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC006"),
+        "SEC006 should allow returned remaining amounts that are used to compute the actual transfer"
+    );
+}
+
+#[test]
+fn sec006_only_checks_direct_repatriate_initializer() {
+    let code = r#"
+pub fn transfer_deposit(from: &T::AccountId, to: &T::AccountId, amount: Balance) -> DispatchResult {
+    let actual = if use_reserved {
+        let remain = T::Currency::repatriate_reserved(from, to, amount, BalanceStatus::Free)?;
+        amount.defensive_saturating_sub(remain)
+    } else {
+        amount
+    };
+    log::debug!("actual = {:?}", actual);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC006"),
+        "SEC006 should not report outer variables whose initializer only contains a nested repatriate call"
+    );
+}
+
 // ==========================================================================
 // SEC007: let _ = swallowing Result
 // ==========================================================================
