@@ -5405,25 +5405,65 @@ impl LintRule for IdentityHasherOnCommonKeys {
                 || type_is_named(ty, &["u32", "u64"])
         }
 
+        fn storage_doc_text(item: &ItemType) -> String {
+            item.attrs
+                .iter()
+                .filter(|attr| path_has_exact_ident(attr.path(), "doc"))
+                .filter_map(|attr| match &attr.meta {
+                    syn::Meta::NameValue(meta) => match &meta.value {
+                        Expr::Lit(expr_lit) => match &expr_lit.lit {
+                            Lit::Str(lit) => Some(lit.value()),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase()
+        }
+
+        fn docs_mark_internal_numeric_layout(item: &ItemType) -> bool {
+            let doc = storage_doc_text(item);
+            doc.contains("ring buffer")
+                || doc.contains("index")
+                || doc.contains("indices")
+                || doc.contains("segment")
+                || doc.contains("position")
+        }
+
         fn has_identity_common_key_pair(
+            item: &ItemType,
             type_args: &[Type],
             hasher_idx: usize,
             key_idx: usize,
         ) -> bool {
-            type_args
+            let has_identity = type_args
                 .get(hasher_idx)
-                .is_some_and(|ty| type_is_named(ty, &["Identity"]))
-                && type_args
-                    .get(key_idx)
-                    .is_some_and(is_common_storage_key_type)
+                .is_some_and(|ty| type_is_named(ty, &["Identity"]));
+            let Some(key_ty) = type_args.get(key_idx) else {
+                return false;
+            };
+
+            has_identity
+                && is_common_storage_key_type(key_ty)
+                && !(type_is_named(key_ty, &["u32", "u64"])
+                    && docs_mark_internal_numeric_layout(item))
         }
 
-        fn storage_uses_identity_on_common_key(storage_kind: &str, type_args: &[Type]) -> bool {
+        fn storage_uses_identity_on_common_key(
+            item: &ItemType,
+            storage_kind: &str,
+            type_args: &[Type],
+        ) -> bool {
             match storage_kind {
-                "StorageMap" | "CountedStorageMap" => has_identity_common_key_pair(type_args, 1, 2),
+                "StorageMap" | "CountedStorageMap" => {
+                    has_identity_common_key_pair(item, type_args, 1, 2)
+                }
                 "StorageDoubleMap" => {
-                    has_identity_common_key_pair(type_args, 1, 2)
-                        || has_identity_common_key_pair(type_args, 3, 4)
+                    has_identity_common_key_pair(item, type_args, 1, 2)
+                        || has_identity_common_key_pair(item, type_args, 3, 4)
                 }
                 _ => false,
             }
@@ -5450,7 +5490,7 @@ impl LintRule for IdentityHasherOnCommonKeys {
                     return;
                 };
 
-                if storage_uses_identity_on_common_key(&storage_kind, &type_args) {
+                if storage_uses_identity_on_common_key(item, &storage_kind, &type_args) {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
 						rule_name: self.rule_name.to_string(),
