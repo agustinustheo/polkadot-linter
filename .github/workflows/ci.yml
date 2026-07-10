@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, polkadot-linter-updates]
+    branches: [main, polkadot-linter-updates, "fix/**", "codex/**"]
   pull_request:
     branches: [main]
 
@@ -10,8 +10,22 @@ jobs:
   polkadot-linter:
     name: Validate Polkadot Linter
     runs-on: ubuntu-latest
+    env:
+      POLKADOT_SDK_COMMIT: b18fb34a8ae348df5866e4b718d82871d744e60d
+      MAX_SEC_BENCHMARK_FINDINGS: "38"
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository and SDK submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install benchmark dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Verify pinned Polkadot SDK submodule
+        run: |
+          test -d .repos/polkadot-sdk
+          test "$(git -C .repos/polkadot-sdk rev-parse HEAD)" = "$POLKADOT_SDK_COMMIT"
 
       - name: Install nightly formatter toolchain
         uses: dtolnay/rust-toolchain@master
@@ -33,5 +47,25 @@ jobs:
       - name: Run Polkadot Linter tests
         run: cargo +1.93.0 test
 
+      - name: Run Clippy
+        run: cargo +1.93.0 clippy --all-targets -- -D warnings
+
       - name: Build Polkadot Linter binary
         run: cargo +1.93.0 build
+
+      - name: Benchmark SEC rules against Polkadot SDK
+        run: scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks
+
+      - name: Enforce SEC benchmark finding ceiling
+        run: |
+          latest="$(ls -t .benchmarks/sec-rules-*.json | head -n1)"
+          count="$(jq 'length' "$latest")"
+          echo "SEC benchmark findings: $count"
+          test "$count" -le "$MAX_SEC_BENCHMARK_FINDINGS"
+
+      - name: Upload SEC benchmark output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sec-rules-benchmark
+          path: .benchmarks/

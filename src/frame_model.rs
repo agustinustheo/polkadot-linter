@@ -1,4 +1,5 @@
 use proc_macro2::Span;
+use quote::ToTokens;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
@@ -25,12 +26,20 @@ pub struct Dispatchable {
     pub span: Span,
     pub origin: DispatchableOrigin,
     pub params: Vec<DispatchableParam>,
+    pub is_deprecated: bool,
     weight_expr: Option<Expr>,
 }
 
 impl Dispatchable {
     pub fn unbounded_vec_params(&self) -> impl Iterator<Item = &DispatchableParam> {
         self.params.iter().filter(|param| param.is_unbounded_vec)
+    }
+
+    pub fn has_max_weight(&self) -> bool {
+        self.weight_expr
+            .as_ref()
+            .map(|expr| compact_tokens(expr).contains("Weight::MAX"))
+            .unwrap_or(false)
     }
 
     pub fn weight_accounts_for_param(&self, param_name: &str) -> bool {
@@ -101,6 +110,7 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                     span: method.sig.ident.span(),
                     origin: detect_origin(&method.block),
                     params,
+                    is_deprecated: has_attr_ending_with(&method.attrs, "deprecated"),
                     weight_expr: method
                         .attrs
                         .iter()
@@ -185,6 +195,16 @@ fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
     attrs.iter().any(|attr| attr_path_matches(attr, segments))
 }
 
+fn has_attr_ending_with(attrs: &[Attribute], segment: &str) -> bool {
+    attrs.iter().any(|attr| {
+        attr.path()
+            .segments
+            .last()
+            .map(|last| last.ident == segment)
+            .unwrap_or(false)
+    })
+}
+
 fn is_masked_span(mask: &[bool], span: Span) -> bool {
     mask.get(span.start().line.saturating_sub(1))
         .copied()
@@ -241,6 +261,14 @@ fn strip_expr_wrappers(mut expr: &Expr) -> &Expr {
             _ => return expr,
         };
     }
+}
+
+fn compact_tokens<T: ToTokens>(node: &T) -> String {
+    node.to_token_stream()
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
 }
 
 fn type_contains_named(ty: &Type, names: &[&str]) -> bool {

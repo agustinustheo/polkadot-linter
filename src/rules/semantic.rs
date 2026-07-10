@@ -25,12 +25,16 @@ fn is_pure_test_path(path: &Path) -> bool {
     path_str.contains("/tests/")
         || path_str.contains("/test/")
         || path_str.contains("/test-utils/")
+        || path_str.contains("/mocks/")
+        || path_str.contains("/mock/")
+        || path_str.contains("/fuzzer/")
         || path_str.contains("integration_tests")
         || path_str.contains("integration-tests")
         || path_str.contains("send-tx/")
         || path_str.ends_with("_test.rs")
         || path_str.ends_with("_tests.rs")
         || path_str.ends_with("tests.rs")
+        || file_name.starts_with("mock_")
         || file_name == "mock.rs"
         || file_name == "testing_utils.rs"
 }
@@ -262,6 +266,56 @@ fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
     };
     visitor.visit_type(ty);
     visitor.found
+}
+
+fn type_contains_unbounded_storage_collection(ty: &Type) -> bool {
+    const UNBOUNDED_COLLECTIONS: &[&str] = &["Vec", "BTreeMap", "BTreeSet"];
+    const BOUNDED_COLLECTIONS: &[&str] = &[
+        "BoundedBTreeMap",
+        "BoundedBTreeSet",
+        "BoundedVec",
+        "WeakBoundedVec",
+    ];
+
+    struct TypeNameVisitor {
+        found: bool,
+    }
+
+    impl<'ast> Visit<'ast> for TypeNameVisitor {
+        fn visit_type_path(&mut self, type_path: &'ast TypePath) {
+            let Some(last_segment) = type_path.path.segments.last() else {
+                return;
+            };
+            let last_ident = last_segment.ident.to_string();
+
+            if BOUNDED_COLLECTIONS.contains(&last_ident.as_str()) {
+                return;
+            }
+            if UNBOUNDED_COLLECTIONS.contains(&last_ident.as_str()) {
+                self.found = true;
+                return;
+            }
+
+            visit::visit_type_path(self, type_path);
+        }
+    }
+
+    let mut visitor = TypeNameVisitor { found: false };
+    visitor.visit_type(ty);
+    visitor.found
+}
+
+fn has_pallet_dev_mode(ast: &SynFile) -> bool {
+    ast.items.iter().any(|item| {
+        let attrs = match item {
+            Item::Mod(item_mod) => &item_mod.attrs,
+            _ => return false,
+        };
+
+        attrs.iter().any(|attr| {
+            path_has_exact_ident(attr.path(), "pallet") && compact_tokens(attr).contains("dev_mode")
+        })
+    })
 }
 
 fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
@@ -4043,6 +4097,9 @@ impl LintRule for UnboundedStorageCollections {
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        if has_pallet_dev_mode(ast) {
+            return None;
+        }
 
         struct StorageCollectionVisitor<'a> {
             mask: &'a [bool],
@@ -4062,7 +4119,7 @@ impl LintRule for UnboundedStorageCollections {
                     return;
                 }
 
-                if type_contains_named(&item.ty, &["Vec", "BTreeMap", "BTreeSet"]) {
+                if type_contains_unbounded_storage_collection(&item.ty) {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
                         rule_name: self.rule_name.to_string(),
@@ -4556,7 +4613,15 @@ impl LintRule for MissingWeightForUnboundedInput {
         let ast = ast_file(ctx)?;
         let mut diagnostics = Vec::new();
         for dispatchable in collect_dispatchables(ast, &test_mask) {
+            if dispatchable.is_deprecated || dispatchable.has_max_weight() {
+                continue;
+            }
+
             for param in dispatchable.unbounded_vec_params() {
+                if param.name.starts_with('_') {
+                    continue;
+                }
+
                 if dispatchable.weight_accounts_for_param(&param.name) {
                     continue;
                 }

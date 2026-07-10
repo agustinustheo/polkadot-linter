@@ -5,12 +5,16 @@ fn fixture_is_test_file(path: &str) -> bool {
         || path.starts_with("test/")
         || path.contains("/tests/")
         || path.contains("/test/")
+        || path.contains("/mocks/")
+        || path.contains("/mock/")
+        || path.contains("/fuzzer/")
         || path.contains("integration_tests")
         || path.contains("integration-tests")
         || path.ends_with("_test.rs")
         || path.ends_with("_tests.rs")
         || path.ends_with("tests.rs")
         || path.ends_with("test.rs")
+        || path.ends_with("mock_message_queue.rs")
         || path.ends_with("mock.rs")
         || path.ends_with("testing_utils.rs")
 }
@@ -1781,6 +1785,57 @@ fn sec013_allows_explicit_unbounded_annotation() {
     );
 }
 
+#[test]
+fn sec013_allows_bounded_storage_wrappers() {
+    let code = r#"
+#[pallet::storage]
+pub type BoundedBytes<T: Config> =
+    StorageValue<_, BoundedVec<Vec<u8>, T::MaxItems>, ValueQuery>;
+
+#[pallet::storage]
+pub type WeakBoundedBytes<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, WeakBoundedVec<Vec<u8>, T::MaxItems>, ValueQuery>;
+
+#[pallet::storage]
+pub type BoundedMap<T: Config> =
+    StorageValue<_, BoundedBTreeMap<T::AccountId, Vec<u8>, T::MaxItems>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC013"),
+        "SEC013 should NOT fire when raw collection types are inside bounded storage wrappers"
+    );
+}
+
+#[test]
+fn sec013_allows_pallet_dev_mode_storage() {
+    let code = r#"
+#[frame_support::pallet(dev_mode)]
+pub mod pallet {
+    #[pallet::storage]
+    pub type Dummy<T: Config> = StorageValue<_, Vec<T::AccountId>>;
+}
+"#;
+    let diags = check_fixture("substrate/frame/examples/dev-mode/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC013"),
+        "SEC013 should NOT fire on pallet dev_mode storage"
+    );
+}
+
+#[test]
+fn security_rules_skip_mock_harness_paths() {
+    let bad = include_str!("fixtures/bad_sec013.rs");
+    let diags = check_fixture(
+        "substrate/frame/contracts/mock-network/src/mocks/msg_queue.rs",
+        bad,
+    );
+    assert!(
+        !has_rule(&diags, "SEC013"),
+        "production security rules should skip mock harness paths"
+    );
+}
+
 // ==========================================================================
 // SEC014: Identity hasher on common key types
 // ==========================================================================
@@ -1978,6 +2033,69 @@ impl<T: Config> Pallet<T> {
     assert!(
         !has_rule(&diags, "SEC018"),
         "SEC018 should not fire when the Vec length is passed into the weight expression"
+    );
+}
+
+#[test]
+fn sec018_skips_deprecated_dispatchables() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::old_call())]
+    #[deprecated(note = "use call instead")]
+    pub fn old_call(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = data;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report deprecated compatibility dispatchables"
+    );
+}
+
+#[test]
+fn sec018_skips_max_weight_dispatchables() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(Weight::MAX)]
+    pub fn eth_transact(origin: OriginFor<T>, payload: Vec<u8>) -> DispatchResult {
+        let _ = origin;
+        let _ = payload;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report calls already assigned Weight::MAX"
+    );
+}
+
+#[test]
+fn sec018_skips_intentionally_ignored_vec_params() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::heartbeat())]
+    pub fn heartbeat(origin: OriginFor<T>, _remark: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report intentionally ignored Vec parameters"
     );
 }
 
