@@ -935,21 +935,6 @@ fn is_storage_iteration_call_path(path: &syn::Path) -> bool {
         && path_owner_name(path).is_some()
 }
 
-struct ExprMethodVisitor<'a> {
-    names: &'a [&'a str],
-    matches: Vec<(String, Span)>,
-}
-
-impl<'ast> Visit<'ast> for ExprMethodVisitor<'_> {
-    fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
-        let method = node.method.to_string();
-        if self.names.iter().any(|candidate| *candidate == method) {
-            self.matches.push((method, node.span()));
-        }
-        visit::visit_expr_method_call(self, node);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // VAL001: Validation before heavy reads
 // ---------------------------------------------------------------------------
@@ -5555,32 +5540,200 @@ impl LintRule for DispatchBypassFilterInProduction {
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
-        let mut visitor = ExprMethodVisitor {
-            names: &["dispatch_bypass_filter"],
-            matches: Vec::new(),
+
+        fn is_ensure_root_call(expr: &Expr) -> bool {
+            match strip_expr_wrappers(expr) {
+                Expr::Call(expr_call) => expr_call_path(expr_call)
+                    .map(|path| path_has_exact_ident(path, "ensure_root"))
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }
+
+        fn expr_is_root_is_ok(expr: &Expr) -> bool {
+            let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
+                return false;
+            };
+            method_call.method == "is_ok" && is_ensure_root_call(&method_call.receiver)
+        }
+
+        fn expr_mentions_root_flag(expr: &Expr, root_flags: &HashSet<String>) -> bool {
+            struct RootFlagVisitor<'a> {
+                root_flags: &'a HashSet<String>,
+                found: bool,
+            }
+
+            impl<'ast> Visit<'ast> for RootFlagVisitor<'_> {
+                fn visit_expr_path(&mut self, expr_path: &'ast syn::ExprPath) {
+                    if expr_path
+                        .path
+                        .segments
+                        .last()
+                        .is_some_and(|segment| self.root_flags.contains(&segment.ident.to_string()))
+                    {
+                        self.found = true;
+                    }
+                    visit::visit_expr_path(self, expr_path);
+                }
+            }
+
+            let mut visitor = RootFlagVisitor {
+                root_flags,
+                found: false,
+            };
+            visitor.visit_expr(expr);
+            visitor.found
+        }
+
+        fn root_flag_names(block: &syn::Block) -> HashSet<String> {
+            struct RootFlagCollector {
+                names: HashSet<String>,
+            }
+
+            impl<'ast> Visit<'ast> for RootFlagCollector {
+                fn visit_local(&mut self, local: &'ast Local) {
+                    let Pat::Ident(pat_ident) = &local.pat else {
+                        visit::visit_local(self, local);
+                        return;
+                    };
+                    if local
+                        .init
+                        .as_ref()
+                        .is_some_and(|init| expr_is_root_is_ok(&init.expr))
+                    {
+                        self.names.insert(pat_ident.ident.to_string());
+                    }
+                    visit::visit_local(self, local);
+                }
+            }
+
+            let mut collector = RootFlagCollector {
+                names: HashSet::new(),
+            };
+            collector.visit_block(block);
+            collector.names
+        }
+
+        fn strict_root_guard_lines(block: &syn::Block) -> Vec<usize> {
+            struct RootGuardCollector {
+                lines: Vec<usize>,
+            }
+
+            impl<'ast> Visit<'ast> for RootGuardCollector {
+                fn visit_expr_try(&mut self, expr_try: &'ast syn::ExprTry) {
+                    if is_ensure_root_call(&expr_try.expr) {
+                        self.lines.push(span_line(expr_try.span()));
+                    }
+                    visit::visit_expr_try(self, expr_try);
+                }
+            }
+
+            let mut collector = RootGuardCollector { lines: Vec::new() };
+            collector.visit_block(block);
+            collector.lines
+        }
+
+        struct DispatchBypassVisitor<'a> {
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+            mask: &'a [bool],
+            root_flags: HashSet<String>,
+            strict_root_guard_lines: Vec<usize>,
+            root_context_depth: usize,
+        }
+
+        impl DispatchBypassVisitor<'_> {
+            fn has_prior_strict_root_guard(&self, span: Span) -> bool {
+                let line = span_line(span);
+                self.strict_root_guard_lines
+                    .iter()
+                    .any(|guard_line| *guard_line < line)
+            }
+        }
+
+        impl<'ast> Visit<'ast> for DispatchBypassVisitor<'_> {
+            fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
+                let previous_root_flags =
+                    std::mem::replace(&mut self.root_flags, root_flag_names(&item_fn.block));
+                let previous_guard_lines = std::mem::replace(
+                    &mut self.strict_root_guard_lines,
+                    strict_root_guard_lines(&item_fn.block),
+                );
+                visit::visit_item_fn(self, item_fn);
+                self.root_flags = previous_root_flags;
+                self.strict_root_guard_lines = previous_guard_lines;
+            }
+
+            fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
+                let previous_root_flags =
+                    std::mem::replace(&mut self.root_flags, root_flag_names(&item_fn.block));
+                let previous_guard_lines = std::mem::replace(
+                    &mut self.strict_root_guard_lines,
+                    strict_root_guard_lines(&item_fn.block),
+                );
+                visit::visit_impl_item_fn(self, item_fn);
+                self.root_flags = previous_root_flags;
+                self.strict_root_guard_lines = previous_guard_lines;
+            }
+
+            fn visit_expr_if(&mut self, expr_if: &'ast ExprIf) {
+                visit::visit_expr(self, &expr_if.cond);
+                if expr_mentions_root_flag(&expr_if.cond, &self.root_flags)
+                    || expr_is_root_is_ok(&expr_if.cond)
+                {
+                    self.root_context_depth += 1;
+                    self.visit_block(&expr_if.then_branch);
+                    self.root_context_depth -= 1;
+                } else {
+                    self.visit_block(&expr_if.then_branch);
+                }
+                if let Some((_, else_branch)) = &expr_if.else_branch {
+                    self.visit_expr(else_branch);
+                }
+            }
+
+            fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+                if node.method == "dispatch_bypass_filter"
+                    && !is_masked_span(self.mask, node.span())
+                    && self.root_context_depth == 0
+                    && !self.has_prior_strict_root_guard(node.span())
+                {
+                    self.diagnostics.push(Diagnostic {
+						rule_id: self.rule_id.to_string(),
+						rule_name: self.rule_name.to_string(),
+						category: RuleCategory::Semantic,
+						severity: self.severity,
+						file: self.file.to_path_buf(),
+						line: span_line(node.span()),
+						column: Some(span_column(node.span())),
+						end_line: None,
+						message: "`dispatch_bypass_filter` is used in production code".to_string(),
+						explanation: "Bypassing dispatch filters sidesteps normal call filtering and \
+                            can accidentally enable privileged or unsafe execution paths."
+							.to_string(),
+						suggestion: Some("Use normal `dispatch`/`dispatch_as` flow unless bypassing filters is explicitly justified and reviewed".to_string()),
+					});
+                }
+                visit::visit_expr_method_call(self, node);
+            }
+        }
+
+        let mut visitor = DispatchBypassVisitor {
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+            mask: &test_mask,
+            root_flags: HashSet::new(),
+            strict_root_guard_lines: Vec::new(),
+            root_context_depth: 0,
         };
         visitor.visit_file(ast);
-
-        let diagnostics = visitor
-			.matches
-			.into_iter()
-			.filter(|(_, span)| !is_masked_span(&test_mask, *span))
-			.map(|(_, span)| Diagnostic {
-				rule_id: self.id().to_string(),
-				rule_name: self.name().to_string(),
-				category: RuleCategory::Semantic,
-				severity: config.rule_severity(self.id(), Severity::Warning),
-				file: ctx.path.clone(),
-				line: span_line(span),
-				column: Some(span_column(span)),
-				end_line: None,
-				message: "`dispatch_bypass_filter` is used in production code".to_string(),
-				explanation: "Bypassing dispatch filters sidesteps normal call filtering and \
-                    can accidentally enable privileged or unsafe execution paths."
-					.to_string(),
-				suggestion: Some("Use normal `dispatch`/`dispatch_as` flow unless bypassing filters is explicitly justified and reviewed".to_string()),
-			})
-			.collect::<Vec<_>>();
+        let diagnostics = visitor.diagnostics;
 
         if diagnostics.is_empty() {
             None
