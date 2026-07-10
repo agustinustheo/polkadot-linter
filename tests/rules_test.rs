@@ -2521,6 +2521,24 @@ impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     );
 }
 
+#[test]
+fn sec010_allows_deterministic_multi_write_hooks() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+        ProcessedCount::<T>::put(1);
+        PendingItems::<T>::kill();
+        Weight::zero()
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC010"),
+        "SEC010 should not require transactional storage for infallible maintenance writes"
+    );
+}
+
 // ==========================================================================
 // SEC011: Storage iteration in dispatchables/hooks
 // ==========================================================================

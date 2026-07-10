@@ -576,6 +576,35 @@ fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
     visitor.found
 }
 
+fn expr_contains_named(expr: &Expr, names: &[&str]) -> bool {
+    struct ExprNameVisitor<'a> {
+        names: &'a [&'a str],
+        found: bool,
+    }
+
+    impl<'ast> Visit<'ast> for ExprNameVisitor<'_> {
+        fn visit_expr_path(&mut self, expr_path: &'ast syn::ExprPath) {
+            if expr_path
+                .path
+                .segments
+                .last()
+                .map(|segment| self.names.iter().any(|name| segment.ident == *name))
+                .unwrap_or(false)
+            {
+                self.found = true;
+            }
+            visit::visit_expr_path(self, expr_path);
+        }
+    }
+
+    let mut visitor = ExprNameVisitor {
+        names,
+        found: false,
+    };
+    visitor.visit_expr(expr);
+    visitor.found
+}
+
 fn type_contains_unbounded_storage_collection(ty: &Type) -> bool {
     const UNBOUNDED_COLLECTIONS: &[&str] = &["Vec", "BTreeMap", "BTreeSet"];
     const BOUNDED_COLLECTIONS: &[&str] = &[
@@ -4156,9 +4185,26 @@ impl LintRule for MissingTransactionalInHook {
         struct HookStorageVisitor {
             write_count: usize,
             has_transactional: bool,
+            has_fallible_path: bool,
         }
 
         impl<'ast> Visit<'ast> for HookStorageVisitor {
+            fn visit_expr_try(&mut self, expr_try: &'ast syn::ExprTry) {
+                self.has_fallible_path = true;
+                visit::visit_expr_try(self, expr_try);
+            }
+
+            fn visit_expr_return(&mut self, expr_return: &'ast syn::ExprReturn) {
+                if expr_return
+                    .expr
+                    .as_ref()
+                    .is_some_and(|expr| expr_contains_named(expr, &["Err"]))
+                {
+                    self.has_fallible_path = true;
+                }
+                visit::visit_expr_return(self, expr_return);
+            }
+
             fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
                 if let Some(path) = expr_call_path(expr_call) {
                     if matches!(
@@ -4172,6 +4218,13 @@ impl LintRule for MissingTransactionalInHook {
                     }
                 }
                 visit::visit_expr_call(self, expr_call);
+            }
+
+            fn visit_macro(&mut self, mac: &'ast Macro) {
+                if macro_name(mac).as_deref() == Some("ensure") {
+                    self.has_fallible_path = true;
+                }
+                visit::visit_macro(self, mac);
             }
         }
 
@@ -4203,9 +4256,13 @@ impl LintRule for MissingTransactionalInHook {
                 let mut visitor = HookStorageVisitor {
                     write_count: 0,
                     has_transactional: has_attr(&item_fn.attrs, &["transactional"]),
+                    has_fallible_path: false,
                 };
                 visitor.visit_block(&item_fn.block);
-                if visitor.write_count >= 2 && !visitor.has_transactional {
+                if visitor.write_count >= 2
+                    && visitor.has_fallible_path
+                    && !visitor.has_transactional
+                {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
 						rule_name: self.rule_name.to_string(),
