@@ -3754,7 +3754,6 @@ impl LintRule for LetUnderscoreResult {
         let test_mask = cfg_test_module_mask(ctx.content);
         let result_hints = [
             "::reserve(",
-            "::unreserve(",
             "::transfer(",
             "::withdraw(",
             "::deposit(",
@@ -3768,6 +3767,44 @@ impl LintRule for LetUnderscoreResult {
             ".map_err(",
         ];
 
+        let lines: Vec<&str> = ctx.content.lines().collect();
+
+        fn comment_marks_intentional_result_discard(comment: &str) -> bool {
+            let lower = comment.to_ascii_lowercase();
+            lower.contains("ignore errors")
+                || lower.contains("ignore the error")
+                || lower.contains("ignored error")
+                || lower.contains("intentionally ignore")
+                || lower.contains("intentionally discard")
+                || lower.contains("can only fail")
+                || lower.contains("cannot fail")
+                || lower.contains("can't fail")
+                || (lower.contains("best effort")
+                    && (lower.contains("error")
+                        || lower.contains("result")
+                        || lower.contains("fail")))
+        }
+
+        fn nearby_comment_marks_intentional_result_discard(lines: &[&str], line: usize) -> bool {
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(3);
+            lines[start..current_idx.min(lines.len())]
+                .iter()
+                .any(|source_line| {
+                    source_line.split_once("//").is_some_and(|(_, comment)| {
+                        comment_marks_intentional_result_discard(comment)
+                    })
+                })
+        }
+
+        fn map_err_has_explicit_side_effect(rhs: &str) -> bool {
+            let lower = rhs.to_ascii_lowercase();
+            lower.contains(".map_err(")
+                && (lower.contains("log!(")
+                    || lower.contains("tracing::")
+                    || lower.contains("failures+="))
+        }
+
         struct LetUnderscoreVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -3775,6 +3812,7 @@ impl LintRule for LetUnderscoreResult {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            lines: &'a [&'a str],
             result_hints: &'a [&'a str],
         }
 
@@ -3799,14 +3837,18 @@ impl LintRule for LetUnderscoreResult {
                     .chars()
                     .filter(|c| !c.is_whitespace())
                     .collect();
-                if self.result_hints.iter().any(|hint| rhs.contains(hint)) {
+                let line = span_line(local.span());
+                if self.result_hints.iter().any(|hint| rhs.contains(hint))
+                    && !nearby_comment_marks_intentional_result_discard(self.lines, line)
+                    && !map_err_has_explicit_side_effect(&rhs)
+                {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
 						rule_name: self.rule_name.to_string(),
 						category: RuleCategory::Semantic,
 						severity: self.severity,
 						file: self.file.to_path_buf(),
-						line: span_line(local.span()),
+						line,
 						column: Some(span_column(local.span())),
 						end_line: None,
 						message: "`let _ =` discards a likely Result — error silently swallowed"
@@ -3832,6 +3874,7 @@ impl LintRule for LetUnderscoreResult {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            lines: &lines,
             result_hints: &result_hints,
         };
         visitor.visit_file(ast);
