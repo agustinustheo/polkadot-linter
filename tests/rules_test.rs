@@ -1941,6 +1941,23 @@ pub fn timeout(now: u32, since: u32, timeout: u32) -> DispatchResultWithPostInfo
 }
 
 #[test]
+fn sec009_reports_once_per_source_line() {
+    let code = r#"
+pub fn calculate(first: u32, second: u32, third: u32) -> Result<u32, Error> {
+    let nested = (first + second) * third;
+    let separate = first + second;
+    Ok(nested + separate)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 3,
+        "SEC009 should report one finding per affected source line"
+    );
+}
+
+#[test]
 fn sec009_ignores_ensure_without_arithmetic() {
     let code = r#"
 pub fn validate<T>(first_alias: &u32, value: u32) -> DispatchResultWithPostInfo {

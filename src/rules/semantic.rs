@@ -3607,6 +3607,11 @@ impl LintRule for RawArithmeticInFallible {
         };
         visitor.visit_file(ast);
 
+        let mut seen_lines = std::collections::BTreeSet::new();
+        visitor
+            .diagnostics
+            .retain(|diag| seen_lines.insert(diag.line));
+
         if visitor.diagnostics.is_empty() {
             None
         } else {
