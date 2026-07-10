@@ -3476,6 +3476,42 @@ pub type HashAndIndex<T: Config> =
     );
 }
 
+#[test]
+fn sec014_allows_documented_internal_numeric_layout_keys() {
+    let code = r#"
+/// Ring buffer containing imported block numbers, ordered by insertion time.
+#[pallet::storage]
+pub type ImportedBlockNumbers<T: Config> = StorageMap<_, Identity, u32, T::BlockNumber>;
+
+/// Mapping an asset index derived from the precompile address to an asset id.
+#[pallet::storage]
+pub type AssetIndexToAssetId<T: Config> = StorageMap<_, Identity, u32, T::AssetId>;
+
+/// Next epoch unsorted ticket segments.
+#[pallet::storage]
+pub type UnsortedSegments<T: Config> =
+    StorageMap<_, Identity, u32, BoundedVec<T::TicketId, T::MaxSegments>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC014"),
+        "SEC014 should allow documented numeric identity keys used as internal indexes"
+    );
+}
+
+#[test]
+fn sec014_still_reports_undocumented_numeric_identity_keys() {
+    let code = r#"
+#[pallet::storage]
+pub type UserScores<T: Config> = StorageMap<_, Identity, u32, BalanceOf<T>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC014"),
+        "SEC014 should still report generic numeric identity keys without internal-layout docs"
+    );
+}
+
 // ==========================================================================
 // SEC015: dispatch_bypass_filter in production
 // ==========================================================================
