@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POLKADOT_SDK_COMMIT: b18fb34a8ae348df5866e4b718d82871d744e60d
-      MAX_SEC_BENCHMARK_FINDINGS: "38"
+      MAX_SEC_BENCHMARK_FINDINGS: "13"
     steps:
       - name: Checkout repository and SDK submodule
         uses: actions/checkout@v4
@@ -62,6 +62,11 @@ jobs:
           count="$(jq 'length' "$latest")"
           echo "SEC benchmark findings: $count"
           test "$count" -le "$MAX_SEC_BENCHMARK_FINDINGS"
+
+      - name: Check SEC benchmark validated baseline
+        run: |
+          latest="$(ls -t .benchmarks/sec-rules-*.json | head -n1)"
+          scripts/check-sec-benchmark-baseline.sh "$latest"
 
       - name: Upload SEC benchmark output
         uses: actions/upload-artifact@v4

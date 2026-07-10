@@ -1836,6 +1836,32 @@ fn security_rules_skip_mock_harness_paths() {
     );
 }
 
+#[test]
+fn security_rules_skip_sdk_test_support_pallets() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(0)]
+    pub fn helper(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        ensure_root(origin)?;
+        let _ = data;
+        Ok(())
+    }
+}
+"#;
+    for path in [
+        "substrate/frame/root-offences/src/lib.rs",
+        "cumulus/parachains/pallets/ping/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, code);
+        assert!(
+            !has_rule(&diags, "SEC018"),
+            "production security rules should skip SDK test-support pallet path {path}"
+        );
+    }
+}
+
 // ==========================================================================
 // SEC014: Identity hasher on common key types
 // ==========================================================================
@@ -2080,6 +2106,27 @@ impl<T: Config> Pallet<T> {
 }
 
 #[test]
+fn sec018_skips_dispatchables_that_consume_max_block_post_dispatch() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight((T::SystemWeightInfo::set_code(), DispatchClass::Operational))]
+    pub fn set_code(origin: OriginFor<T>, code: Vec<u8>) -> DispatchResultWithPostInfo {
+        ensure_root(origin)?;
+        T::OnSetCode::set_code(code)?;
+        Ok(Some(T::BlockWeights::get().max_block).into())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/system/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report calls that intentionally consume max-block post-dispatch weight"
+    );
+}
+
+#[test]
 fn sec018_skips_intentionally_ignored_vec_params() {
     let code = r#"
 #[pallet::call]
@@ -2096,6 +2143,170 @@ impl<T: Config> Pallet<T> {
     assert!(
         !has_rule(&diags, "SEC018"),
         "SEC018 should not report intentionally ignored Vec parameters"
+    );
+}
+
+#[test]
+fn sec018_skips_vec_params_with_explicit_body_length_bound() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::add_memo())]
+    pub fn add_memo(origin: OriginFor<T>, memo: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        ensure!(memo.len() <= T::MaxMemoLength::get() as usize, Error::<T>::TooLarge);
+        Memo::<T>::set(memo);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report Vec inputs with explicit accepted-path length bounds"
+    );
+}
+
+#[test]
+fn sec018_skips_vec_params_converted_to_bounded_types() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::set_items())]
+    pub fn set_items(origin: OriginFor<T>, items: Vec<T::AccountId>) -> DispatchResult {
+        T::AdminOrigin::ensure_origin(origin)?;
+        let bounded = BoundedVec::<_, T::MaxItems>::try_from(items)
+            .map_err(|_| Error::<T>::TooManyItems)?;
+        Items::<T>::set(bounded);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report Vec inputs converted into bounded types"
+    );
+}
+
+#[test]
+fn sec018_skips_vec_params_passed_to_bound_helpers() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::set_groups())]
+    pub fn set_groups(origin: OriginFor<T>, groups: Vec<GroupOf<T>>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        let groups = Self::bound_groups(&who, groups)?;
+        Groups::<T>::set(&who, groups);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report Vec inputs passed through bound_* helpers"
+    );
+}
+
+#[test]
+fn sec018_skips_signature_params_verified_by_fixed_size_helpers() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::create_account())]
+    pub fn create_account(
+        origin: OriginFor<T>,
+        who: T::AccountId,
+        signature: Vec<u8>,
+    ) -> DispatchResult {
+        T::ValidityOrigin::ensure_origin(origin)?;
+        Self::verify_signature(&who, &signature)?;
+        Signatures::<T>::insert(&who, signature);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/purchase/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report signature Vec inputs passed through fixed-size verification helpers"
+    );
+}
+
+#[test]
+fn sec018_skips_vec_params_compared_to_static_statement_text() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::attest())]
+    pub fn attest(origin: OriginFor<T>, statement: Vec<u8>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        if let Some(s) = Signing::<T>::get(&who) {
+            ensure!(s.to_text() == &statement[..], Error::<T>::InvalidStatement);
+        }
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/claims/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report statement inputs compared to static StatementKind text"
+    );
+}
+
+#[test]
+fn sec018_skips_vec_params_decoded_into_concrete_key_types() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::set_keys())]
+    pub fn set_keys(origin: OriginFor<T>, keys: Vec<u8>) -> DispatchResult {
+        let stash = ensure_signed(origin)?;
+        let session_keys = T::RelayChainSessionKeys::decode(&mut &keys[..])
+            .map_err(|_| Error::<T>::InvalidKeys)?;
+        T::SessionInterface::set_keys(&stash, session_keys)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/session/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report key bytes decoded into concrete session key types"
+    );
+}
+
+#[test]
+fn sec018_skips_opaque_keys_ownership_proofs() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::set_keys())]
+    pub fn set_keys(origin: OriginFor<T>, keys: T::Keys, proof: Vec<u8>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        ensure!(
+            who.using_encoded(|who| keys.ownership_proof_is_valid(who, &proof)),
+            Error::<T>::InvalidProof,
+        );
+        Self::do_set_keys(&who, keys)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/session/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC018"),
+        "SEC018 should not report OpaqueKeys proof tuples validated via ownership_proof_is_valid"
     );
 }
 

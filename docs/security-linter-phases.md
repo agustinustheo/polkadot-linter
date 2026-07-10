@@ -78,8 +78,16 @@ Current pinned-corpus policy:
   `b18fb34a8ae348df5866e4b718d82871d744e60d`
 - CI checks out the submodule, verifies that exact commit, runs this benchmark,
   and fails if the SEC finding count rises above the curated ceiling
+- CI also compares the raw benchmark output against
+  `benchmarks/polkadot-sdk-sec018-baseline.tsv`, so a different finding set
+  fails even if the count stays unchanged
 - `SEC012` and `SEC013` remain implemented and unit-tested, but are disabled in
   the project config because the SDK benchmark report showed they are still too
   noisy for default audit output
 - the default SEC benchmark is currently focused on `SEC018`, with obvious
   non-findings filtered out before diagnostics are emitted
+- `SEC018` recognizes narrow accepted-path validators such as fixed-size
+  signature verification, static statement equality, session-key decoding, and
+  `OpaqueKeys::ownership_proof_is_valid` proof tuple validation
+- production security rules skip SDK packages that are explicitly documented as
+  test-support pallets, including `pallet-root-offences` and `cumulus-ping`

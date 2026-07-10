@@ -18,6 +18,7 @@ pub enum DispatchableOrigin {
 pub struct DispatchableParam {
     pub name: String,
     pub is_unbounded_vec: bool,
+    pub is_bounded_in_body: bool,
 }
 
 #[derive(Clone)]
@@ -27,6 +28,7 @@ pub struct Dispatchable {
     pub origin: DispatchableOrigin,
     pub params: Vec<DispatchableParam>,
     pub is_deprecated: bool,
+    pub consumes_max_block: bool,
     weight_expr: Option<Expr>,
 }
 
@@ -102,7 +104,7 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                     .sig
                     .inputs
                     .iter()
-                    .filter_map(dispatchable_param)
+                    .filter_map(|arg| dispatchable_param(arg, &method.block))
                     .collect::<Vec<_>>();
 
                 self.dispatchables.push(Dispatchable {
@@ -111,6 +113,7 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                     origin: detect_origin(&method.block),
                     params,
                     is_deprecated: has_attr_ending_with(&method.attrs, "deprecated"),
+                    consumes_max_block: body_consumes_max_block(&method.block),
                     weight_expr: method
                         .attrs
                         .iter()
@@ -131,16 +134,50 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
     visitor.dispatchables
 }
 
-fn dispatchable_param(arg: &FnArg) -> Option<DispatchableParam> {
+fn dispatchable_param(arg: &FnArg, block: &syn::Block) -> Option<DispatchableParam> {
     let FnArg::Typed(pat_type) = arg else {
         return None;
     };
 
+    let name = pat_ident_name(&pat_type.pat)?;
     Some(DispatchableParam {
-        name: pat_ident_name(&pat_type.pat)?,
+        is_bounded_in_body: body_bounds_param(block, &name),
+        name,
         is_unbounded_vec: type_contains_named(&pat_type.ty, &["Vec"])
             && !type_contains_named(&pat_type.ty, &["BoundedVec", "WeakBoundedVec"]),
     })
+}
+
+fn body_bounds_param(block: &syn::Block, param_name: &str) -> bool {
+    let tokens = compact_tokens(block);
+    let len_call = format!("{param_name}.len()");
+    let reference = format!("&{param_name}");
+
+    tokens.contains(&format!("{len_call}<"))
+        || tokens.contains(&format!("{len_call}<="))
+        || tokens.contains(&format!("({len_call}asu32)<"))
+        || tokens.contains(&format!("({len_call}asu32)<="))
+        || tokens.contains(&format!("({len_call}asusize)<"))
+        || tokens.contains(&format!("({len_call}asusize)<="))
+        || tokens.contains(&format!("try_from({param_name})"))
+        || tokens.contains(&format!("try_from(&{param_name})"))
+        || tokens.contains(&format!("{param_name}.try_into()"))
+        || tokens.contains(&format!("decode(&mut&{param_name}[..]"))
+        || (param_name.contains("signature")
+            && tokens.contains("verify_")
+            && tokens.contains(&reference))
+        || (tokens.contains("to_text()")
+            && (tokens.contains(&format!("==&{param_name}[..]"))
+                || tokens.contains(&format!("&{param_name}[..]=="))))
+        || (tokens.contains("ownership_proof_is_valid") && tokens.contains(&reference))
+        || (tokens.contains("bound_") && tokens.contains(param_name))
+        || (tokens.contains("validate_") && tokens.contains(&reference))
+}
+
+fn body_consumes_max_block(block: &syn::Block) -> bool {
+    let tokens = compact_tokens(block);
+    tokens.contains("Some(T::BlockWeights::get().max_block)")
+        || tokens.contains("Some(<T as frame_system::Config>::BlockWeights::get().max_block)")
 }
 
 fn detect_origin(block: &syn::Block) -> DispatchableOrigin {
