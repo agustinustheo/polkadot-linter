@@ -259,6 +259,7 @@ fn is_module_declaration(trimmed: &str) -> bool {
 
 fn is_block_start(trimmed: &str) -> bool {
     is_module_declaration(trimmed)
+        || trimmed.starts_with('{')
         || trimmed.starts_with("impl ")
         || trimmed.starts_with("impl<")
         || trimmed.starts_with("pub impl ")
@@ -316,8 +317,11 @@ where
             next_item_is_masked = true;
         }
 
-        // Skip other attributes between the cfg and the target item.
-        if next_item_is_masked && trimmed.starts_with("#[") && !is_masking_attr(trimmed) {
+        // Skip other attributes and comments between the cfg and the target item.
+        if next_item_is_masked
+            && (trimmed.starts_with("#[") || trimmed.starts_with("//"))
+            && !is_masking_attr(trimmed)
+        {
             // keep waiting
         }
 
@@ -330,7 +334,11 @@ where
             masked_depth = Some(brace_depth);
             mask_block_entered = false;
             next_item_is_masked = false;
-        } else if next_item_is_masked && !trimmed.is_empty() && !trimmed.starts_with("#[") {
+        } else if next_item_is_masked
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("#[")
+            && !trimmed.starts_with("//")
+        {
             mask[i] = true;
             next_item_is_masked = false;
         }
@@ -573,6 +581,81 @@ fn unwrap_receiver_is_nonzero_literal_new(expr_method_call: &ExprMethodCall) -> 
     };
 
     integer_literal_is_nonzero(lit_int)
+}
+
+fn expr_usize_literal_value(expr: &Expr) -> Option<usize> {
+    let Expr::Lit(expr_lit) = strip_expr_wrappers(expr) else {
+        return None;
+    };
+    let Lit::Int(lit_int) = &expr_lit.lit else {
+        return None;
+    };
+    lit_int.base10_parse::<usize>().ok()
+}
+
+fn additive_range_delta_from_start(expr: &Expr, start_key: &str) -> Option<usize> {
+    let Expr::Binary(expr_binary) = strip_expr_wrappers(expr) else {
+        return None;
+    };
+    if !matches!(expr_binary.op, syn::BinOp::Add(_)) {
+        return None;
+    }
+
+    let left_key = compact_tokens(&expr_binary.left);
+    let right_key = compact_tokens(&expr_binary.right);
+    if left_key == start_key {
+        expr_usize_literal_value(&expr_binary.right)
+    } else if right_key == start_key {
+        expr_usize_literal_value(&expr_binary.left)
+    } else {
+        None
+    }
+}
+
+fn half_open_range_has_static_len(expr_range: &syn::ExprRange) -> bool {
+    if !matches!(expr_range.limits, syn::RangeLimits::HalfOpen(_)) {
+        return false;
+    }
+
+    match (&expr_range.start, &expr_range.end) {
+        (None, Some(end)) => expr_usize_literal_value(end).is_some(),
+        (Some(start), Some(end)) => {
+            if let (Some(start_value), Some(end_value)) = (
+                expr_usize_literal_value(start),
+                expr_usize_literal_value(end),
+            ) {
+                return end_value >= start_value;
+            }
+
+            let start_key = compact_tokens(start);
+            additive_range_delta_from_start(end, &start_key).is_some()
+        }
+        _ => false,
+    }
+}
+
+fn panic_receiver_is_fixed_range_try_into(expr_method_call: &ExprMethodCall) -> bool {
+    if !matches!(
+        expr_method_call.method.to_string().as_str(),
+        "unwrap" | "expect"
+    ) {
+        return false;
+    }
+
+    let Expr::MethodCall(try_into_call) = strip_expr_wrappers(&expr_method_call.receiver) else {
+        return false;
+    };
+    if try_into_call.method != "try_into" || !try_into_call.args.is_empty() {
+        return false;
+    }
+
+    let Expr::Index(expr_index) = strip_expr_wrappers(&try_into_call.receiver) else {
+        return false;
+    };
+    let Expr::Range(expr_range) = strip_expr_wrappers(&expr_index.index) else {
+        return false;
+    };
+    half_open_range_has_static_len(expr_range)
 }
 
 fn expr_integer_literal_value(expr: &Expr) -> Option<u128> {
@@ -2886,6 +2969,31 @@ impl LintRule for DebugAssertInProduction {
                 })
         }
 
+        fn debug_assert_has_extended_invariant_comment(
+            mac: &Macro,
+            lines: &[&str],
+            line: usize,
+        ) -> bool {
+            let compact_tokens = mac
+                .tokens
+                .to_string()
+                .split_whitespace()
+                .collect::<String>();
+            if compact_tokens != "false" && !compact_tokens.contains(".is_ok()") {
+                return false;
+            }
+
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(8);
+            lines[start..current_idx.min(lines.len())]
+                .iter()
+                .any(|source_line| {
+                    source_line
+                        .split_once("//")
+                        .is_some_and(|(_, comment)| comment_marks_proven_invariant(comment))
+                })
+        }
+
         fn debug_assert_checks_defensive_result(mac: &Macro, lines: &[&str], line: usize) -> bool {
             let current_idx = line.saturating_sub(1);
             let start = current_idx.saturating_sub(10);
@@ -2974,6 +3082,11 @@ impl LintRule for DebugAssertInProduction {
                 ) && !is_masked_span(self.mask, mac.span())
                     && !debug_assert_message_marks_proven_invariant(mac)
                     && !nearby_comment_marks_proven_invariant(self.lines, span_line(mac.span()))
+                    && !debug_assert_has_extended_invariant_comment(
+                        mac,
+                        self.lines,
+                        span_line(mac.span()),
+                    )
                     && !debug_assert_checks_defensive_result(mac, self.lines, span_line(mac.span()))
                     && !debug_assert_checks_balance_remainder(
                         mac,
@@ -3871,6 +3984,7 @@ impl LintRule for PanicInProduction {
             uninhabited_enums: &'a HashSet<String>,
             const_int_values: &'a HashMap<String, u128>,
             uninhabited_impl_depth: usize,
+            test_default_impl_depth: usize,
         }
 
         impl PanicVisitor<'_> {
@@ -3906,11 +4020,20 @@ impl LintRule for PanicInProduction {
                 if is_uninhabited_impl {
                     self.uninhabited_impl_depth += 1;
                 }
+                let is_test_default_impl = type_last_ident(&item_impl.self_ty)
+                    .as_deref()
+                    .is_some_and(|ident| ident == "TestDefaultConfig");
+                if is_test_default_impl {
+                    self.test_default_impl_depth += 1;
+                }
 
                 visit::visit_item_impl(self, item_impl);
 
                 if is_uninhabited_impl {
                     self.uninhabited_impl_depth -= 1;
+                }
+                if is_test_default_impl {
+                    self.test_default_impl_depth -= 1;
                 }
             }
 
@@ -3919,9 +4042,14 @@ impl LintRule for PanicInProduction {
                     visit::visit_expr_method_call(self, expr_method_call);
                     return;
                 }
+                if self.test_default_impl_depth > 0 {
+                    visit::visit_expr_method_call(self, expr_method_call);
+                    return;
+                }
                 match expr_method_call.method.to_string().as_str() {
                     "unwrap"
                         if !unwrap_receiver_is_nonzero_literal_new(expr_method_call)
+                            && !panic_receiver_is_fixed_range_try_into(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -3935,6 +4063,7 @@ impl LintRule for PanicInProduction {
                     }
                     "expect"
                         if !expect_message_marks_proven_invariant(expr_method_call)
+                            && !panic_receiver_is_fixed_range_try_into(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -3953,6 +4082,10 @@ impl LintRule for PanicInProduction {
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
                 if is_masked_span(self.mask, mac.span()) {
+                    visit::visit_macro(self, mac);
+                    return;
+                }
+                if self.test_default_impl_depth > 0 {
                     visit::visit_macro(self, mac);
                     return;
                 }
@@ -3999,6 +4132,7 @@ impl LintRule for PanicInProduction {
             uninhabited_enums: &uninhabited_enums,
             const_int_values: &const_int_values,
             uninhabited_impl_depth: 0,
+            test_default_impl_depth: 0,
         };
         visitor.visit_file(ast);
 
