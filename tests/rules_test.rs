@@ -1635,6 +1635,120 @@ pub fn benchmark_setup() {
 }
 
 #[test]
+fn sec008_skips_runtime_benchmark_cfg_multiline_signatures() {
+    let code = r#"
+#[cfg(feature = "runtime-benchmarks")]
+pub fn benchmark_setup(
+) {
+    let account = MaybeAccount::get().expect("benchmark account exists");
+    let _ = account;
+}
+
+pub fn prod() {
+    let value = Some(1u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip multiline runtime-benchmark items without masking following production code"
+    );
+}
+
+#[test]
+fn sec008_skips_try_runtime_cfg_blocks() {
+    let code = r#"
+#[cfg(feature = "try-runtime")]
+pub fn pre_upgrade(
+) {
+    let state = Some(1u32).unwrap();
+    let _ = state;
+}
+
+#[cfg(any(feature = "try-runtime", test))]
+pub fn try_state() {
+    panic!("try-runtime check failed");
+}
+
+pub fn prod() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip try-runtime-only items without masking following production code"
+    );
+}
+
+#[test]
+fn sec008_skips_inline_test_functions() {
+    let code = r#"
+#[test]
+fn unit_test() {
+    let value = Some(1u32).unwrap();
+    let _ = value;
+}
+
+#[tokio::test]
+async fn async_unit_test() {
+    panic!("test failure");
+}
+
+pub fn prod() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip inline test functions without masking production code"
+    );
+}
+
+#[test]
+fn sec008_skips_nested_cfg_test_items_without_unmasking_module() {
+    let code = r#"
+#[cfg(test)]
+mod tests {
+    fn helper() {
+        let value = Some(1u32).unwrap();
+        let _ = value;
+    }
+
+    #[cfg(test)]
+    fn nested_helper(
+    ) {
+        let value = Some(2u32).unwrap();
+        let _ = value;
+    }
+
+    fn later_helper() {
+        let value = Some(3u32).unwrap();
+        let _ = value;
+    }
+}
+
+pub fn prod() {
+    let value = Some(4u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should keep cfg(test) modules masked after nested cfg(test) multiline items"
+    );
+}
+
+#[test]
 fn sec008_skips_sdk_support_benchmark_fixture_paths() {
     let bad = include_str!("fixtures/bad_sec008.rs");
     for path in [
@@ -1644,6 +1758,11 @@ fn sec008_skips_sdk_support_benchmark_fixture_paths() {
         "substrate/client/foo/src/test_utils.rs",
         "substrate/bin/node/bench/src/construct.rs",
         "substrate/bin/node/testing/src/bench.rs",
+        "substrate/frame/contracts/mock-network/src/lib.rs",
+        "substrate/frame/bags-list/remote-tests/src/lib.rs",
+        "cumulus/pallets/session-benchmarking/src/inner.rs",
+        "substrate/frame/election-provider-multi-phase/test-staking-e2e/src/lib.rs",
+        "substrate/frame/election-provider-multi-phase/src/remote_mining.rs",
         "bridges/snowbridge/runtime/test-common/src/lib.rs",
         "substrate/frame/revive/rpc/build.rs",
     ] {
@@ -1738,6 +1857,33 @@ pub fn docs() {
     assert!(
         !has_rule(&diags, "SEC008"),
         "SEC008 should ignore panic-capable patterns that only appear inside string literals"
+    );
+}
+
+#[test]
+fn sec008_skips_qed_expect_messages_but_reports_other_expects() {
+    let code = r#"
+pub fn proven_invariant() {
+    let value = Some(1u32).expect("checked immediately above; qed");
+    let _ = value;
+}
+
+pub fn proven_invariant_with_variable() {
+    let qed = "slice was checked before conversion; qed";
+    let value = Some(2u32).expect(qed);
+    let _ = value;
+}
+
+pub fn fallible_input() {
+    let value = Some(3u32).expect("external input must be valid");
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip qed-marked expect invariants while reporting normal expects"
     );
 }
 
