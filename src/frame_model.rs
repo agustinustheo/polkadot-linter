@@ -191,13 +191,25 @@ fn detect_origin(block: &syn::Block) -> DispatchableOrigin {
             if let Some(path) = expr_call_path(node) {
                 match path_last_ident(path).as_deref() {
                     Some("ensure_signed") => self.has_signed_guard = true,
-                    Some("ensure_root" | "ensure_none" | "ensure_origin") => {
+                    Some(
+                        "ensure_root" | "ensure_none" | "ensure_origin" | "ensure_origin_or_root",
+                    ) => {
                         self.has_privileged_guard = true;
                     }
                     _ => {}
                 }
             }
             visit::visit_expr_call(self, node);
+        }
+
+        fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+            if matches!(
+                node.method.to_string().as_str(),
+                "ensure_origin" | "ensure_origin_or_root"
+            ) {
+                self.has_privileged_guard = true;
+            }
+            visit::visit_expr_method_call(self, node);
         }
     }
 

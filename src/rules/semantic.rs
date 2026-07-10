@@ -2448,7 +2448,11 @@ impl LintRule for UnboundedVecInExtrinsic {
             .into_iter()
             .filter(|dispatchable| dispatchable.origin != DispatchableOrigin::Privileged)
             .filter(|dispatchable| !dispatchable.is_deprecated && !dispatchable.has_max_weight())
-            .filter(|dispatchable| dispatchable.unbounded_vec_params().next().is_some())
+            .filter(|dispatchable| {
+                dispatchable
+                    .unbounded_vec_params()
+                    .any(|param| !param.is_bounded_in_body)
+            })
             .map(|dispatchable| Diagnostic {
                 rule_id: self.id().to_string(),
                 rule_name: self.name().to_string(),
