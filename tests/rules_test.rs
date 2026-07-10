@@ -1628,10 +1628,54 @@ fn sec007_allows_propagated_errors() {
 }
 
 #[test]
+fn sec007_allows_let_underscore_when_error_is_propagated() {
+    let code = r#"
+pub fn process_member(who: &T::AccountId) -> DispatchResult {
+    let _ = T::Currency::transfer(who, &pot, amount, Preservation::Expendable)?;
+    let _ = Self::ensure_score_quality(claimed_score).map_err(|error| Error::<T>::BadScore(error))?;
+    let _ = T::Currency::reserve(who, deposit);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec007_count = diags.iter().filter(|d| d.rule_id == "SEC007").count();
+    assert_eq!(
+        sec007_count, 1,
+        "SEC007 should skip top-level ? expressions while reporting truly discarded Results"
+    );
+}
+
+#[test]
 fn sec007_skips_test_files() {
     let bad = include_str!("fixtures/bad_sec007.rs");
     let diags = check_fixture("pallets/foo/src/tests.rs", bad);
     assert!(!has_rule(&diags, "SEC007"), "SEC007 should skip test files");
+}
+
+#[test]
+fn sec007_is_scoped_to_runtime_and_pallet_paths() {
+    let bad = include_str!("fixtures/bad_sec007.rs");
+
+    let client_diags = check_fixture("substrate/client/service/src/client/client.rs", bad);
+    assert!(
+        !has_rule(&client_diags, "SEC007"),
+        "SEC007 should skip non-runtime client infrastructure"
+    );
+
+    let support_diags = check_fixture(
+        "substrate/frame/support/src/traits/tokens/imbalance/on_unbalanced.rs",
+        bad,
+    );
+    assert!(
+        !has_rule(&support_diags, "SEC007"),
+        "SEC007 should skip FRAME support infrastructure"
+    );
+
+    let pallet_diags = check_fixture("substrate/frame/staking/src/pallet/mod.rs", bad);
+    assert!(
+        has_rule(&pallet_diags, "SEC007"),
+        "SEC007 should still fire in FRAME pallet code"
+    );
 }
 
 // ==========================================================================
@@ -1732,6 +1776,119 @@ pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
             "{rule_id} should skip crate-level test/runtime-benchmark-only files"
         );
     }
+}
+
+#[test]
+fn production_security_rules_skip_parent_cfg_gated_module_files() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let src = tmp.path().join("polkadot/runtime/common/src");
+    std::fs::create_dir_all(&src).expect("create runtime src");
+    std::fs::write(
+        src.join("lib.rs"),
+        r#"
+#[cfg(feature = "try-runtime")]
+pub mod try_runtime;
+
+pub mod production;
+"#,
+    )
+    .expect("write parent module");
+    std::fs::write(
+        src.join("try_runtime.rs"),
+        r#"
+pub fn try_runtime_only() {
+    panic!("try-runtime assertion failed");
+}
+"#,
+    )
+    .expect("write cfg-gated module");
+    std::fs::write(
+        src.join("production.rs"),
+        r#"
+pub fn production_path() {
+    panic!("production assertion failed");
+}
+"#,
+    )
+    .expect("write production module");
+
+    let config = polkadot_linter::config::Config::default();
+    let engine = polkadot_linter::engine::LintEngine::new(config);
+    let diags = engine.scan(tmp.path());
+    let sec008_files = diags
+        .iter()
+        .filter(|diag| diag.rule_id == "SEC008")
+        .map(|diag| diag.file.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+
+    assert!(
+        sec008_files
+            .iter()
+            .any(|file| file.ends_with("production.rs")),
+        "SEC008 should still report ungated production modules"
+    );
+    assert!(
+        !sec008_files
+            .iter()
+            .any(|file| file.ends_with("try_runtime.rs")),
+        "SEC008 should skip modules gated by a parent try-runtime cfg"
+    );
+}
+
+#[test]
+fn production_security_rules_skip_proc_macro_targets() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let crate_root = tmp
+        .path()
+        .join("substrate/frame/election-provider-support/solution-type");
+    let src = crate_root.join("src");
+    std::fs::create_dir_all(&src).expect("create proc macro src");
+    std::fs::write(
+        crate_root.join("Cargo.toml"),
+        r#"
+[package]
+name = "frame-election-provider-solution-type"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+"#,
+    )
+    .expect("write proc macro manifest");
+    std::fs::write(
+        src.join("lib.rs"),
+        r#"
+mod single_page;
+
+pub fn parse_input() {
+    panic!("proc macro parse error");
+}
+"#,
+    )
+    .expect("write proc macro lib");
+    std::fs::write(
+        src.join("single_page.rs"),
+        r#"
+pub(crate) fn generate() -> Result<(), ()> {
+    let _ = Some(1u32).unwrap();
+    Ok(())
+}
+"#,
+    )
+    .expect("write proc macro module");
+
+    let config = polkadot_linter::config::Config::default();
+    let engine = polkadot_linter::engine::LintEngine::new(config);
+    let diags = engine.scan(&crate_root);
+    assert!(
+        !has_rule(&diags, "SEC008"),
+        "production security rules should skip proc-macro target sources"
+    );
+    assert!(
+        !has_rule(&diags, "SEC009"),
+        "production security rules should skip proc-macro target module sources"
+    );
 }
 
 #[test]
@@ -1886,11 +2043,13 @@ fn sec008_skips_non_runtime_utility_crates() {
         "polkadot/node/core/pvf/common/src/executor_interface.rs",
         "substrate/client/state-db/src/lib.rs",
         "substrate/scripts/ci/node-template-release/src/main.rs",
+        "polkadot/node/metrics/src/runtime/mod.rs",
         "substrate/frame/support/procedural/src/pallet/parse/tasks.rs",
         "substrate/frame/examples/kitchensink/src/lib.rs",
         "cumulus/pallets/parachain-system/proc-macro/src/lib.rs",
         "substrate/frame/revive/rpc/src/cli.rs",
         "substrate/frame/revive/uapi/src/host/riscv64.rs",
+        "substrate/frame/revive/dev-node/node/src/service.rs",
         "substrate/frame/staking/reward-curve/src/lib.rs",
     ] {
         let diags = check_fixture(path, bad);
@@ -1925,6 +2084,8 @@ fn sec008_still_lints_runtime_and_pallet_paths() {
     for path in [
         "polkadot/runtime/parachains/src/builder.rs",
         "substrate/frame/contracts/src/lib.rs",
+        "substrate/bin/node/runtime/src/lib.rs",
+        "substrate/frame/revive/dev-node/runtime/src/lib.rs",
         "bridges/modules/grandpa/src/lib.rs",
     ] {
         let diags = check_fixture(path, bad);
@@ -2045,6 +2206,74 @@ pub fn fallible_input() {
     assert_eq!(
         sec008_count, 1,
         "SEC008 should skip qed-marked panic invariants while reporting normal panics"
+    );
+}
+
+#[test]
+fn sec008_skips_unreachable_in_uninhabited_enum_impls() {
+    let code = r#"
+pub trait Pipeline {
+    fn validate_only(&self);
+}
+
+/// This type cannot be instantiated.
+pub enum InvalidVersion {}
+
+impl Pipeline for InvalidVersion {
+    fn validate_only(&self) {
+        unreachable!()
+    }
+}
+
+pub enum ReachableVersion {
+    Current,
+}
+
+impl Pipeline for ReachableVersion {
+    fn validate_only(&self) {
+        unreachable!()
+    }
+}
+"#;
+    let diags = check_fixture(
+        "substrate/primitives/runtime/src/traits/vers_tx_ext/invalid.rs",
+        code,
+    );
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip unreachable impls for uninhabited enums while reporting reachable impls"
+    );
+}
+
+#[test]
+fn sec008_skips_nonzero_literal_new_unwraps() {
+    let code = r#"
+use core::num::NonZero;
+
+const HEX: NonZero<u16> = NonZero::new(0x0902).unwrap();
+const DECIMAL: NonZero<u32> = core::num::NonZero::new(42u32).unwrap();
+
+pub fn report_zero_literal() {
+    let _ = NonZero::new(0).unwrap();
+}
+
+pub fn report_variable(value: u16) {
+    let _ = NonZero::new(value).unwrap();
+}
+
+pub fn report_other_unwrap() {
+    let _ = Some(1u32).unwrap();
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/revive/src/precompiles/builtin/sha256.rs",
+        code,
+    );
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 3,
+        "SEC008 should skip only NonZero::new(nonzero-literal).unwrap()"
     );
 }
 
