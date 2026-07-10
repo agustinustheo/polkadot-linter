@@ -3204,6 +3204,56 @@ impl<T: Config> Pallet<T> {
     );
 }
 
+#[test]
+fn sec011_allows_privileged_storage_iteration() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn cancel(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        for (_account, balance) in Accounts::<T>::drain() {
+            Total::<T>::put(balance);
+        }
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC011"),
+        "SEC011 should not report storage iteration in root-only maintenance dispatchables"
+    );
+}
+
+#[test]
+fn sec011_allows_weight_meter_bounded_hook_iteration() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn on_idle(_n: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
+        let mut meter = WeightMeter::from_limit(remaining_weight);
+        if meter.try_consume(T::DbWeight::get().reads(1)).is_err() {
+            return meter.consumed();
+        }
+
+        let accounts: Vec<_> = Accounts::<T>::iter().take(T::MaxPerBlock::get() as usize).collect();
+        for (account, _) in accounts {
+            if meter.try_consume(T::DbWeight::get().reads_writes(1, 1)).is_err() {
+                break;
+            }
+            Accounts::<T>::remove(account);
+        }
+        meter.consumed()
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC011"),
+        "SEC011 should allow hook iteration that is capped by take() and guarded by a WeightMeter"
+    );
+}
+
 // ==========================================================================
 // SEC012: Unbounded clear_prefix
 // ==========================================================================

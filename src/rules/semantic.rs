@@ -5027,6 +5027,17 @@ impl LintRule for StorageIterationInDispatchables {
         }
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        let privileged_dispatchables = collect_dispatchables(ast, &test_mask)
+            .into_iter()
+            .filter(|dispatchable| dispatchable.origin == DispatchableOrigin::Privileged)
+            .map(|dispatchable| dispatchable.name)
+            .collect::<HashSet<_>>();
+
+        fn block_has_weight_meter_bounded_iteration(block: &syn::Block) -> bool {
+            let tokens = compact_tokens(block);
+            (tokens.contains("WeightMeter") || tokens.contains(".try_consume("))
+                && tokens.contains(".take(")
+        }
 
         struct IterationFinder {
             found_span: Option<Span>,
@@ -5050,6 +5061,7 @@ impl LintRule for StorageIterationInDispatchables {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            privileged_dispatchables: &'a HashSet<String>,
         }
 
         impl IterationVisitor<'_> {
@@ -5090,17 +5102,21 @@ impl LintRule for StorageIterationInDispatchables {
                         continue;
                     }
                     if is_call_impl && has_attr(&item_fn.attrs, &["pallet", "call_index"]) {
-                        self.inspect_fn(
-                            &format!("Dispatchable `{}`", item_fn.sig.ident),
-                            item_fn.span(),
-                            &item_fn.block,
-                        );
+                        let fn_name = item_fn.sig.ident.to_string();
+                        if !self.privileged_dispatchables.contains(&fn_name) {
+                            self.inspect_fn(
+                                &format!("Dispatchable `{}`", item_fn.sig.ident),
+                                item_fn.span(),
+                                &item_fn.block,
+                            );
+                        }
                     }
                     let hook_name = item_fn.sig.ident.to_string();
                     if matches!(
                         hook_name.as_str(),
                         "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
-                    ) {
+                    ) && !block_has_weight_meter_bounded_iteration(&item_fn.block)
+                    {
                         self.inspect_fn(
                             &format!("Hook `{}`", hook_name),
                             item_fn.span(),
@@ -5119,6 +5135,7 @@ impl LintRule for StorageIterationInDispatchables {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            privileged_dispatchables: &privileged_dispatchables,
         };
         visitor.visit_file(ast);
 
