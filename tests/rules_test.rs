@@ -1292,6 +1292,25 @@ fn sec002_skips_test_files() {
 }
 
 #[test]
+fn sec002_skips_qed_debug_assert_invariants() {
+    let code = r#"
+pub fn proven_invariant() {
+    debug_assert!(supply >= amount, "checked in prep; qed");
+}
+
+pub fn normal_debug_assert() {
+    debug_assert!(external_input_is_valid());
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip qed-marked invariant checks while reporting normal debug assertions"
+    );
+}
+
+#[test]
 fn sec002_skips_non_runtime_utility_crates() {
     let bad = include_str!("fixtures/bad_sec002.rs");
     for path in [
@@ -1308,6 +1327,24 @@ fn sec002_skips_non_runtime_utility_crates() {
             "SEC002 should skip non-runtime utility path {path}"
         );
     }
+}
+
+#[test]
+fn sec002_skips_documented_benchmark_test_builder_files() {
+    let code = r#"
+/// This is directly from frame-benchmarking so it can be used in benchmarks and tests.
+/// Paras inherent `enter` benchmark scenario builder.
+pub(crate) struct BenchBuilder;
+
+pub fn build_scenario() {
+    debug_assert!(true);
+}
+"#;
+    let diags = check_fixture("polkadot/runtime/parachains/src/builder.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC002"),
+        "SEC002 should skip documented benchmark/test builder helpers"
+    );
 }
 
 #[test]
@@ -1765,6 +1802,7 @@ fn sec008_skips_sdk_support_benchmark_fixture_paths() {
         "substrate/frame/election-provider-multi-phase/src/remote_mining.rs",
         "bridges/snowbridge/runtime/test-common/src/lib.rs",
         "substrate/frame/revive/rpc/build.rs",
+        "substrate/frame/revive/ui-tests/src/ui/precompiles_ui.rs",
     ] {
         let diags = check_fixture(path, bad);
         assert!(
@@ -1795,6 +1833,24 @@ fn sec008_skips_non_runtime_utility_crates() {
             "SEC008 should skip non-runtime utility path {path}"
         );
     }
+}
+
+#[test]
+fn sec008_skips_documented_benchmark_test_builder_files() {
+    let code = r#"
+/// This is directly from frame-benchmarking so it can be used in benchmarks and tests.
+/// Paras inherent `enter` benchmark scenario builder.
+pub(crate) struct BenchBuilder;
+
+pub fn build_scenario() {
+    let _value = Some(1u32).unwrap();
+}
+"#;
+    let diags = check_fixture("polkadot/runtime/parachains/src/builder.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC008"),
+        "SEC008 should skip documented benchmark/test builder helpers"
+    );
 }
 
 #[test]
@@ -1861,6 +1917,22 @@ pub fn docs() {
 }
 
 #[test]
+fn sec008_reports_once_per_source_line() {
+    let code = r#"
+pub fn same_line() {
+    let _values = (Some(1u32).unwrap(), Some(2u32).expect("external input"));
+    panic!("external input");
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should report one panic-capable finding per affected source line"
+    );
+}
+
+#[test]
 fn sec008_skips_qed_expect_messages_but_reports_other_expects() {
     let code = r#"
 pub fn proven_invariant() {
@@ -1884,6 +1956,29 @@ pub fn fallible_input() {
     assert_eq!(
         sec008_count, 1,
         "SEC008 should skip qed-marked expect invariants while reporting normal expects"
+    );
+}
+
+#[test]
+fn sec008_skips_qed_panic_macros_but_reports_other_panics() {
+    let code = r#"
+pub fn proven_invariant() {
+    panic!("serialized properly; qed");
+}
+
+pub fn proven_unreachable() {
+    unreachable!("state machine cannot reach this branch; qed");
+}
+
+pub fn fallible_input() {
+    panic!("external input is invalid");
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip qed-marked panic invariants while reporting normal panics"
     );
 }
 
@@ -1992,6 +2087,24 @@ fn sec009_skips_non_runtime_utility_crates() {
             "SEC009 should skip non-runtime utility path {path}"
         );
     }
+}
+
+#[test]
+fn sec009_skips_documented_benchmark_test_builder_files() {
+    let code = r#"
+/// This is directly from frame-benchmarking so it can be used in benchmarks and tests.
+/// Paras inherent `enter` benchmark scenario builder.
+pub(crate) struct BenchBuilder;
+
+pub fn build_scenario(a: u32, b: u32) -> Result<u32, ()> {
+    Ok(a + b)
+}
+"#;
+    let diags = check_fixture("polkadot/runtime/parachains/src/builder.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC009"),
+        "SEC009 should skip documented benchmark/test builder helpers"
+    );
 }
 
 #[test]

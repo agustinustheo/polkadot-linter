@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use proc_macro2::Span;
 use quote::ToTokens;
@@ -26,6 +26,7 @@ fn is_pure_test_path(path: &Path) -> bool {
         || path_str.contains("/test/")
         || path_str.contains("/test-staking-e2e/")
         || path_str.contains("/test-utils/")
+        || path_str.contains("/ui-tests/")
         || path_str.contains("/mocks/")
         || path_str.contains("/mock/")
         || path_str.contains("/mock-")
@@ -57,6 +58,27 @@ fn is_pure_test_path(path: &Path) -> bool {
 
 fn should_skip_production_rule(ctx: &FileContext) -> bool {
     !ctx.is_rust || ctx.is_benchmark_file || ctx.is_test_file || is_pure_test_path(&ctx.path)
+}
+
+fn is_documented_benchmark_test_builder(path: &Path, content: &str) -> bool {
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    if file_name != "builder.rs" {
+        return false;
+    }
+
+    let path_str = path.to_string_lossy();
+    let normalized = format!("/{path_str}");
+    if !(normalized.contains("/runtime/")
+        || normalized.contains("/runtimes/")
+        || normalized.contains("/pallets/"))
+    {
+        return false;
+    }
+
+    let lower = content.to_ascii_lowercase();
+    lower.contains("benchmark scenario builder") || lower.contains("benchmarks and tests")
 }
 
 fn is_runtime_or_pallet_security_path(path: &Path) -> bool {
@@ -284,6 +306,10 @@ fn expect_message_marks_proven_invariant(expr_method_call: &ExprMethodCall) -> b
         })
 }
 
+fn macro_message_marks_proven_invariant(mac: &Macro) -> bool {
+    mac.tokens.to_string().to_ascii_lowercase().contains("qed")
+}
+
 fn path_has_exact_ident(path: &syn::Path, ident: &str) -> bool {
     path_last_ident(path).as_deref() == Some(ident)
 }
@@ -494,22 +520,6 @@ fn has_public_visibility(visibility: &Visibility) -> bool {
 fn is_storage_iteration_call_path(path: &syn::Path) -> bool {
     matches!(path_last_ident(path).as_deref(), Some("iter" | "drain"))
         && path_owner_name(path).is_some()
-}
-
-struct MacroNameVisitor<'a> {
-    names: &'a [&'a str],
-    matches: Vec<(String, Span)>,
-}
-
-impl<'ast> Visit<'ast> for MacroNameVisitor<'_> {
-    fn visit_macro(&mut self, mac: &'ast Macro) {
-        if let Some(name) = path_last_ident(&mac.path) {
-            if self.names.contains(&name.as_str()) {
-                self.matches.push((name.to_string(), mac.span()));
-            }
-        }
-        visit::visit_macro(self, mac);
-    }
 }
 
 struct ExprMethodVisitor<'a> {
@@ -2496,39 +2506,73 @@ impl LintRule for DebugAssertInProduction {
         if !is_runtime_or_pallet_security_path(&ctx.path) {
             return None;
         }
+        if is_documented_benchmark_test_builder(&ctx.path, ctx.content) {
+            return None;
+        }
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
-        let mut visitor = MacroNameVisitor {
-            names: &["debug_assert", "debug_assert_eq", "debug_assert_ne"],
-            matches: Vec::new(),
+
+        fn debug_assert_message_marks_proven_invariant(mac: &Macro) -> bool {
+            let tokens = mac.tokens.to_string().to_ascii_lowercase();
+            tokens.contains("qed") || tokens.contains("checked in prep")
+        }
+
+        struct DebugAssertVisitor<'a> {
+            diagnostics: Vec<Diagnostic>,
+            file: &'a Path,
+            severity: Severity,
+            rule_id: &'a str,
+            rule_name: &'a str,
+            mask: &'a [bool],
+        }
+
+        impl<'ast> Visit<'ast> for DebugAssertVisitor<'_> {
+            fn visit_macro(&mut self, mac: &'ast Macro) {
+                let Some(name) = path_last_ident(&mac.path) else {
+                    visit::visit_macro(self, mac);
+                    return;
+                };
+                if matches!(
+                    name.as_str(),
+                    "debug_assert" | "debug_assert_eq" | "debug_assert_ne"
+                ) && !is_masked_span(self.mask, mac.span())
+                    && !debug_assert_message_marks_proven_invariant(mac)
+                {
+                    self.diagnostics.push(Diagnostic {
+                        rule_id: self.rule_id.to_string(),
+                        rule_name: self.rule_name.to_string(),
+                        category: RuleCategory::Semantic,
+                        severity: self.severity,
+                        file: self.file.to_path_buf(),
+                        line: span_line(mac.span()),
+                        column: Some(span_column(mac.span())),
+                        end_line: None,
+                        message:
+                            "`debug_assert!` in production code — panics in debug, stripped in release"
+                                .to_string(),
+                        explanation: "`debug_assert!` panics in debug builds and is completely removed \
+                            in release builds. Neither is correct for runtime code: panics crash the \
+                            node, and silent removal means the invariant is unchecked. Use \
+                            `defensive!()` or a proper error return instead."
+                            .to_string(),
+                        suggestion: Some("Replace with `defensive!()` or return an error".to_string()),
+                    });
+                }
+                visit::visit_macro(self, mac);
+            }
+        }
+
+        let mut visitor = DebugAssertVisitor {
+            diagnostics: Vec::new(),
+            file: &ctx.path,
+            severity: config.rule_severity(self.id(), Severity::Warning),
+            rule_id: self.id(),
+            rule_name: self.name(),
+            mask: &test_mask,
         };
         visitor.visit_file(ast);
-
-        let diagnostics = visitor
-            .matches
-            .into_iter()
-            .filter(|(_, span)| !is_masked_span(&test_mask, *span))
-            .map(|(_, span)| Diagnostic {
-                rule_id: self.id().to_string(),
-                rule_name: self.name().to_string(),
-                category: RuleCategory::Semantic,
-                severity: config.rule_severity(self.id(), Severity::Warning),
-                file: ctx.path.clone(),
-                line: span_line(span),
-                column: Some(span_column(span)),
-                end_line: None,
-                message:
-                    "`debug_assert!` in production code — panics in debug, stripped in release"
-                        .to_string(),
-                explanation: "`debug_assert!` panics in debug builds and is completely removed \
-                    in release builds. Neither is correct for runtime code: panics crash the \
-                    node, and silent removal means the invariant is unchecked. Use \
-                    `defensive!()` or a proper error return instead."
-                    .to_string(),
-                suggestion: Some("Replace with `defensive!()` or return an error".to_string()),
-            })
-            .collect::<Vec<_>>();
+        let diagnostics = visitor.diagnostics;
 
         if diagnostics.is_empty() {
             None
@@ -3261,6 +3305,9 @@ impl LintRule for PanicInProduction {
         if !is_runtime_or_pallet_security_path(&ctx.path) {
             return None;
         }
+        if is_documented_benchmark_test_builder(&ctx.path, ctx.content) {
+            return None;
+        }
 
         // Skip auto-generated weights files
         let path_str = ctx.rel_path.to_string_lossy();
@@ -3283,6 +3330,7 @@ impl LintRule for PanicInProduction {
 
         struct PanicVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
+            reported_lines: HashSet<usize>,
             file: &'a Path,
             severity: Severity,
             rule_id: &'a str,
@@ -3292,13 +3340,17 @@ impl LintRule for PanicInProduction {
 
         impl PanicVisitor<'_> {
             fn push_diag(&mut self, span: Span, pattern: &str, suggestion: &str) {
+                let line = span_line(span);
+                if !self.reported_lines.insert(line) {
+                    return;
+                }
                 self.diagnostics.push(Diagnostic {
 					rule_id: self.rule_id.to_string(),
 					rule_name: self.rule_name.to_string(),
 					category: RuleCategory::Semantic,
 					severity: self.severity,
 					file: self.file.to_path_buf(),
-					line: span_line(span),
+					line,
 					column: Some(span_column(span)),
 					end_line: None,
 					message: format!("`{pattern}` in production code — can panic and halt the chain"),
@@ -3339,23 +3391,24 @@ impl LintRule for PanicInProduction {
                     visit::visit_macro(self, mac);
                     return;
                 }
+                let proven_invariant = macro_message_marks_proven_invariant(mac);
                 match path_last_ident(&mac.path).as_deref() {
-                    Some("panic") => self.push_diag(
+                    Some("panic") if !proven_invariant => self.push_diag(
                         mac.span(),
                         "panic!()",
                         "Return an error or use `defensive!()`",
                     ),
-                    Some("unreachable") => self.push_diag(
+                    Some("unreachable") if !proven_invariant => self.push_diag(
                         mac.span(),
                         "unreachable!()",
                         "Use `defensive_unreachable!()` or return an error",
                     ),
-                    Some("todo") => self.push_diag(
+                    Some("todo") if !proven_invariant => self.push_diag(
                         mac.span(),
                         "todo!()",
                         "Implement the function or return an error",
                     ),
-                    Some("unimplemented") => self.push_diag(
+                    Some("unimplemented") if !proven_invariant => self.push_diag(
                         mac.span(),
                         "unimplemented!()",
                         "Implement the function or return an error",
@@ -3368,6 +3421,7 @@ impl LintRule for PanicInProduction {
 
         let mut visitor = PanicVisitor {
             diagnostics: Vec::new(),
+            reported_lines: HashSet::new(),
             file: &ctx.path,
             severity: config.rule_severity(self.id(), Severity::Warning),
             rule_id: self.id(),
@@ -3409,6 +3463,9 @@ impl LintRule for RawArithmeticInFallible {
             return None;
         }
         if !is_runtime_or_pallet_security_path(&ctx.path) {
+            return None;
+        }
+        if is_documented_benchmark_test_builder(&ctx.path, ctx.content) {
             return None;
         }
 
