@@ -1353,6 +1353,136 @@ pub fn normal_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_comment_marked_invariant_debug_asserts() {
+    let code = r#"
+pub fn checked_by_validate_unsigned() {
+    // Checked by ValidateUnsigned before this path is reached.
+    debug_assert_eq!(registration.session_index, CurrentSessionIndex::<T>::get());
+}
+
+pub fn should_not_fail_after_state_check() {
+    let res = T::Currency::transfer(&source, &dest, amount, AllowDeath); // should not fail
+    debug_assert!(res.is_ok());
+}
+
+pub fn normal_debug_assert() {
+    debug_assert!(external_input_is_valid());
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip comment-marked invariants while reporting ordinary debug assertions"
+    );
+}
+
+#[test]
+fn sec002_skips_sanity_comment_marked_debug_asserts() {
+    let code = r#"
+pub fn get_submissions() {
+    // validate that the stored state is sane
+    debug_assert!(submissions.next_idx > max_idx);
+}
+
+pub fn insert_submission() {
+    // verify the expectation that we never reuse an index
+    debug_assert!(!indices.iter().any(|idx| *idx == next_idx));
+}
+
+pub fn trim_assignments() {
+    // ensure our post-conditions are correct
+    debug_assert!(encoded_size <= max_allowed_length);
+}
+
+pub fn normal_debug_assert() {
+    debug_assert!(external_input_is_sane(), "input should be sane");
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-phase/src/signed.rs",
+        code,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip sanity/post-condition comments without treating sane messages as invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_defensive_result_assertions() {
+    let code = r#"
+pub fn settle_deposit(who: &T::AccountId, to_refund: Balance, to_slash: Balance) {
+    let _res = T::Currency::release(
+        &HoldReason::SignedSubmission.into(),
+        who,
+        to_refund,
+        Precision::BestEffort,
+    )
+    .defensive();
+    debug_assert_eq!(_res, Ok(to_refund));
+
+    let _r = T::Currency::burn_held(
+        &HoldReason::SignedSubmission.into(),
+        who,
+        to_slash,
+        Precision::BestEffort,
+        Fortitude::Force,
+    )
+    .defensive();
+    debug_assert!(_r.is_ok());
+}
+
+pub fn unchecked_debug_assert() {
+    let _res = T::Currency::transfer(&source, &dest, amount, AllowDeath);
+    debug_assert!(_res.is_ok());
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-block/src/signed/mod.rs",
+        code,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip assertions over defensive results while reporting unchecked debug assertions"
+    );
+}
+
+#[test]
+fn sec002_skips_balance_remainder_debug_asserts() {
+    let code = r#"
+pub fn refund_deposit(who: &T::AccountId, deposit: Balance) {
+    let err_amount = T::Currency::unreserve(who, deposit);
+    debug_assert!(err_amount.is_zero());
+}
+
+pub fn slash_deposit(who: &T::AccountId, deposit: Balance) {
+    let (imbalance, _remainder) = T::Currency::slash_reserved(who, deposit);
+    debug_assert!(_remainder.is_zero());
+    T::SlashHandler::on_unbalanced(imbalance);
+}
+
+pub fn unrelated_unreserve(who: &T::AccountId, deposit: Balance) {
+    let err_amount = Balance::zero();
+    T::Currency::unreserve(who, deposit);
+    debug_assert!(err_amount.is_zero());
+}
+
+pub fn unrelated_debug_assert() {
+    debug_assert!(false, "refund did not result in dead account?!");
+}
+"#;
+    let diags = check_fixture("substrate/frame/elections-phragmen/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip balance remainder assertions without masking unrelated debug assertions"
+    );
+}
+
+#[test]
 fn sec002_skips_non_runtime_utility_crates() {
     let bad = include_str!("fixtures/bad_sec002.rs");
     for path in [
@@ -1779,6 +1909,75 @@ pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
 }
 
 #[test]
+fn production_security_rules_skip_crate_level_test_helpers_cfg() {
+    let code = r#"
+#![cfg(any(feature = "test-helpers", test))]
+
+pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(first <= second);
+    let _value = Some(first).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("bridges/primitives/runtime/src/storage_proof.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        assert!(
+            !has_rule(&diags, rule_id),
+            "{rule_id} should skip crate-level test-helper-only files"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_documented_test_only_items() {
+    let code = r#"
+/// Return valid storage proof and state root.
+///
+/// Note: This should only be used for **testing**.
+#[cfg(feature = "std")]
+pub fn craft_valid_storage_proof(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(first <= second);
+    let _value = Some(first).unwrap();
+    Ok(first + second)
+}
+
+pub fn production_debug_assert() {
+    debug_assert!(external_input_is_valid());
+}
+
+pub fn production_panic() {
+    let _value = Some(2u32).unwrap();
+}
+
+pub fn production_arithmetic(first: u32, second: u32) -> Result<u32, Error> {
+    Ok(first + second)
+}
+
+/// Attestation data is only used after validation.
+pub fn production_attestation_doc() {
+    let _value = Some(3u32).unwrap();
+}
+"#;
+    let diags = check_fixture("bridges/primitives/runtime/src/storage_proof.rs", code);
+    let sec002_count = diags.iter().filter(|diag| diag.rule_id == "SEC002").count();
+    let sec008_count = diags.iter().filter(|diag| diag.rule_id == "SEC008").count();
+    let sec009_count = diags.iter().filter(|diag| diag.rule_id == "SEC009").count();
+
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip documented test-only items while reporting production code"
+    );
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip documented test-only items without treating attestation as test"
+    );
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip documented test-only items while reporting production code"
+    );
+}
+
+#[test]
 fn production_security_rules_skip_parent_cfg_gated_module_files() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let src = tmp.path().join("polkadot/runtime/common/src");
@@ -1939,6 +2138,50 @@ pub fn prod() {
     assert_eq!(
         sec008_count, 1,
         "SEC008 should skip try-runtime-only items without masking following production code"
+    );
+}
+
+#[test]
+fn sec008_skips_test_helpers_cfg_blocks() {
+    let code = r#"
+#[cfg(feature = "test-helpers")]
+pub fn grow_storage_proof(
+) {
+    let value = Some(1u32).expect("helper state exists");
+    let _ = value;
+}
+
+#[cfg(any(test, feature = "test-helpers"))]
+pub fn helper_state() {
+    panic!("test helper assertion failed");
+}
+
+pub fn prod() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("bridges/primitives/runtime/src/storage_proof.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip test-helper-only items without masking following production code"
+    );
+}
+
+#[test]
+fn sec008_does_not_skip_cfg_attr_doc_hidden_items() {
+    let code = r#"
+#[cfg_attr(not(any(test, feature = "test-helpers")), doc(hidden))]
+pub fn production_path() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC008"),
+        "SEC008 should still report production items that only use cfg_attr for documentation"
     );
 }
 
@@ -2277,6 +2520,26 @@ pub fn report_other_unwrap() {
     );
 }
 
+#[test]
+fn sec008_skips_bounded_vec_try_from_vec_literals_with_static_capacity() {
+    let code = r#"
+const MAX_ITEMS: u32 = 2;
+
+pub fn bounded_literal(value: Item, other: Item, runtime_values: Vec<Item>) {
+    let _ = BoundedVec::<_, ConstU32<MAX_ITEMS>>::try_from(vec![value]).expect("MAX_ITEMS >= 1");
+    let _ = BoundedVec::<_, ConstU32<2>>::try_from(vec![value, other]).unwrap();
+    let _ = BoundedVec::<_, ConstU32<1>>::try_from(vec![value, other]).unwrap();
+    let _ = BoundedVec::<_, ConstU32<MAX_ITEMS>>::try_from(runtime_values).unwrap();
+}
+"#;
+    let diags = check_fixture("substrate/frame/babe/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only BoundedVec::try_from(vec![...]) when literal length fits the static bound"
+    );
+}
+
 // ==========================================================================
 // SEC009: Raw arithmetic in fallible functions
 // ==========================================================================
@@ -2315,6 +2578,24 @@ pub fn verify_point(p1: G1, p2: G1, scalar: Fr, a: u32, b: u32) -> Result<u32, E
     assert_eq!(
         sec009_count, 1,
         "SEC009 should skip overloaded curve arithmetic while still reporting integer arithmetic"
+    );
+}
+
+#[test]
+fn sec009_skips_nonnegative_max_min_differences() {
+    let code = r#"
+pub fn rebalance_delta(current: Balance, target: Balance, raw: Balance) -> Result<Balance, Error> {
+    let delta = current.max(target) - current.min(target);
+    let reversed = target.max(current) - current.min(target);
+    let unsafe_delta = raw - target;
+    Ok(delta.saturating_add(reversed).saturating_add(unsafe_delta))
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec009_count = diags.iter().filter(|d| d.rule_id == "SEC009").count();
+    assert_eq!(
+        sec009_count, 1,
+        "SEC009 should skip provably nonnegative max-min differences while reporting raw subtraction"
     );
 }
 

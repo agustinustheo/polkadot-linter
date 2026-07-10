@@ -1,4 +1,8 @@
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::Path,
+};
 
 use proc_macro2::Span;
 use quote::ToTokens;
@@ -274,11 +278,22 @@ fn is_block_start(trimmed: &str) -> bool {
 }
 
 fn is_masked_cfg_attribute(trimmed: &str) -> bool {
-    trimmed == "#[cfg(test)]"
-        || trimmed == "#[test]"
-        || trimmed.ends_with("::test]")
+    if trimmed == "#[test]" || trimmed.ends_with("::test]") {
+        return true;
+    }
+
+    if !(trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg(")) {
+        return false;
+    }
+
+    let compact = trimmed.split_whitespace().collect::<String>();
+    compact.contains("cfg(test)")
+        || compact.contains("(test,")
+        || compact.contains(",test)")
+        || compact.contains(",test,")
         || trimmed.contains("feature = \"runtime-benchmarks\"")
         || trimmed.contains("feature = \"try-runtime\"")
+        || trimmed.contains("feature = \"test-helpers\"")
 }
 
 fn item_mask_by_attr<F>(content: &str, is_masking_attr: F) -> Vec<bool>
@@ -339,7 +354,87 @@ where
 }
 
 fn cfg_test_module_mask(content: &str) -> Vec<bool> {
-    item_mask_by_attr(content, is_masked_cfg_attribute)
+    merge_masks(
+        &item_mask_by_attr(content, is_masked_cfg_attribute),
+        &documented_test_only_item_mask(content),
+    )
+}
+
+fn documented_test_only_item_mask(content: &str) -> Vec<bool> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut mask = vec![false; lines.len()];
+    let mut masked_depth: Option<i32> = None;
+    let mut brace_depth: i32 = 0;
+    let mut pending_test_only_doc = false;
+    let mut doc_block_active = false;
+    let mut mask_block_entered = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+
+        if masked_depth.is_none() {
+            if let Some(comment) = trimmed.strip_prefix("///") {
+                doc_block_active = true;
+                pending_test_only_doc |= text_marks_test_only_item(comment);
+            } else if doc_block_active && (trimmed.is_empty() || trimmed.starts_with("#[")) {
+                // Keep the doc marker across attributes and the blank line that sometimes
+                // separates docs from cfg attributes.
+            } else if doc_block_active && !trimmed.is_empty() {
+                doc_block_active = false;
+            }
+        }
+
+        let open = line.chars().filter(|&c| c == '{').count() as i32;
+        let close = line.chars().filter(|&c| c == '}').count() as i32;
+        let starts_masked_block =
+            pending_test_only_doc && masked_depth.is_none() && is_block_start(trimmed);
+
+        if starts_masked_block {
+            masked_depth = Some(brace_depth);
+            mask_block_entered = false;
+            pending_test_only_doc = false;
+        } else if pending_test_only_doc
+            && !trimmed.is_empty()
+            && !trimmed.starts_with("#[")
+            && !trimmed.starts_with("///")
+        {
+            pending_test_only_doc = false;
+        }
+
+        brace_depth += open;
+        brace_depth -= close;
+
+        if let Some(td) = masked_depth {
+            mask[i] = true;
+            if brace_depth > td || (starts_masked_block && open > 0) {
+                mask_block_entered = true;
+            }
+            if mask_block_entered && brace_depth <= td {
+                masked_depth = None;
+                mask_block_entered = false;
+            }
+        }
+    }
+
+    mask
+}
+
+fn text_marks_test_only_item(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let mentions_test = lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|word| matches!(word, "test" | "tests" | "testing"));
+    let excludes_production = lower.contains("do not use in production")
+        || lower.contains("not be used in production")
+        || lower.contains("never be used in production")
+        || lower.contains("must never be used in production");
+    mentions_test
+        && (excludes_production
+            || lower.contains("only be used")
+            || lower.contains("only used")
+            || lower.contains("used only")
+            || lower.contains("test only")
+            || lower.contains("testing only"))
 }
 
 fn genesis_build_mask(content: &str) -> Vec<bool> {
@@ -478,6 +573,16 @@ fn unwrap_receiver_is_nonzero_literal_new(expr_method_call: &ExprMethodCall) -> 
     };
 
     integer_literal_is_nonzero(lit_int)
+}
+
+fn expr_integer_literal_value(expr: &Expr) -> Option<u128> {
+    let Expr::Lit(expr_lit) = strip_expr_wrappers(expr) else {
+        return None;
+    };
+    let Lit::Int(lit_int) = &expr_lit.lit else {
+        return None;
+    };
+    lit_int.base10_parse::<u128>().ok()
 }
 
 fn integer_literal_is_nonzero(lit_int: &syn::LitInt) -> bool {
@@ -2742,9 +2847,109 @@ impl LintRule for DebugAssertInProduction {
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
 
+        fn text_marks_proven_invariant(text: &str) -> bool {
+            let lower = text.to_ascii_lowercase();
+            lower.contains("qed")
+                || lower.contains("checked in prep")
+                || lower.contains("checked by")
+                || lower.contains("invariant")
+                || lower.contains("precondition")
+                || lower.contains("defensive")
+                || lower.contains("should not fail")
+                || lower.contains("should never")
+        }
+
         fn debug_assert_message_marks_proven_invariant(mac: &Macro) -> bool {
-            let tokens = mac.tokens.to_string().to_ascii_lowercase();
-            tokens.contains("qed") || tokens.contains("checked in prep")
+            text_marks_proven_invariant(&mac.tokens.to_string())
+        }
+
+        fn comment_marks_proven_invariant(comment: &str) -> bool {
+            let lower = comment.to_ascii_lowercase();
+            text_marks_proven_invariant(comment)
+                || lower.contains("state is sane")
+                || lower.contains("sane things")
+                || lower.contains("sanity")
+                || lower.contains("post-condition")
+                || lower.contains("postcondition")
+                || lower.contains("verify the expectation")
+        }
+
+        fn nearby_comment_marks_proven_invariant(lines: &[&str], line: usize) -> bool {
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(4);
+            lines[start..=current_idx.min(lines.len().saturating_sub(1))]
+                .iter()
+                .any(|source_line| {
+                    source_line
+                        .split_once("//")
+                        .is_some_and(|(_, comment)| comment_marks_proven_invariant(comment))
+                })
+        }
+
+        fn debug_assert_checks_defensive_result(mac: &Macro, lines: &[&str], line: usize) -> bool {
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(10);
+            let context = lines[start..current_idx.min(lines.len())].join("\n");
+            if !context.contains(".defensive()") {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            tokens
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .filter(|token| !token.is_empty())
+                .any(|token| {
+                    if !token.starts_with('_') && !token.ends_with("_res") {
+                        return false;
+                    }
+                    [format!("let {token}"), format!("let mut {token}")]
+                        .iter()
+                        .any(|binding| {
+                            context
+                                .rfind(binding)
+                                .is_some_and(|idx| context[idx..].contains(".defensive()"))
+                        })
+                })
+        }
+
+        fn debug_assert_checks_balance_remainder(mac: &Macro, lines: &[&str], line: usize) -> bool {
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(10);
+            let context = lines[start..current_idx.min(lines.len())].join("\n");
+            if !(context.contains("unreserve(") || context.contains("slash_reserved(")) {
+                return false;
+            }
+
+            tokens
+                .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .filter(|token| !token.is_empty())
+                .any(|token| {
+                    if !compact_tokens.contains(&format!("{token}.is_zero()")) {
+                        return false;
+                    }
+                    let is_unreserve_remainder =
+                        context.rfind(&format!("let {token}")).is_some_and(|idx| {
+                            context[idx..]
+                                .split_once(';')
+                                .map(|(statement, _)| statement)
+                                .unwrap_or(&context[idx..])
+                                .contains("unreserve(")
+                        });
+                    let is_slash_reserved_remainder = [format!(", {token})"), format!(",{token})")]
+                        .iter()
+                        .any(|binding| {
+                            context.rfind(binding).is_some_and(|idx| {
+                                context[idx..]
+                                    .split_once(';')
+                                    .map(|(statement, _)| statement)
+                                    .unwrap_or(&context[idx..])
+                                    .contains("slash_reserved(")
+                            })
+                        });
+                    is_unreserve_remainder || is_slash_reserved_remainder
+                })
         }
 
         struct DebugAssertVisitor<'a> {
@@ -2754,6 +2959,7 @@ impl LintRule for DebugAssertInProduction {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            lines: &'a [&'a str],
         }
 
         impl<'ast> Visit<'ast> for DebugAssertVisitor<'_> {
@@ -2767,6 +2973,13 @@ impl LintRule for DebugAssertInProduction {
                     "debug_assert" | "debug_assert_eq" | "debug_assert_ne"
                 ) && !is_masked_span(self.mask, mac.span())
                     && !debug_assert_message_marks_proven_invariant(mac)
+                    && !nearby_comment_marks_proven_invariant(self.lines, span_line(mac.span()))
+                    && !debug_assert_checks_defensive_result(mac, self.lines, span_line(mac.span()))
+                    && !debug_assert_checks_balance_remainder(
+                        mac,
+                        self.lines,
+                        span_line(mac.span()),
+                    )
                 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
@@ -2792,6 +3005,7 @@ impl LintRule for DebugAssertInProduction {
             }
         }
 
+        let content_lines = ctx.content.lines().collect::<Vec<_>>();
         let mut visitor = DebugAssertVisitor {
             diagnostics: Vec::new(),
             file: &ctx.path,
@@ -2799,6 +3013,7 @@ impl LintRule for DebugAssertInProduction {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            lines: &content_lines,
         };
         visitor.visit_file(ast);
         let diagnostics = visitor.diagnostics;
@@ -3573,6 +3788,77 @@ impl LintRule for PanicInProduction {
                 _ => None,
             })
             .collect();
+        let const_int_values: HashMap<String, u128> = ast
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Const(item_const) => expr_integer_literal_value(&item_const.expr)
+                    .map(|value| (item_const.ident.to_string(), value)),
+                _ => None,
+            })
+            .collect();
+
+        fn const_u32_bound_from_tokens(
+            tokens: &str,
+            const_int_values: &HashMap<String, u128>,
+        ) -> Option<u128> {
+            let marker = "ConstU32<";
+            let start = tokens.find(marker)? + marker.len();
+            let end = tokens[start..].find('>')? + start;
+            let bound = &tokens[start..end];
+            bound
+                .parse::<u128>()
+                .ok()
+                .or_else(|| const_int_values.get(bound).copied())
+        }
+
+        fn vec_macro_literal_len(expr: &Expr) -> Option<usize> {
+            let Expr::Macro(expr_macro) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            if macro_name(&expr_macro.mac).as_deref() != Some("vec")
+                || expr_macro.mac.tokens.to_string().contains(';')
+            {
+                return None;
+            }
+            expr_macro
+                .mac
+                .parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+                .ok()
+                .map(|items| items.len())
+        }
+
+        fn bounded_vec_literal_try_from_fits_bound(
+            expr_method_call: &ExprMethodCall,
+            const_int_values: &HashMap<String, u128>,
+        ) -> bool {
+            if !matches!(
+                expr_method_call.method.to_string().as_str(),
+                "unwrap" | "expect"
+            ) {
+                return false;
+            }
+            let Expr::Call(expr_call) = strip_expr_wrappers(&expr_method_call.receiver) else {
+                return false;
+            };
+            let Some(path) = expr_call_path(expr_call) else {
+                return false;
+            };
+            if !path_has_exact_ident(path, "try_from") {
+                return false;
+            }
+            let func_tokens = compact_tokens(&expr_call.func);
+            if !func_tokens.contains("BoundedVec") {
+                return false;
+            }
+            let Some(bound) = const_u32_bound_from_tokens(&func_tokens, const_int_values) else {
+                return false;
+            };
+            let Some(arg_len) = expr_call.args.first().and_then(vec_macro_literal_len) else {
+                return false;
+            };
+            (arg_len as u128) <= bound
+        }
 
         struct PanicVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
@@ -3583,6 +3869,7 @@ impl LintRule for PanicInProduction {
             rule_name: &'a str,
             mask: &'a [bool],
             uninhabited_enums: &'a HashSet<String>,
+            const_int_values: &'a HashMap<String, u128>,
             uninhabited_impl_depth: usize,
         }
 
@@ -3633,18 +3920,32 @@ impl LintRule for PanicInProduction {
                     return;
                 }
                 match expr_method_call.method.to_string().as_str() {
-                    "unwrap" if !unwrap_receiver_is_nonzero_literal_new(expr_method_call) => self
-                        .push_diag(
+                    "unwrap"
+                        if !unwrap_receiver_is_nonzero_literal_new(expr_method_call)
+                            && !bounded_vec_literal_try_from_fits_bound(
+                                expr_method_call,
+                                self.const_int_values,
+                            ) =>
+                    {
+                        self.push_diag(
                             expr_method_call.span(),
                             ".unwrap()",
                             "Use `.ok_or(Error::...)?`, `.unwrap_or_default()`, or `.defensive()`",
-                        ),
-                    "expect" if !expect_message_marks_proven_invariant(expr_method_call) => self
-                        .push_diag(
+                        )
+                    }
+                    "expect"
+                        if !expect_message_marks_proven_invariant(expr_method_call)
+                            && !bounded_vec_literal_try_from_fits_bound(
+                                expr_method_call,
+                                self.const_int_values,
+                            ) =>
+                    {
+                        self.push_diag(
                             expr_method_call.span(),
                             ".expect()",
                             "Use `.ok_or(Error::...)?` or `.defensive()`",
-                        ),
+                        )
+                    }
                     _ => {}
                 }
                 visit::visit_expr_method_call(self, expr_method_call);
@@ -3696,6 +3997,7 @@ impl LintRule for PanicInProduction {
             rule_name: self.name(),
             mask: &test_mask,
             uninhabited_enums: &uninhabited_enums,
+            const_int_values: &const_int_values,
             uninhabited_impl_depth: 0,
         };
         visitor.visit_file(ast);
@@ -3790,6 +4092,37 @@ impl LintRule for RawArithmeticInFallible {
             false
         }
 
+        fn method_receiver_and_single_arg(expr: &Expr, method: &str) -> Option<(String, String)> {
+            let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            if method_call.method != method || method_call.args.len() != 1 {
+                return None;
+            }
+            let receiver = compact_tokens(&method_call.receiver);
+            let arg = compact_tokens(method_call.args.first()?);
+            Some((receiver, arg))
+        }
+
+        fn same_unordered_operands(left: &(String, String), right: &(String, String)) -> bool {
+            (left.0 == right.0 && left.1 == right.1) || (left.0 == right.1 && left.1 == right.0)
+        }
+
+        fn max_min_difference_is_nonnegative(expr_binary: &ExprBinary) -> bool {
+            if !matches!(expr_binary.op, syn::BinOp::Sub(_)) {
+                return false;
+            }
+            let Some(max_operands) = method_receiver_and_single_arg(&expr_binary.left, "max")
+            else {
+                return false;
+            };
+            let Some(min_operands) = method_receiver_and_single_arg(&expr_binary.right, "min")
+            else {
+                return false;
+            };
+            same_unordered_operands(&max_operands, &min_operands)
+        }
+
         struct ArithmeticVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -3810,6 +4143,7 @@ impl LintRule for RawArithmeticInFallible {
                     expr_binary.op,
                     syn::BinOp::Add(_) | syn::BinOp::Sub(_) | syn::BinOp::Mul(_)
                 ) && !self.skip_overloaded_group_arithmetic
+                    && !max_min_difference_is_nonnegative(expr_binary)
                 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
