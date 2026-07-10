@@ -1875,6 +1875,31 @@ pub fn refund_best_effort(who: &T::AccountId) -> DispatchResult {
 }
 
 #[test]
+fn sec007_allows_documented_ignore_after_setup_lines() {
+    let code = r#"
+pub fn drain_reward_account(reward_account: &T::AccountId, depositor: &T::AccountId) {
+    // This shouldn't fail, but if it does we don't really care.
+    let reward_pool_remaining = T::Currency::reducible_balance(
+        reward_account,
+        Preservation::Expendable,
+        Fortitude::Polite,
+    );
+    let _ = T::Currency::transfer(
+        reward_account,
+        depositor,
+        reward_pool_remaining,
+        Preservation::Expendable,
+    );
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC007"),
+        "SEC007 should allow documented intentional ignores even after nearby setup lines"
+    );
+}
+
+#[test]
 fn sec007_does_not_treat_unreserve_as_result() {
     let code = r#"
 pub fn refund_deposit(who: &T::AccountId) {
@@ -1907,6 +1932,46 @@ pub fn migrate_pool(id: PoolId) {
     assert_eq!(
         sec007_count, 1,
         "SEC007 should allow map_err logging/counting while still reporting silent result discards"
+    );
+}
+
+#[test]
+fn sec007_allows_try_mutate_unit_error_control_flow() {
+    let code = r#"
+pub fn maybe_update_fee_factor() {
+    let _ = Bridge::<T>::try_mutate(|bridge| {
+        if !bridge.is_congested {
+            return Err(());
+        }
+        bridge.delivery_fee_factor = bridge.delivery_fee_factor.saturating_add(1);
+        Ok(())
+    });
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC007"),
+        "SEC007 should allow try_mutate unit errors used only to abort storage mutation"
+    );
+}
+
+#[test]
+fn sec007_reports_try_mutate_real_error_discards() {
+    let code = r#"
+pub fn spend_credit(who: &T::AccountId) {
+    let _ = Credits::<T>::try_mutate(who, |credit| -> Result<(), Error<T>> {
+        if *credit == 0 {
+            return Err(Error::<T>::NoCredit);
+        }
+        *credit -= 1;
+        Ok(())
+    });
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC007"),
+        "SEC007 should still report discarded try_mutate results with real pallet errors"
     );
 }
 
@@ -3610,6 +3675,66 @@ fn sec016_allows_storage_version_guarded_runtime_upgrade() {
     assert!(
         !has_rule(&diags, "SEC016"),
         "SEC016 should NOT fire when on_runtime_upgrade checks StorageVersion"
+    );
+}
+
+#[test]
+fn sec016_allows_documented_idempotent_migrations() {
+    let code = r#"
+/// Idempotent migration to initialize pallet parameters.
+///
+/// Safe to run multiple times -- existing values are not overwritten.
+pub struct InitializeParams<T>(PhantomData<T>);
+
+impl<T: Config> OnRuntimeUpgrade for InitializeParams<T> {
+    fn on_runtime_upgrade() -> Weight {
+        if !MaxDebt::<T>::exists() {
+            MaxDebt::<T>::put(Permill::from_percent(50));
+        }
+        T::DbWeight::get().reads_writes(1, 1)
+    }
+}
+
+/// Set `NextAssetId` if it does not exist yet.
+pub struct SetNextAssetId<T>(PhantomData<T>);
+
+impl<T: Config> OnRuntimeUpgrade for SetNextAssetId<T> {
+    fn on_runtime_upgrade() -> Weight {
+        if !NextAssetId::<T>::exists() {
+            NextAssetId::<T>::put(0u32);
+        }
+        T::DbWeight::get().reads_writes(1, 1)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/migration.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should allow migrations documented as idempotent or no-op when storage exists"
+    );
+}
+
+#[test]
+fn sec016_allows_documented_current_value_reconciliation() {
+    let code = r#"
+/// Checks and updates `TotalValueLocked` if out of sync.
+pub struct TotalValueLockedSync<T>(PhantomData<T>);
+
+impl<T: Config> OnRuntimeUpgrade for TotalValueLockedSync<T> {
+    fn on_runtime_upgrade() -> Weight {
+        let expected = Self::calculate_tvl();
+        let current = TotalValueLocked::<T>::get();
+        if expected != current {
+            TotalValueLocked::<T>::set(expected);
+        }
+        T::DbWeight::get().reads_writes(1, 1)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/migration.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should allow migrations documented as current-value reconciliation"
     );
 }
 
