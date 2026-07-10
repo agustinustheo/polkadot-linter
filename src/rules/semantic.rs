@@ -24,13 +24,17 @@ fn is_pure_test_path(path: &Path) -> bool {
     let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     path_str.contains("/tests/")
         || path_str.contains("/test/")
+        || path_str.contains("/test-staking-e2e/")
         || path_str.contains("/test-utils/")
         || path_str.contains("/mocks/")
         || path_str.contains("/mock/")
+        || path_str.contains("/mock-")
+        || path_str.contains("/remote-tests/")
         || path_str.contains("/fuzzer/")
         || path_str.contains("/fixtures/")
         || path_str.contains("/conformance_tests/")
         || path_str.contains("/subsystem-bench/")
+        || path_str.contains("-benchmarking/")
         || path_str.contains("/test-common/")
         || path_str.contains("/test_utils/")
         || path_str.contains("/testing/")
@@ -46,6 +50,7 @@ fn is_pure_test_path(path: &Path) -> bool {
         || file_name == "build.rs"
         || file_name.starts_with("mock_")
         || file_name == "mock.rs"
+        || file_name == "remote_mining.rs"
         || file_name == "test_utils.rs"
         || file_name == "testing_utils.rs"
 }
@@ -99,7 +104,10 @@ fn is_block_start(trimmed: &str) -> bool {
         || trimmed.starts_with("pub impl<")
         || trimmed.starts_with("pub fn ")
         || trimmed.starts_with("fn ")
+        || trimmed.starts_with("pub async fn ")
+        || trimmed.starts_with("async fn ")
         || trimmed.starts_with("pub(crate) fn ")
+        || trimmed.starts_with("pub(crate) async fn ")
         || trimmed.starts_with("pub struct ")
         || trimmed.starts_with("pub(crate) struct ")
         || trimmed.starts_with("pub enum ")
@@ -109,7 +117,11 @@ fn is_block_start(trimmed: &str) -> bool {
 }
 
 fn is_masked_cfg_attribute(trimmed: &str) -> bool {
-    trimmed == "#[cfg(test)]" || trimmed.contains("feature = \"runtime-benchmarks\"")
+    trimmed == "#[cfg(test)]"
+        || trimmed == "#[test]"
+        || trimmed.ends_with("::test]")
+        || trimmed.contains("feature = \"runtime-benchmarks\"")
+        || trimmed.contains("feature = \"try-runtime\"")
 }
 
 fn item_mask_by_attr<F>(content: &str, is_masking_attr: F) -> Vec<bool>
@@ -121,15 +133,14 @@ where
     let mut masked_depth: Option<i32> = None;
     let mut brace_depth: i32 = 0;
     let mut next_item_is_masked = false;
-    // Tracks whether brace_depth has exceeded masked_depth (the block body started).
-    // Without this, multi-line declarations (impl Foo\n  for Bar\n{) would
-    // clear the mask before the opening `{` is reached.
+    // Tracks whether the masked block body started. Multi-line item
+    // declarations can sit at the parent brace depth until a later `{`.
     let mut mask_block_entered = false;
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
 
-        if is_masking_attr(trimmed) {
+        if is_masking_attr(trimmed) && masked_depth.is_none() {
             next_item_is_masked = true;
         }
 
@@ -140,7 +151,8 @@ where
 
         let open = line.chars().filter(|&c| c == '{').count() as i32;
         let close = line.chars().filter(|&c| c == '}').count() as i32;
-        let starts_masked_block = next_item_is_masked && is_block_start(trimmed);
+        let starts_masked_block =
+            next_item_is_masked && masked_depth.is_none() && is_block_start(trimmed);
 
         if starts_masked_block {
             masked_depth = Some(brace_depth);
@@ -155,11 +167,10 @@ where
         brace_depth -= close;
 
         if let Some(td) = masked_depth {
-            if starts_masked_block || brace_depth > td {
-                mask[i] = true;
+            mask[i] = true;
+            if brace_depth > td || (starts_masked_block && open > 0) {
                 mask_block_entered = true;
             }
-            // Only clear the mask after we have entered AND exited the block.
             if mask_block_entered && brace_depth <= td {
                 masked_depth = None;
                 mask_block_entered = false;
@@ -248,6 +259,29 @@ fn path_last_ident(path: &syn::Path) -> Option<String> {
 
 fn macro_name(mac: &Macro) -> Option<String> {
     path_last_ident(&mac.path)
+}
+
+fn expr_string_literal(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Lit(expr_lit) => match &expr_lit.lit {
+            Lit::Str(lit) => Some(lit.value()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn expect_message_marks_proven_invariant(expr_method_call: &ExprMethodCall) -> bool {
+    expr_method_call
+        .args
+        .first()
+        .is_some_and(|arg| match expr_string_literal(arg) {
+            Some(message) => message.to_ascii_lowercase().contains("qed"),
+            None => arg
+                .to_token_stream()
+                .to_string()
+                .eq_ignore_ascii_case("qed"),
+        })
 }
 
 fn path_has_exact_ident(path: &syn::Path, ident: &str) -> bool {
@@ -3289,11 +3323,12 @@ impl LintRule for PanicInProduction {
                         ".unwrap()",
                         "Use `.ok_or(Error::...)?`, `.unwrap_or_default()`, or `.defensive()`",
                     ),
-                    "expect" => self.push_diag(
-                        expr_method_call.span(),
-                        ".expect()",
-                        "Use `.ok_or(Error::...)?` or `.defensive()`",
-                    ),
+                    "expect" if !expect_message_marks_proven_invariant(expr_method_call) => self
+                        .push_diag(
+                            expr_method_call.span(),
+                            ".expect()",
+                            "Use `.ok_or(Error::...)?` or `.defensive()`",
+                        ),
                     _ => {}
                 }
                 visit::visit_expr_method_call(self, expr_method_call);
