@@ -3535,6 +3535,61 @@ fn sec015_allows_normal_dispatch() {
     );
 }
 
+#[test]
+fn sec015_allows_strict_root_guarded_bypass() {
+    let code = r#"
+pub fn dispatch_as_root(origin: OriginFor<T>, call: Box<T::RuntimeCall>) -> DispatchResult {
+    ensure_root(origin)?;
+    call.dispatch_bypass_filter(frame_system::RawOrigin::Root.into()).map_err(|e| e.error)?;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC015"),
+        "SEC015 should allow dispatch_bypass_filter after a strict ensure_root guard"
+    );
+}
+
+#[test]
+fn sec015_allows_bypass_inside_verified_root_branch() {
+    let code = r#"
+pub fn batch(origin: OriginFor<T>, call: T::RuntimeCall) -> DispatchResult {
+    let is_root = ensure_root(origin.clone()).is_ok();
+    let result = if is_root {
+        call.dispatch_bypass_filter(origin.clone())
+    } else {
+        call.dispatch(origin.clone())
+    };
+    result.map(|_| ()).map_err(|e| e.error)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC015"),
+        "SEC015 should allow bypass only inside branches gated by ensure_root(...).is_ok()"
+    );
+}
+
+#[test]
+fn sec015_reports_unverified_root_flag_bypass() {
+    let code = r#"
+pub fn batch(origin: OriginFor<T>, call: T::RuntimeCall, is_root: bool) -> DispatchResult {
+    let result = if is_root {
+        call.dispatch_bypass_filter(origin.clone())
+    } else {
+        call.dispatch(origin.clone())
+    };
+    result.map(|_| ()).map_err(|e| e.error)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC015"),
+        "SEC015 should not trust arbitrary variables named is_root"
+    );
+}
+
 // ==========================================================================
 // SEC016: Missing StorageVersion check in runtime upgrade
 // ==========================================================================
