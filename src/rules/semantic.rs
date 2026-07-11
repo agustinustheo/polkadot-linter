@@ -276,6 +276,14 @@ fn is_block_start(trimmed: &str) -> bool {
         || trimmed.starts_with("enum ")
         || trimmed.starts_with("pub trait ")
         || trimmed.starts_with("trait ")
+        || trimmed.starts_with("if ")
+        || trimmed.starts_with("if let ")
+        || trimmed.starts_with("match ")
+        || trimmed.starts_with("for ")
+        || trimmed.starts_with("while ")
+        || trimmed.starts_with("while let ")
+        || trimmed.starts_with("loop ")
+        || trimmed == "loop"
 }
 
 fn is_masked_cfg_attribute(trimmed: &str) -> bool {
@@ -295,6 +303,8 @@ fn is_masked_cfg_attribute(trimmed: &str) -> bool {
         || trimmed.contains("feature = \"runtime-benchmarks\"")
         || trimmed.contains("feature = \"try-runtime\"")
         || trimmed.contains("feature = \"test-helpers\"")
+        || trimmed.contains("feature = \"remote-test\"")
+        || trimmed.contains("feature = \"integrity-test\"")
 }
 
 fn item_mask_by_attr<F>(content: &str, is_masking_attr: F) -> Vec<bool>
@@ -309,11 +319,17 @@ where
     // Tracks whether the masked block body started. Multi-line item
     // declarations can sit at the parent brace depth until a later `{`.
     let mut mask_block_entered = false;
+    let mut masked_statement_depth: Option<i32> = None;
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
+        let statement_was_masked = masked_statement_depth.is_some();
+        if statement_was_masked {
+            mask[i] = true;
+        }
 
         if is_masking_attr(trimmed) && masked_depth.is_none() {
+            mask[i] = true;
             next_item_is_masked = true;
         }
 
@@ -340,11 +356,21 @@ where
             && !trimmed.starts_with("//")
         {
             mask[i] = true;
+            if !trimmed.ends_with(';') {
+                masked_statement_depth = Some(brace_depth);
+            }
             next_item_is_masked = false;
         }
 
         brace_depth += open;
         brace_depth -= close;
+
+        if let Some(statement_depth) = masked_statement_depth {
+            mask[i] = true;
+            if trimmed.ends_with(';') && brace_depth <= statement_depth {
+                masked_statement_depth = None;
+            }
+        }
 
         if let Some(td) = masked_depth {
             mask[i] = true;
@@ -447,6 +473,95 @@ fn text_marks_test_only_item(text: &str) -> bool {
 
 fn genesis_build_mask(content: &str) -> Vec<bool> {
     item_mask_by_attr(content, |trimmed| trimmed == "#[pallet::genesis_build]")
+}
+
+fn genesis_config_impl_mask(content: &str) -> Vec<bool> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut mask = vec![false; lines.len()];
+    let mut masked_depth: Option<i32> = None;
+    let mut brace_depth: i32 = 0;
+    let mut mask_block_entered = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let starts_masked_block = masked_depth.is_none()
+            && (trimmed.starts_with("impl ") || trimmed.starts_with("impl<"))
+            && trimmed.contains("GenesisConfig")
+            && !trimmed.contains(" for ");
+
+        let open = line.chars().filter(|&c| c == '{').count() as i32;
+        let close = line.chars().filter(|&c| c == '}').count() as i32;
+
+        if starts_masked_block {
+            masked_depth = Some(brace_depth);
+            mask_block_entered = false;
+        }
+
+        brace_depth += open;
+        brace_depth -= close;
+
+        if let Some(td) = masked_depth {
+            mask[i] = true;
+            if brace_depth > td || (starts_masked_block && open > 0) {
+                mask_block_entered = true;
+            }
+            if mask_block_entered && brace_depth <= td {
+                masked_depth = None;
+                mask_block_entered = false;
+            }
+        }
+    }
+
+    mask
+}
+
+fn const_unit_initializer_mask(content: &str) -> Vec<bool> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut mask = vec![false; lines.len()];
+    let mut masked_depth: Option<i32> = None;
+    let mut brace_depth: i32 = 0;
+    let mut mask_block_entered = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let starts_masked_block =
+            masked_depth.is_none() && trimmed.starts_with("const ") && trimmed.contains(": () = {");
+
+        let open = line.chars().filter(|&c| c == '{').count() as i32;
+        let close = line.chars().filter(|&c| c == '}').count() as i32;
+
+        if starts_masked_block {
+            masked_depth = Some(brace_depth);
+            mask_block_entered = false;
+        }
+
+        brace_depth += open;
+        brace_depth -= close;
+
+        if let Some(td) = masked_depth {
+            mask[i] = true;
+            if brace_depth > td || (starts_masked_block && open > 0) {
+                mask_block_entered = true;
+            }
+            if mask_block_entered && brace_depth <= td && trimmed.ends_with(';') {
+                masked_depth = None;
+                mask_block_entered = false;
+            }
+        }
+    }
+
+    mask
+}
+
+fn integrity_test_mask(content: &str) -> Vec<bool> {
+    item_mask_by_attr(content, |trimmed| {
+        trimmed.starts_with("fn integrity_test")
+            || trimmed.starts_with("pub fn integrity_test")
+            || trimmed.starts_with("pub(crate) fn integrity_test")
+            || trimmed.starts_with("pub(super) fn integrity_test")
+            || trimmed.starts_with("unsafe fn integrity_test")
+            || trimmed.starts_with("pub unsafe fn integrity_test")
+    })
 }
 
 fn merge_masks(left: &[bool], right: &[bool]) -> Vec<bool> {
@@ -2912,8 +3027,11 @@ impl LintRule for DebugAssertInProduction {
             return None;
         }
 
-        let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        let test_mask = merge_masks(
+            &cfg_test_module_mask(ctx.content),
+            &integrity_test_mask(ctx.content),
+        );
 
         fn text_marks_proven_invariant(text: &str) -> bool {
             let lower = text.to_ascii_lowercase();
@@ -3959,11 +4077,20 @@ impl LintRule for PanicInProduction {
             return None;
         }
 
-        let test_mask = merge_masks(
-            &cfg_test_module_mask(ctx.content),
-            &genesis_build_mask(ctx.content),
-        );
         let ast = ast_file(ctx)?;
+        let test_mask = merge_masks(
+            &merge_masks(
+                &merge_masks(
+                    &cfg_test_module_mask(ctx.content),
+                    &genesis_build_mask(ctx.content),
+                ),
+                &merge_masks(
+                    &genesis_config_impl_mask(ctx.content),
+                    &const_unit_initializer_mask(ctx.content),
+                ),
+            ),
+            &integrity_test_mask(ctx.content),
+        );
         let uninhabited_enums: HashSet<String> = ast
             .items
             .iter()
@@ -4254,7 +4381,10 @@ impl LintRule for RawArithmeticInFallible {
         }
 
         let ast = ast_file(ctx)?;
-        let test_mask = cfg_test_module_mask(ctx.content);
+        let test_mask = merge_masks(
+            &cfg_test_module_mask(ctx.content),
+            &integrity_test_mask(ctx.content),
+        );
 
         fn is_fallible_output(output: &syn::ReturnType) -> bool {
             match output {
