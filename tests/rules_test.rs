@@ -1411,6 +1411,137 @@ pub fn normal_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_consistency_and_corruption_invariant_comments() {
+    let code = r#"
+pub fn apply_backers() {
+    // consistency checks
+    debug_assert_eq!(state.validators_for.get(index), Some(&true));
+}
+
+pub fn dissolve() {
+    // Assuming state is not corrupted, all contributions have been cleaned up.
+    debug_assert!(contribution_iterator().count().is_zero());
+}
+
+pub fn report_result() {
+    // assumption of the trait.
+    debug_assert!(matches!(verifier.status(), Status::Nothing));
+}
+
+pub fn normal_debug_assert() {
+    // validate external input shape
+    debug_assert!(external_input_is_valid());
+}
+"#;
+    let diags = check_fixture("polkadot/runtime/parachains/src/disputes.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip documented consistency/corruption invariants while reporting ordinary debug assertions"
+    );
+}
+
+#[test]
+fn sec002_skips_safety_comments_with_caller_validated_invariants() {
+    let code = r#"
+pub fn relative_jump(offset: isize) {
+    // SAFETY: The offset is validated by the caller to ensure it points within the bytecode
+    debug_assert!(new_pc <= bytes.len());
+}
+
+pub fn read_slice(len: usize) {
+    // SAFETY: The caller ensures that `len` bytes are available from the current instruction
+    // pointer position.
+    debug_assert!(pc.checked_add(len).map_or(false, |end| end <= bytes.len()));
+}
+
+pub fn generic_safety_claim() {
+    // This should be safe enough for external input.
+    debug_assert!(external_input_is_valid());
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/vm/evm/ext_bytecode.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only SAFETY comments that document caller-validated invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_client_verified_runtime_invariant_comments() {
+    let code = r#"
+pub fn check_slot_claim() {
+    // NOTE: this is verified by the client when importing the block, before
+    // execution. We don't run the verification again here to avoid slowing
+    // down the runtime.
+    debug_assert!(public.vrf_verify(&payload, &signature));
+}
+
+pub fn vague_verified_claim() {
+    // Verified somewhere before this point.
+    debug_assert!(external_input_is_valid());
+}
+"#;
+    let diags = check_fixture("substrate/frame/babe/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only comments that explicitly say the client already verified the invariant"
+    );
+}
+
+#[test]
+fn sec002_skips_explicit_invariant_assertion_messages() {
+    let code = r#"
+pub fn apply_mode() {
+    debug_assert!(
+        !is_potential,
+        "`PotentialFullCore` should resolve to `FullCore` or `FractionOfCore` after applying a transaction.",
+    );
+}
+
+pub fn prune_statuses() {
+    debug_assert!(!statuses.iter().any(|s| s.signals_exist), "Signals should be handled");
+}
+
+pub fn append_queue() {
+    debug_assert!(schedule.next_schedule.is_none(), "queue.end was supposed to be the end");
+}
+
+pub fn remove_agent() {
+    debug_assert!(Agents::<T>::contains_key(key), "Agent should exist in storage");
+}
+
+pub fn unknit_single_item_ring() {
+    debug_assert!(origin == neighbours.prev, "outgoing must be only item");
+}
+
+pub fn progress_page() {
+    debug_assert!(book_state.ready_neighbours.is_some(), "Must be in ready ring if ready");
+    debug_assert!(book_state.count > 0, "reaping a page implies there are pages");
+    debug_assert!(status != Bailed, "we never bail if a page became complete");
+}
+
+pub fn update_member() {
+    // The pool id of a member cannot change in any case, so we use it to make sure
+    // `member_account` is the right one.
+    debug_assert_eq!(member.pool_id, bonded_pool.id);
+}
+
+pub fn normal_debug_assert() {
+    debug_assert!(external_input_is_valid(), "external input should be valid");
+}
+"#;
+    let diags = check_fixture("substrate/frame/message-queue/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip exact invariant messages without treating generic should/must messages as safe"
+    );
+}
+
+#[test]
 fn sec002_skips_extended_invariant_comments_for_false_and_result_asserts() {
     let code = r#"
 pub fn notify_downward_message() {
@@ -2308,6 +2439,62 @@ pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
 }
 
 #[test]
+fn production_security_rules_skip_debug_assertions_cfg_blocks() {
+    let code = r#"
+pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
+    if cfg!(debug_assertions) && cfg!(not(feature = "runtime-benchmarks")) {
+        debug_assert!(first <= second);
+        let _value = Some(first).unwrap();
+        let _sum = first + second;
+    }
+
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/staking-async/src/session_rotation.rs",
+        code,
+    );
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip cfg!(debug_assertions) blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_cfg_feature_expression_blocks() {
+    let code = r#"
+pub fn upgrade_failed(first: u32, second: u32) -> Result<u32, Error> {
+    if cfg!(feature = "try-runtime") {
+        debug_assert!(first <= second);
+        let _value = Some(first).unwrap();
+        let _sum = first + second;
+        panic!("try-runtime migration failed");
+    } else {
+        return Ok(first);
+    }
+
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/migrations/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip positive non-production cfg! feature blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
 fn production_security_rules_skip_cfg_control_flow_blocks() {
     let code = r#"
 pub fn prod(first: u32, second: u32, run_all: bool) -> Result<u32, Error> {
@@ -3039,6 +3226,35 @@ pub fn bounded_literal(value: Item, other: Item, runtime_values: Vec<Item>) {
 }
 
 #[test]
+fn sec008_skips_single_item_vec_try_into_with_min_one_bound_message() {
+    let code = r#"
+pub fn self_vote(voter: AccountId, other: AccountId) {
+    let _safe: BoundedVec<AccountId, MaxVotesPerVoter> = vec![voter.clone()]
+        .try_into()
+        .expect("`MaxVotesPerVoter` must be greater than or equal to 1");
+
+    let _too_many: BoundedVec<AccountId, MaxVotesPerVoter> = vec![voter.clone(), other]
+        .try_into()
+        .expect("`MaxVotesPerVoter` must be greater than or equal to 1");
+
+    let _wrong_message: BoundedVec<AccountId, MaxVotesPerVoter> = vec![voter.clone()]
+        .try_into()
+        .expect("external input should fit");
+
+    let _unwrap: BoundedVec<AccountId, MaxVotesPerVoter> = vec![voter]
+        .try_into()
+        .unwrap();
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking/src/pallet/impls.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 3,
+        "SEC008 should skip only one-item vec literal try_into expects with an explicit min-one bound message"
+    );
+}
+
+#[test]
 fn sec008_skips_fixed_range_try_into_unwraps() {
     let code = r#"
 use sp_core::H160;
@@ -3059,6 +3275,57 @@ pub fn fixed_ranges(address: &H160, data: &[u8], offset: usize, start: usize, ru
     assert_eq!(
         sec008_count, 3,
         "SEC008 should skip only try_into unwraps whose slice length is statically known"
+    );
+}
+
+#[test]
+fn sec008_skips_biguint_to_usize_after_explicit_upper_bound() {
+    let code = r#"
+use num_bigint::BigUint;
+
+pub fn guarded_expect(input: &[u8]) -> DispatchResult {
+    let max_size_big = BigUint::from(1024u32);
+    let len_big = BigUint::from_bytes_be(input);
+    if len_big > max_size_big {
+        Err(DispatchError::from("too large"))?;
+    }
+    let _len = len_big.to_usize().expect("bounds checked above");
+    Ok(())
+}
+
+pub fn guarded_unwrap(input: &[u8]) -> DispatchResult {
+    let len_big = BigUint::from_bytes_be(input);
+    if len_big >= BigUint::from(1025u32) {
+        return Err(DispatchError::from("too large"));
+    }
+    let _len = len_big.to_usize().unwrap();
+    Ok(())
+}
+
+pub fn unguarded(input: &[u8]) -> DispatchResult {
+    let len_big = BigUint::from_bytes_be(input);
+    let _len = len_big.to_usize().expect("external input");
+    Ok(())
+}
+
+pub fn guarded_without_reject(input: &[u8]) -> DispatchResult {
+    let max_size_big = BigUint::from(1024u32);
+    let len_big = BigUint::from_bytes_be(input);
+    if len_big > max_size_big {
+        log::warn!("too large");
+    }
+    let _len = len_big.to_usize().unwrap();
+    Ok(())
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/revive/src/precompiles/builtin/modexp.rs",
+        code,
+    );
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only BigUint conversions whose accepted path has an explicit usize-safe upper bound"
     );
 }
 
