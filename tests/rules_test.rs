@@ -3343,6 +3343,38 @@ fn sec012_allows_bounded_clear_prefix() {
 }
 
 #[test]
+fn sec012_allows_documented_unbounded_clear_with_static_page_bound() {
+    let code = r#"
+pub fn take_submission_with_data(round: u32, who: &T::AccountId) {
+    // NOTE: safe to remove unbounded, as at most `Pages` pages are stored.
+    let r = SubmissionStorage::<T>::clear_prefix((round, who), u32::MAX, None);
+    debug_assert!(r.unique <= T::Pages::get());
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC012"),
+        "SEC012 should allow documented unbounded clears when a static page bound is asserted"
+    );
+}
+
+#[test]
+fn sec012_reports_comments_that_admit_unbounded_clear_needs_fixing() {
+    let code = r#"
+pub fn clear_era_information(era_index: EraIndex) {
+    // FIXME: We can possibly set a reasonable limit since we do this only once per era.
+    let mut cursor = ErasStakers::<T>::clear_prefix(era_index, u32::MAX, None);
+    debug_assert!(cursor.maybe_cursor.is_none());
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC012"),
+        "SEC012 should still report comments that acknowledge the clear should be bounded"
+    );
+}
+
+#[test]
 fn sec012_skips_frame_support_migration_helpers() {
     let bad = include_str!("fixtures/bad_sec012.rs");
     for path in [
@@ -3735,6 +3767,55 @@ impl<T: Config> OnRuntimeUpgrade for TotalValueLockedSync<T> {
     assert!(
         !has_rule(&diags, "SEC016"),
         "SEC016 should allow migrations documented as current-value reconciliation"
+    );
+}
+
+#[test]
+fn sec016_allows_structural_current_value_reconciliation() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn on_runtime_upgrade() -> Weight {
+        let current_timestamp = Timestamp::<T>::get();
+        let old_slot = CurrentSlot::<T>::get();
+        let new_slot = current_timestamp / T::SlotDuration::get();
+
+        if old_slot != new_slot {
+            CurrentSlot::<T>::put(new_slot);
+            T::DbWeight::get().reads_writes(2, 1)
+        } else {
+            T::DbWeight::get().reads(2)
+        }
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should allow idempotent writes guarded by old/new value reconciliation"
+    );
+}
+
+#[test]
+fn sec016_reports_mixed_reconciliation_and_unguarded_writes() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn on_runtime_upgrade() -> Weight {
+        let expected = Self::calculate_total();
+        let current = Total::<T>::get();
+
+        if current != expected {
+            Total::<T>::put(expected);
+        }
+
+        LegacyFlag::<T>::put(true);
+        T::DbWeight::get().reads_writes(2, 2)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC016"),
+        "SEC016 should still report migrations with additional unguarded writes"
     );
 }
 

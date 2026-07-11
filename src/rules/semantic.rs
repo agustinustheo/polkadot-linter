@@ -5166,6 +5166,7 @@ impl LintRule for UnboundedClearPrefix {
         }
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        let lines = ctx.content.lines().collect::<Vec<_>>();
 
         fn is_unbounded_clear_prefix_limit(expr: &Expr) -> bool {
             match expr {
@@ -5196,6 +5197,7 @@ impl LintRule for UnboundedClearPrefix {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            lines: &'a [&'a str],
         }
 
         impl<'ast> Visit<'ast> for ClearPrefixVisitor<'_> {
@@ -5215,6 +5217,10 @@ impl LintRule for UnboundedClearPrefix {
                         .nth(1)
                         .map(is_unbounded_clear_prefix_limit)
                         .unwrap_or(false)
+                    && !nearby_comment_documents_bounded_unbounded_clear(
+                        self.lines,
+                        span_line(expr_call.span()),
+                    )
                 {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
@@ -5238,6 +5244,18 @@ impl LintRule for UnboundedClearPrefix {
             }
         }
 
+        fn nearby_comment_documents_bounded_unbounded_clear(lines: &[&str], line: usize) -> bool {
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(3);
+            lines[start..current_idx.min(lines.len())]
+                .iter()
+                .filter_map(|source_line| source_line.split_once("//").map(|(_, comment)| comment))
+                .any(|comment| {
+                    let lower = comment.to_ascii_lowercase();
+                    lower.contains("safe to remove unbounded") && lower.contains("at most")
+                })
+        }
+
         let mut visitor = ClearPrefixVisitor {
             diagnostics: Vec::new(),
             file: &ctx.path,
@@ -5245,6 +5263,7 @@ impl LintRule for UnboundedClearPrefix {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            lines: &lines,
         };
         visitor.visit_file(ast);
 
@@ -5800,9 +5819,27 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
         struct UpgradeBodyVisitor {
             has_storage_version_check: bool,
             has_write: bool,
+            has_non_reconciliation_write: bool,
+            reconciliation_values: Vec<HashSet<String>>,
         }
 
         impl<'ast> Visit<'ast> for UpgradeBodyVisitor {
+            fn visit_expr_if(&mut self, node: &'ast ExprIf) {
+                self.visit_expr(&node.cond);
+
+                if let Some(values) = reconciliation_condition_values(&node.cond) {
+                    self.reconciliation_values.push(values);
+                    self.visit_block(&node.then_branch);
+                    self.reconciliation_values.pop();
+                } else {
+                    self.visit_block(&node.then_branch);
+                }
+
+                if let Some((_, else_branch)) = &node.else_branch {
+                    self.visit_expr(else_branch);
+                }
+            }
+
             fn visit_expr_call(&mut self, node: &'ast ExprCall) {
                 if let Some(name) = expr_call_name(node) {
                     if [
@@ -5819,6 +5856,9 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                     .contains(&name.as_str())
                     {
                         self.has_write = true;
+                        if !self.write_is_current_value_reconciliation(name.as_str(), node) {
+                            self.has_non_reconciliation_write = true;
+                        }
                     }
                 }
                 visit::visit_expr_call(self, node);
@@ -5837,6 +5877,43 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                 }
                 visit::visit_path(self, path);
             }
+        }
+
+        impl UpgradeBodyVisitor {
+            fn write_is_current_value_reconciliation(
+                &self,
+                call_name: &str,
+                node: &ExprCall,
+            ) -> bool {
+                if !matches!(call_name, "put" | "set") {
+                    return false;
+                }
+
+                let Some(value) = node.args.first().map(compact_tokens) else {
+                    return false;
+                };
+
+                self.reconciliation_values
+                    .last()
+                    .is_some_and(|values| values.contains(&value))
+            }
+        }
+
+        fn reconciliation_condition_values(expr: &Expr) -> Option<HashSet<String>> {
+            let Expr::Binary(binary) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            if !matches!(binary.op, syn::BinOp::Ne(_)) {
+                return None;
+            }
+
+            let left = compact_tokens(strip_expr_wrappers(&binary.left));
+            let right = compact_tokens(strip_expr_wrappers(&binary.right));
+            if left.is_empty() || right.is_empty() {
+                return None;
+            }
+
+            Some(HashSet::from([left, right]))
         }
 
         struct UpgradeVisitor<'a> {
@@ -5860,10 +5937,13 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                 let mut body_visitor = UpgradeBodyVisitor {
                     has_storage_version_check: false,
                     has_write: false,
+                    has_non_reconciliation_write: false,
+                    reconciliation_values: Vec::new(),
                 };
                 body_visitor.visit_block(&item_fn.block);
 
                 if body_visitor.has_write
+                    && body_visitor.has_non_reconciliation_write
                     && !body_visitor.has_storage_version_check
                     && !nearby_comments_mark_idempotent_migration(
                         self.lines,
