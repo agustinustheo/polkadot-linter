@@ -15,11 +15,15 @@ data without embedding `rustc_private` in the main binary.
 This is an intermediate Phase 2 backend. Rules that need full body-level HIR or
 MIR data may still need a Clippy-style driver later.
 
-## Current Prototype
+## Historical Prototype
 
-`SEC013` has a rustdoc-backed prototype. It inspects resolved type aliases and
-reports FRAME storage aliases whose value argument contains an unbounded
-collection such as `Vec` or `BTreeMap`.
+`SEC013` originally had a rustdoc-backed prototype. It inspected resolved type
+aliases and reported FRAME storage aliases whose value argument contained an
+unbounded collection such as `Vec` or `BTreeMap`.
+
+The active compiler-backed migration work now lives in the rustc-driver path
+documented in `docs/rustc-driver-analysis.md`. The rustdoc path remains useful
+background, but it is no longer the primary SEC013 migration target.
 
 The prototype intentionally skips:
 
