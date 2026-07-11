@@ -1,7 +1,9 @@
 use clap::Parser;
 use std::{path::PathBuf, process};
 
-use polkadot_linter::{config::Config, diagnostics, engine::LintEngine, rustdoc_analysis};
+use polkadot_linter::{
+    config::Config, diagnostics, engine::LintEngine, rustc_pipeline, rustdoc_analysis,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -53,6 +55,49 @@ struct Cli {
     /// Source root used to resolve relative rustdoc JSON spans
     #[arg(long = "rustdoc-source-root")]
     rustdoc_source_root: Option<PathBuf>,
+
+    /// Skip syntax/token scanning and emit only auxiliary analysis results
+    #[arg(long)]
+    no_syntax: bool,
+
+    /// Cargo manifest to analyze through the compiler-backed rustc driver
+    #[arg(long = "rustc-cargo-manifest")]
+    rustc_cargo_manifest: Option<PathBuf>,
+
+    /// Package to pass to compiler-backed cargo check; may be repeated
+    #[arg(long = "rustc-package")]
+    rustc_packages: Vec<String>,
+
+    /// Analyze only the library target for compiler-backed cargo check
+    #[arg(long = "rustc-lib")]
+    rustc_lib: bool,
+
+    /// Pass --no-default-features to compiler-backed cargo check
+    #[arg(long = "rustc-no-default-features")]
+    rustc_no_default_features: bool,
+
+    /// Cargo target directory for compiler-backed cargo check
+    #[arg(long = "rustc-target-dir")]
+    rustc_target_dir: Option<PathBuf>,
+
+    /// rust toolchain passed to cargo, for example nightly-2025-06-10
+    #[arg(long = "rustc-toolchain")]
+    rustc_toolchain: Option<String>,
+
+    /// Path to the polkadot-linter-rustc driver binary
+    #[arg(
+        long = "rustc-driver",
+        default_value = "target/debug/polkadot-linter-rustc"
+    )]
+    rustc_driver: PathBuf,
+
+    /// Rule IDs to run through the compiler-backed rustc driver
+    #[arg(long = "compiler-backed-rules", value_delimiter = ',')]
+    compiler_backed_rules: Vec<String>,
+
+    /// File substring filters for compiler-backed diagnostics
+    #[arg(long = "rustc-source-filter", value_delimiter = ',')]
+    rustc_source_filters: Vec<String>,
 }
 
 fn main() {
@@ -91,8 +136,36 @@ fn main() {
     }
 
     let mut results = Vec::new();
-    for path in &cli.paths {
-        results.extend(engine.scan(path));
+    if !cli.no_syntax {
+        for path in &cli.paths {
+            results.extend(engine.scan(path));
+        }
+    }
+
+    if let Some(manifest_path) = &cli.rustc_cargo_manifest {
+        let rustc_rules = if cli.compiler_backed_rules.is_empty() {
+            cli.rules.clone().unwrap_or_default()
+        } else {
+            cli.compiler_backed_rules.clone()
+        };
+        let options = rustc_pipeline::RustcPipelineOptions {
+            manifest_path: manifest_path.clone(),
+            packages: cli.rustc_packages.clone(),
+            driver_path: cli.rustc_driver.clone(),
+            toolchain: cli.rustc_toolchain.clone(),
+            target_dir: cli.rustc_target_dir.clone(),
+            rules: rustc_rules,
+            file_filters: cli.rustc_source_filters.clone(),
+            lib: cli.rustc_lib,
+            no_default_features: cli.rustc_no_default_features,
+        };
+        match rustc_pipeline::run_cargo_check(&options) {
+            Ok(mut diagnostics) => results.append(&mut diagnostics),
+            Err(e) => {
+                eprintln!("Error running compiler-backed analysis: {e}");
+                process::exit(2);
+            }
+        }
     }
 
     let run_rustdoc_sec013 = cli

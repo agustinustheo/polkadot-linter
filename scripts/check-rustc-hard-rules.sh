@@ -267,6 +267,9 @@ TOML
 
 SYN_JSON="$WORK_DIR/syn-hard-rules.json"
 RUSTC_JSON="$WORK_DIR/rustc-hard-rules.json"
+RUSTC_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-filtered.json"
+RUSTC_FILTERED_EMPTY_JSON="$WORK_DIR/rustc-hard-rules-filtered-empty.json"
+RUSTC_RULE_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-rule-filtered.json"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
@@ -282,6 +285,36 @@ cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --edition 2021 \
   --emit metadata \
   --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_JSON"
+
+POLKADOT_LINTER_RUSTC_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
+  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+    --features rustc-driver \
+    --bin polkadot-linter-rustc -- \
+    "$FIXTURE" \
+    --crate-type lib \
+    --edition 2021 \
+    --emit metadata \
+    --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_JSON"
+
+POLKADOT_LINTER_RUSTC_FILE_CONTAINS="does-not-match.rs" \
+  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+    --features rustc-driver \
+    --bin polkadot-linter-rustc -- \
+    "$FIXTURE" \
+    --crate-type lib \
+    --edition 2021 \
+    --emit metadata \
+    --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_EMPTY_JSON"
+
+POLKADOT_LINTER_RUSTC_RULES="SEC008,SEC009" \
+  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+    --features rustc-driver \
+    --bin polkadot-linter-rustc -- \
+    "$FIXTURE" \
+    --crate-type lib \
+    --edition 2021 \
+    --emit metadata \
+    --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_RULE_FILTERED_JSON"
 
 syn_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$SYN_JSON")"
 syn_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$SYN_JSON")"
@@ -303,6 +336,12 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
+rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
+rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
+rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
+rustc_rule_filtered_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_RULE_FILTERED_JSON")"
+rustc_rule_filtered_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
+rustc_rule_filtered_other_count="$(jq '[.[] | select(.rule_id != "SEC008" and .rule_id != "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_JSON")"
 rustc_sec002_line="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON")"
 rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
@@ -334,6 +373,9 @@ echo "syntax SEC017 findings: $syn_sec017_count"
 echo "rustc SEC017 findings: $rustc_sec017_count"
 echo "syntax SEC018 findings: $syn_sec018_count"
 echo "rustc SEC018 findings: $rustc_sec018_count"
+echo "rustc filtered findings: $rustc_filtered_count"
+echo "rustc filtered empty findings: $rustc_filtered_empty_count"
+echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
@@ -365,3 +407,9 @@ test "$rustc_sec017_line" = "12"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "1"
 test "$rustc_sec018_line" = "70"
+test "$rustc_filtered_count" = "10"
+test "$rustc_filtered_empty_count" = "0"
+test "$rustc_rule_filtered_count" = "2"
+test "$rustc_rule_filtered_sec008_count" = "1"
+test "$rustc_rule_filtered_sec009_count" = "1"
+test "$rustc_rule_filtered_other_count" = "0"
