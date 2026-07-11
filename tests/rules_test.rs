@@ -1525,6 +1525,32 @@ pub fn unrelated_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_bounded_clear_prefix_result_assertions() {
+    let code = r#"
+pub fn take_submission_with_data(round: u32, who: &T::AccountId) {
+    // NOTE: safe to remove unbounded, as at most `Pages` pages are stored.
+    let r = SubmissionStorage::<T>::clear_prefix((round, who), u32::MAX, None);
+    debug_assert!(r.unique <= T::Pages::get());
+}
+
+pub fn clear_era_information(era_index: EraIndex) {
+    // FIXME: We can possibly set a reasonable limit since we do this only once per era.
+    let mut cursor = ErasStakers::<T>::clear_prefix(era_index, u32::MAX, None);
+    debug_assert!(cursor.maybe_cursor.is_none());
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-block/src/signed/mod.rs",
+        code,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip bounded clear_prefix result assertions while reporting unbounded cursor assertions"
+    );
+}
+
+#[test]
 fn sec002_skips_non_runtime_utility_crates() {
     let bad = include_str!("fixtures/bad_sec002.rs");
     for path in [
