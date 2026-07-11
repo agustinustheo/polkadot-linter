@@ -5311,6 +5311,41 @@ impl LintRule for UnboundedStorageCollections {
             rule_name: &'a str,
         }
 
+        fn storage_doc_text(item: &ItemType) -> String {
+            item.attrs
+                .iter()
+                .filter(|attr| path_has_exact_ident(attr.path(), "doc"))
+                .filter_map(|attr| match &attr.meta {
+                    syn::Meta::NameValue(meta) => match &meta.value {
+                        Expr::Lit(expr_lit) => match &expr_lit.lit {
+                            Lit::Str(lit) => Some(lit.value()),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase()
+        }
+
+        fn docs_mark_bounded_storage_collection(item: &ItemType) -> bool {
+            let doc = storage_doc_text(item);
+            if doc.contains("could become bounded")
+                || doc.contains("no global maximum")
+                || doc.contains("no global bound")
+                || doc.contains("unbounded")
+            {
+                return false;
+            }
+
+            doc.contains("length is limited by")
+                || doc.contains("size is limited by")
+                || doc.contains("bounded by")
+                || doc.contains("limited by the capacity")
+        }
+
         impl<'ast> Visit<'ast> for StorageCollectionVisitor<'_> {
             fn visit_item_type(&mut self, item: &'ast ItemType) {
                 if !has_attr(&item.attrs, &["pallet", "storage"])
@@ -5320,7 +5355,9 @@ impl LintRule for UnboundedStorageCollections {
                     return;
                 }
 
-                if type_contains_unbounded_storage_collection(&item.ty) {
+                if type_contains_unbounded_storage_collection(&item.ty)
+                    && !docs_mark_bounded_storage_collection(item)
+                {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
                         rule_name: self.rule_name.to_string(),

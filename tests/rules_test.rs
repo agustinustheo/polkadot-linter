@@ -3468,6 +3468,36 @@ pub type BoundedMap<T: Config> =
 }
 
 #[test]
+fn sec013_allows_documented_capacity_limited_storage_collections() {
+    let code = r#"
+/// Latest included block descendants accepted by the runtime.
+///
+/// The segment length is limited by the capacity returned from the configured consensus hook.
+#[pallet::storage]
+pub type UnincludedSegment<T: Config> = StorageValue<_, Vec<Ancestor<T::Hash>>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC013"),
+        "SEC013 should allow storage collections documented as capacity-limited"
+    );
+}
+
+#[test]
+fn sec013_reports_docs_that_admit_no_global_bound() {
+    let code = r#"
+// NOTE: could become bounded, but we don't have a global maximum for this.
+#[pallet::storage]
+pub type HrmpOpenChannelRequestsList<T: Config> = StorageValue<_, Vec<HrmpChannelId>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC013"),
+        "SEC013 should report storage collections whose docs admit no global bound"
+    );
+}
+
+#[test]
 fn sec013_allows_pallet_dev_mode_storage() {
     let code = r#"
 #[frame_support::pallet(dev_mode)]
