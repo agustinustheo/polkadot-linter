@@ -20,6 +20,9 @@ cargo run -- ../pallets -f sarif > polkadot-linter.sarif
 
 # Tighten CI behaviour
 cargo run -- ../pallets -s warning --fail-on-warning
+
+# Add compiler-resolved rustdoc JSON evidence for typed prototype rules
+cargo run -- ../pallets --rules SEC013 --rustdoc-json target/doc/my_pallet.json
 ```
 
 ## Rule Families
@@ -125,6 +128,8 @@ The full schema and defaults remain in [`config/default.toml`](config/default.to
 The security rules are being improved in explicit phases. The current focus is
 stabilizing the existing `syn`-based tool, not redesigning the engine yet.
 See [`docs/security-linter-phases.md`](docs/security-linter-phases.md).
+The first opt-in rustdoc-backed analysis path is documented in
+[`docs/rustdoc-analysis.md`](docs/rustdoc-analysis.md).
 
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, use:
 

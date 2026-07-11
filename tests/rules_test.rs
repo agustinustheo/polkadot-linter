@@ -5322,6 +5322,48 @@ fn mok001_allows_outcome_focused_tests() {
 // ==========================================================================
 // SEC013: Unbounded storage collections
 // ==========================================================================
+fn resolved_type(path: &str, args: Vec<serde_json::Value>) -> serde_json::Value {
+    serde_json::json!({
+        "resolved_path": {
+            "path": path,
+            "id": 1,
+            "args": {
+                "angle_bracketed": {
+                    "args": args.into_iter().map(|ty| serde_json::json!({ "type": ty })).collect::<Vec<_>>(),
+                    "constraints": []
+                }
+            }
+        }
+    })
+}
+
+fn tuple_type() -> serde_json::Value {
+    serde_json::json!({ "tuple": [] })
+}
+
+fn primitive_type(name: &str) -> serde_json::Value {
+    serde_json::json!({ "primitive": name })
+}
+
+fn vec_type() -> serde_json::Value {
+    resolved_type("Vec", vec![primitive_type("u8")])
+}
+
+fn bounded_vec_type(inner: serde_json::Value) -> serde_json::Value {
+    resolved_type("BoundedVec", vec![inner, tuple_type()])
+}
+
+fn storage_value_type(value: serde_json::Value) -> serde_json::Value {
+    resolved_type("StorageValue", vec![tuple_type(), value])
+}
+
+fn storage_map_type(value: serde_json::Value) -> serde_json::Value {
+    resolved_type(
+        "StorageMap",
+        vec![tuple_type(), tuple_type(), primitive_type("u32"), value],
+    )
+}
+
 #[test]
 fn sec013_detects_unbounded_storage_collection() {
     let bad = include_str!("fixtures/bad_sec013.rs");
@@ -5392,6 +5434,94 @@ pub type HrmpOpenChannelRequestsList<T: Config> = StorageValue<_, Vec<HrmpChanne
         has_rule(&diags, "SEC013"),
         "SEC013 should report storage collections whose docs admit no global bound"
     );
+}
+
+#[test]
+fn rustdoc_sec013_reports_resolved_unbounded_storage_values_only() {
+    let rustdoc = serde_json::json!({
+        "index": {
+            "1": {
+                "name": "BadVec",
+                "span": { "filename": "src/lib.rs", "begin": [10, 1] },
+                "attrs": [],
+                "docs": null,
+                "inner": { "type_alias": { "type": storage_value_type(vec_type()) } }
+            },
+            "2": {
+                "name": "BoundedBytes",
+                "span": { "filename": "src/lib.rs", "begin": [20, 1] },
+                "attrs": [],
+                "docs": null,
+                "inner": {
+                    "type_alias": {
+                        "type": storage_value_type(bounded_vec_type(vec_type()))
+                    }
+                }
+            },
+            "3": {
+                "name": "ScalarByAccount",
+                "span": { "filename": "src/lib.rs", "begin": [30, 1] },
+                "attrs": [],
+                "docs": null,
+                "inner": { "type_alias": { "type": storage_map_type(primitive_type("u64")) } }
+            },
+            "4": {
+                "name": "CapacityLimited",
+                "span": { "filename": "src/lib.rs", "begin": [40, 1] },
+                "attrs": [],
+                "docs": "The segment length is limited by the capacity returned from the hook.",
+                "inner": { "type_alias": { "type": storage_value_type(vec_type()) } }
+            },
+            "5": {
+                "name": "AdmittedNoGlobalBound",
+                "span": { "filename": "src/lib.rs", "begin": [50, 1] },
+                "attrs": [],
+                "docs": "This could become bounded, but there is no global maximum.",
+                "inner": { "type_alias": { "type": storage_value_type(vec_type()) } }
+            }
+        }
+    });
+
+    let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(
+        &rustdoc.to_string(),
+        Some(std::path::Path::new("/workspace/pallet")),
+        &polkadot_linter::config::Config::default(),
+    )
+    .expect("rustdoc JSON should parse");
+
+    assert_eq!(diags.len(), 2);
+    assert_eq!(diags[0].rule_id, "SEC013");
+    assert_eq!(diags[0].file, PathBuf::from("/workspace/pallet/src/lib.rs"));
+    assert_eq!(diags[0].line, 10);
+    assert!(diags[0].message.contains("BadVec"));
+    assert_eq!(diags[1].line, 50);
+    assert!(diags[1].message.contains("AdmittedNoGlobalBound"));
+}
+
+#[test]
+fn rustdoc_sec013_honors_rule_disablement() {
+    let rustdoc = serde_json::json!({
+        "index": {
+            "1": {
+                "name": "BadVec",
+                "span": { "filename": "src/lib.rs", "begin": [10, 1] },
+                "attrs": [],
+                "docs": null,
+                "inner": { "type_alias": { "type": storage_value_type(vec_type()) } }
+            }
+        }
+    });
+    let mut config = polkadot_linter::config::Config::default();
+    config.rules.enabled.insert("SEC013".to_string(), false);
+
+    let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(
+        &rustdoc.to_string(),
+        None,
+        &config,
+    )
+    .expect("rustdoc JSON should parse");
+
+    assert!(diags.is_empty());
 }
 
 #[test]
