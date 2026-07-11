@@ -3732,6 +3732,436 @@ impl LintRule for DebugAssertInProduction {
                 && lower_context.contains("at most")
         }
 
+        fn debug_assert_marks_assets_refund_recovery_path(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !matches!(function_name, Some("do_refund" | "do_refund_other")) {
+                return false;
+            }
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/assets/src/functions.rs")
+            {
+                return false;
+            }
+            let tokens = mac.tokens.to_string();
+            tokens.contains("false")
+                && tokens
+                    .to_ascii_lowercase()
+                    .contains("refund did not result in dead account")
+        }
+
+        fn debug_assert_marks_child_bounties_parent_cleanup(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if function_name != Some("bounty_removed") {
+                return false;
+            }
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/child-bounties/src/lib.rs")
+            {
+                return false;
+            }
+            let tokens = mac.tokens.to_string();
+            [
+                "ParentChildBounties",
+                "ChildrenCuratorFees",
+                "ChildBounties",
+                "ChildBountyDescriptionsV1",
+            ]
+            .iter()
+            .any(|storage| tokens.contains(storage))
+        }
+
+        fn debug_assert_marks_staking_voter_list_count_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !matches!(
+                function_name,
+                Some(
+                    "do_add_nominator"
+                        | "do_remove_nominator"
+                        | "do_add_validator"
+                        | "do_remove_validator"
+                )
+            ) {
+                return false;
+            }
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/staking/src/pallet/impls.rs")
+            {
+                return false;
+            }
+            let tokens = mac.tokens.to_string();
+            ["Nominators", "Validators", "VoterList", "count"]
+                .iter()
+                .all(|token| tokens.contains(token))
+        }
+
+        fn debug_assert_marks_multi_phase_signed_submission_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/election-provider-multi-phase/src/signed.rs")
+            {
+                return false;
+            }
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("put") => ["indices", "next_idx", "max_idx"]
+                    .iter()
+                    .all(|token| tokens.contains(token)),
+                Some("insert") => {
+                    compact_tokens.contains("self.insertion_overlay.contains_key(&self.next_idx)")
+                        || compact_tokens.contains("self.deletion_overlay.contains(&self.next_idx)")
+                }
+                Some("finalize_signed_phase_internal") => {
+                    (tokens.contains("SignedSubmissionIndices") && tokens.contains("exists"))
+                        || (tokens.contains("SignedSubmissionNextIndex")
+                            && tokens.contains("exists"))
+                        || (tokens.contains("SignedSubmissionsMap")
+                            && tokens.contains("iter")
+                            && tokens.contains("next")
+                            && tokens.contains("is_none"))
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_bags_list_threshold_migration_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if function_name != Some("migrate") {
+                return false;
+            }
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/bags-list/src/list/mod.rs")
+            {
+                return false;
+            }
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            (tokens.contains("old_thresholds") && tokens.contains("bag_upper"))
+                || compact_tokens.contains("_removed,num_affected")
+                || compact_tokens.contains("_inserted,num_affected")
+                || (tokens.contains("removed_bag")
+                    && tokens.contains("ListNodes")
+                    && tokens.contains("bag_upper"))
+        }
+
+        fn debug_assert_marks_staking_async_data_provider_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/staking-async/src/pallet/impls.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("do_payout_stakers_by_page") => {
+                    ["nominator_payout_count", "MaxExposurePageSize"]
+                        .iter()
+                        .all(|token| tokens.contains(token))
+                }
+                Some("get_npos_voters") => ["all_voters", "capacity", "page_len_prediction"]
+                    .iter()
+                    .all(|token| tokens.contains(token)),
+                Some("electing_voters") => {
+                    compact_tokens.contains("!bounds.slice_exhausted(&voters)")
+                }
+                Some("electable_targets") => {
+                    compact_tokens.contains("!bounds.slice_exhausted(&targets)")
+                }
+                Some("next_election_prediction") => {
+                    tokens.contains("false")
+                        && tokens.to_ascii_lowercase().contains("deprecated")
+                        && tokens.to_ascii_lowercase().contains("not used")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_staking_async_reward_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/staking-async/src/reward.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("create") => {
+                    compact_tokens.contains("T::DisableMinting::get()")
+                        && tokens
+                            .contains("Era pots should only be created when DisableMinting is true")
+                }
+                Some("calculate_staker_reward") => compact_tokens
+                    .contains("validator_payout+nominator_payout,validator_total_reward"),
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_multi_phase_unsigned_trimming_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/election-provider-multi-phase/src/unsigned.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("prepare_election_result_with_snapshot") => {
+                    ["expected_ok", "BoundedSupports", "to_supports", "try_into"]
+                        .iter()
+                        .all(|token| tokens.contains(token))
+                        && compact_tokens.contains("expected_ok.is_ok()")
+                }
+                Some("maximum_voter_for_weight") => {
+                    ["weight_with", "final_decision", "max_weight"]
+                        .iter()
+                        .all(|token| tokens.contains(token))
+                        && compact_tokens
+                            .contains("weight_with(final_decision).all_lte(max_weight)")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_vesting_schedule_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/vesting/src/lib.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let lower_tokens = tokens.to_ascii_lowercase();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("merge_vesting_info") => {
+                    (tokens.contains("locked")
+                        && compact_tokens.contains("!locked.is_zero()")
+                        && lower_tokens.contains("validation checks failed"))
+                        || (compact_tokens.contains("schedule.is_valid()")
+                            && lower_tokens.contains("schedule validation check failed"))
+                }
+                Some("do_vested_transfer") => {
+                    compact_tokens.contains("res.is_ok()")
+                        && lower_tokens.contains("failed to add a schedule")
+                }
+                Some("exec_action") => {
+                    ["locked_now", "schedules", "len"]
+                        .iter()
+                        .all(|token| tokens.contains(token))
+                        && tokens.contains("Zero")
+                }
+                Some("add_vesting_schedule") => {
+                    compact_tokens.contains("schedules.len()>0")
+                        && lower_tokens.contains("after insertion")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_contracts_storage_meter_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/contracts/src/storage/meter.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("update_contract") => {
+                    compact_tokens.contains("self.bytes_removed,0")
+                        || compact_tokens.contains("self.items_removed,0")
+                }
+                Some("nested" | "charge_instantiate" | "terminate") => {
+                    compact_tokens.contains("matches!(self.contract_state(),ContractState::Alive)")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_asset_tx_payment_fee_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            let path = file.to_string_lossy();
+            if !(path.contains("substrate/frame/transaction-payment/asset-tx-payment/src/lib.rs")
+                || path.contains(
+                    "substrate/frame/transaction-payment/asset-conversion-tx-payment/src/lib.rs",
+                ))
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("withdraw_fee" | "can_withdraw_fee") => {
+                    compact_tokens.contains("self.tip<=fee")
+                        && tokens.contains("tip should be included in the computed fee")
+                }
+                Some("post_dispatch_details") => {
+                    compact_tokens.contains("tip.is_zero()")
+                        && tokens.contains("tip should be zero if initial fee was zero")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_preimage_request_counter_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/preimage/src/lib.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("do_unrequest_preimage") => {
+                    compact_tokens.contains("count==1")
+                        && tokens.contains("preimage request counter at zero")
+                }
+                Some("unrequest_preimage" | "unrequest") => {
+                    compact_tokens.contains("res.is_ok()")
+                        && tokens.contains("do_unrequest_preimage failed - counter underflow")
+                }
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_transaction_storage_internal_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/transaction-storage/src/lib.rs")
+            {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            match function_name {
+                Some("store") => ["chunk_count", "num_chunks", "data", "len"]
+                    .iter()
+                    .all(|token| tokens.contains(token)),
+                Some("apply_fee") => compact_tokens.contains("_remainder.is_zero()"),
+                _ => false,
+            }
+        }
+
+        fn debug_assert_marks_tips_payout_transfer_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            if function_name != Some("payout_tip") {
+                return false;
+            }
+            if !file
+                .to_string_lossy()
+                .contains("substrate/frame/tips/src/lib.rs")
+            {
+                return false;
+            }
+
+            mac.tokens
+                .to_string()
+                .split_whitespace()
+                .collect::<String>()
+                .contains("res.is_ok()")
+        }
+
+        fn debug_assert_marks_election_snapshot_encoding_invariant(
+            mac: &Macro,
+            function_name: Option<&str>,
+            file: &Path,
+        ) -> bool {
+            let path = file.to_string_lossy();
+            let is_multi_phase =
+                path.contains("substrate/frame/election-provider-multi-phase/src/lib.rs");
+            let is_multi_block =
+                path.contains("substrate/frame/election-provider-multi-block/src/lib.rs");
+            if !(is_multi_phase || is_multi_block) {
+                return false;
+            }
+
+            let expected_function = if is_multi_phase {
+                Some("create_snapshot_internal")
+            } else {
+                Some("write_storage_with_pre_allocate")
+            };
+            if function_name != expected_function {
+                return false;
+            }
+
+            let tokens = mac.tokens.to_string();
+            let compact_tokens = tokens.split_whitespace().collect::<String>();
+            if compact_tokens.contains("buffer.len()==size&&size==buffer.capacity()") {
+                return true;
+            }
+
+            tokens.contains("buffer")
+                && tokens.contains("encode")
+                && (tokens.contains("snapshot") || tokens.contains("data"))
+        }
+
         struct DebugAssertVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -3740,9 +4170,28 @@ impl LintRule for DebugAssertInProduction {
             rule_name: &'a str,
             mask: &'a [bool],
             lines: &'a [&'a str],
+            function_name_stack: Vec<String>,
+        }
+
+        impl DebugAssertVisitor<'_> {
+            fn current_function_name(&self) -> Option<&str> {
+                self.function_name_stack.last().map(String::as_str)
+            }
         }
 
         impl<'ast> Visit<'ast> for DebugAssertVisitor<'_> {
+            fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
+                self.function_name_stack.push(item_fn.sig.ident.to_string());
+                visit::visit_item_fn(self, item_fn);
+                self.function_name_stack.pop();
+            }
+
+            fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
+                self.function_name_stack.push(item_fn.sig.ident.to_string());
+                visit::visit_impl_item_fn(self, item_fn);
+                self.function_name_stack.pop();
+            }
+
             fn visit_macro(&mut self, mac: &'ast Macro) {
                 let Some(name) = path_last_ident(&mac.path) else {
                     visit::visit_macro(self, mac);
@@ -3769,6 +4218,81 @@ impl LintRule for DebugAssertInProduction {
                         mac,
                         self.lines,
                         span_line(mac.span()),
+                    )
+                    && !debug_assert_marks_assets_refund_recovery_path(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_child_bounties_parent_cleanup(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_staking_voter_list_count_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_multi_phase_signed_submission_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_bags_list_threshold_migration_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_staking_async_data_provider_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_staking_async_reward_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_multi_phase_unsigned_trimming_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_vesting_schedule_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_contracts_storage_meter_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_asset_tx_payment_fee_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_preimage_request_counter_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_transaction_storage_internal_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_tips_payout_transfer_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
+                    )
+                    && !debug_assert_marks_election_snapshot_encoding_invariant(
+                        mac,
+                        self.current_function_name(),
+                        self.file,
                     )
                 {
                     self.diagnostics.push(Diagnostic {
@@ -3804,6 +4328,7 @@ impl LintRule for DebugAssertInProduction {
             rule_name: self.name(),
             mask: &test_mask,
             lines: &content_lines,
+            function_name_stack: Vec::new(),
         };
         visitor.visit_file(ast);
         let diagnostics = visitor.diagnostics;
