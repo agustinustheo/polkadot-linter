@@ -1713,6 +1713,742 @@ pub fn unrelated_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_assets_refund_recovery_asserts_only() {
+    let code = r#"
+pub(super) fn do_refund(id: T::AssetId, who: &T::AccountId) -> DispatchResult {
+    if let Remove = Self::dead_account(&who, &mut details, &account.reason, false) {
+        Account::<T, I>::remove(&id, &who);
+    } else {
+        debug_assert!(false, "refund did not result in dead account?!");
+        Account::<T, I>::insert(id, &who, account);
+        return Ok(());
+    }
+    Ok(())
+}
+
+pub(super) fn do_refund_other(id: T::AssetId, who: &T::AccountId) -> DispatchResult {
+    if let Remove = Self::dead_account(&who, &mut details, &account.reason, false) {
+        Account::<T, I>::remove(&id, &who);
+    } else {
+        debug_assert!(false, "refund did not result in dead account?!");
+        Account::<T, I>::insert(id, &who, account);
+        return Ok(());
+    }
+    Ok(())
+}
+
+pub fn unrelated_debug_assert() {
+    debug_assert!(false, "refund did not result in dead account?!");
+}
+"#;
+    let diags = check_fixture("substrate/frame/assets/src/functions.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only assets refund recovery debug assertions"
+    );
+}
+
+#[test]
+fn sec002_skips_child_bounties_parent_cleanup_asserts_only() {
+    let code = r#"
+fn bounty_removed(bounty_id: BountyIndex) {
+    debug_assert!(ParentChildBounties::<T>::get(bounty_id).is_zero());
+    debug_assert!(ChildrenCuratorFees::<T>::get(bounty_id).is_zero());
+    debug_assert!(ChildBounties::<T>::iter_key_prefix(bounty_id).count().is_zero());
+    debug_assert!(ChildBountyDescriptionsV1::<T>::iter_key_prefix(bounty_id).count().is_zero());
+    ParentChildBounties::<T>::remove(bounty_id);
+    ParentTotalChildBounties::<T>::remove(bounty_id);
+}
+
+fn unrelated_cleanup(bounty_id: BountyIndex) {
+    debug_assert!(ParentChildBounties::<T>::get(bounty_id).is_zero());
+}
+"#;
+    let diags = check_fixture("substrate/frame/child-bounties/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only child-bounties parent cleanup debug assertions"
+    );
+}
+
+#[test]
+fn sec002_skips_staking_voter_list_count_invariants_only() {
+    let code = r#"
+pub fn do_add_nominator(who: &T::AccountId, nominations: Nominations<T>) {
+    Nominators::<T>::insert(who, nominations);
+    debug_assert_eq!(
+        Nominators::<T>::count() + Validators::<T>::count(),
+        T::VoterList::count()
+    );
+}
+
+pub fn do_remove_nominator(who: &T::AccountId) -> bool {
+    Nominators::<T>::remove(who);
+    debug_assert_eq!(
+        Nominators::<T>::count() + Validators::<T>::count(),
+        T::VoterList::count()
+    );
+    true
+}
+
+pub fn do_add_validator(who: &T::AccountId, prefs: ValidatorPrefs) {
+    Validators::<T>::insert(who, prefs);
+    debug_assert_eq!(
+        Nominators::<T>::count() + Validators::<T>::count(),
+        T::VoterList::count()
+    );
+}
+
+pub fn do_remove_validator(who: &T::AccountId) -> bool {
+    Validators::<T>::remove(who);
+    debug_assert_eq!(
+        Nominators::<T>::count() + Validators::<T>::count(),
+        T::VoterList::count()
+    );
+    true
+}
+
+pub fn unrelated_count_check() {
+    debug_assert_eq!(
+        Nominators::<T>::count() + Validators::<T>::count(),
+        T::VoterList::count()
+    );
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking/src/pallet/impls.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only staking VoterList count invariants in add/remove helpers"
+    );
+}
+
+#[test]
+fn sec002_skips_multi_phase_signed_submission_invariants_only() {
+    let code = r#"
+pub fn put(mut self) {
+    debug_assert!(self
+        .indices
+        .iter()
+        .map(|(_, _, index)| index)
+        .copied()
+        .max()
+        .map_or(true, |max_idx| self.next_idx > max_idx,));
+}
+
+pub fn insert(&mut self, submission: SignedSubmissionOf<T>) -> InsertResult<T> {
+    debug_assert!(!self.insertion_overlay.contains_key(&self.next_idx));
+    self.insertion_overlay.insert(self.next_idx, submission);
+    debug_assert!(!self.deletion_overlay.contains(&self.next_idx));
+    self.next_idx += 1;
+    InsertResult::Inserted
+}
+
+pub(crate) fn finalize_signed_phase_internal() -> (Weight, bool) {
+    debug_assert!(!SignedSubmissionIndices::<T>::exists());
+    debug_assert!(!SignedSubmissionNextIndex::<T>::exists());
+    debug_assert!(SignedSubmissionsMap::<T>::iter().next().is_none());
+    (Weight::zero(), false)
+}
+
+pub fn unrelated_storage_check() {
+    debug_assert!(!SignedSubmissionIndices::<T>::exists());
+}
+
+pub fn unrelated_overlay_check() {
+    debug_assert!(!self.insertion_overlay.contains_key(&self.next_idx));
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-phase/src/signed.rs",
+        code,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only multi-phase signed submission bookkeeping invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_bags_list_threshold_migration_invariants_only() {
+    let code = r#"
+pub fn migrate(old_thresholds: &[T::Score]) -> u32 {
+    debug_assert!(
+        crate::ListBags::<T, I>::iter()
+            .all(|(threshold, _)| old_thresholds.contains(&threshold)),
+        "not all `bag_upper` currently in storage are members of `old_thresholds`",
+    );
+    debug_assert!(
+        crate::ListNodes::<T, I>::iter()
+            .all(|(_, node)| old_thresholds.contains(&node.bag_upper)),
+        "not all `node.bag_upper` currently in storage are members of `old_thresholds`",
+    );
+    let _removed = Self::remove_many(&affected_accounts);
+    debug_assert_eq!(_removed, num_affected);
+    let _inserted = Self::insert_many(affected_accounts.into_iter(), score_of);
+    debug_assert_eq!(_inserted, num_affected);
+    for removed_bag in removed_bags {
+        debug_assert!(
+            !crate::ListNodes::<T, I>::iter().any(|(_, node)| node.bag_upper == removed_bag),
+            "no id should be present in a removed bag",
+        );
+    }
+    num_affected
+}
+
+pub fn unrelated_threshold_check(old_thresholds: &[T::Score]) {
+    debug_assert!(
+        crate::ListNodes::<T, I>::iter()
+            .all(|(_, node)| old_thresholds.contains(&node.bag_upper)),
+        "not all `node.bag_upper` currently in storage are members of `old_thresholds`",
+    );
+}
+
+pub fn unrelated_count_check() {
+    debug_assert_eq!(_removed, num_affected);
+}
+"#;
+    let diags = check_fixture("substrate/frame/bags-list/src/list/mod.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only bags-list threshold migration invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_staking_async_data_provider_invariants_only() {
+    let code = r#"
+pub(super) fn do_payout_stakers_by_page(
+    validator_stash: T::AccountId,
+    era: EraIndex,
+    page: Page,
+) -> DispatchResultWithPostInfo {
+    debug_assert!(nominator_payout_count <= T::MaxExposurePageSize::get());
+    Ok(Some(T::WeightInfo::payout_stakers_alive_staked(nominator_payout_count)).into())
+}
+
+pub(crate) fn get_npos_voters(
+    bounds: DataProviderBounds,
+    snapshot_status: &SnapshotStatus<T::AccountId>,
+) -> Vec<VoterOf<T>> {
+    // all_voters should have not re-allocated.
+    debug_assert!(all_voters.capacity() == page_len_prediction as usize);
+    all_voters
+}
+
+fn electing_voters(
+    bounds: DataProviderBounds,
+    page: PageIndex,
+) -> data_provider::Result<Vec<VoterOf<Self>>> {
+    if bounds.exhausted(None, CountBound(voters.len() as u32).into()) {
+        return Err("Voter snapshot too big");
+    }
+    debug_assert!(!bounds.slice_exhausted(&voters));
+    Ok(voters)
+}
+
+fn electable_targets(
+    bounds: DataProviderBounds,
+    page: PageIndex,
+) -> data_provider::Result<Vec<T::AccountId>> {
+    if bounds.exhausted(None, CountBound(targets.len() as u32).into()) {
+        return Err("Target snapshot too big");
+    }
+    debug_assert!(!bounds.slice_exhausted(&targets));
+    Ok(targets)
+}
+
+fn next_election_prediction(_: BlockNumberFor<T>) -> BlockNumberFor<T> {
+    debug_assert!(false, "this is deprecated and not used anymore");
+    sp_runtime::traits::Bounded::max_value()
+}
+
+fn on_relay_session_report(report: rc_client::SessionReport<Self::AccountId>) -> Weight {
+    debug_assert!(!leftover);
+    Weight::zero()
+}
+
+fn unrelated_voter_bound() {
+    debug_assert!(!bounds.slice_exhausted(&voters));
+}
+
+fn unrelated_payout_bound() {
+    debug_assert!(nominator_payout_count <= T::MaxExposurePageSize::get());
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking-async/src/pallet/impls.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 3,
+        "SEC002 should skip only staking-async data provider invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_staking_async_reward_invariants_only() {
+    let code = r#"
+pub(crate) fn create(era: EraIndex, kind: RewardKind) -> T::AccountId {
+    debug_assert!(
+        T::DisableMinting::get(),
+        "Era pots should only be created when DisableMinting is true"
+    );
+    T::RewardPots::pot_account(RewardPot::Era(era, kind))
+}
+
+fn calculate_staker_reward(
+    validator_total_reward: BalanceOf<T>,
+    validator_commission: Perbill,
+    validator_own_stake: BalanceOf<T>,
+    total_exposure: BalanceOf<T>,
+) -> sp_staking::StakerRewardResult<BalanceOf<T>> {
+    debug_assert_eq!(validator_payout + nominator_payout, validator_total_reward);
+    sp_staking::StakerRewardResult { validator_payout, nominator_payout }
+}
+
+fn unrelated_disable_minting_check() {
+    debug_assert!(
+        T::DisableMinting::get(),
+        "Era pots should only be created when DisableMinting is true"
+    );
+}
+
+fn unrelated_reward_sum_check() {
+    debug_assert_eq!(validator_payout + nominator_payout, validator_total_reward);
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking-async/src/reward.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only staking-async reward invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_multi_phase_unsigned_trimming_invariants_only() {
+    let code = r#"
+pub fn prepare_election_result_with_snapshot<Accuracy: PerThing128>() -> Result<(), MinerError> {
+    debug_assert!({
+        let expected_ok: Result<
+            crate::BoundedSupports<_, T::MaxWinners, T::MaxBackersPerWinner>,
+            _,
+        > = sp_npos_elections::to_supports(&staked).try_into();
+        expected_ok.is_ok()
+    });
+    Ok(())
+}
+
+pub fn maximum_voter_for_weight(
+    max_weight: Weight,
+    desired_winners: u32,
+    size: SolutionOrSnapshotSize,
+) -> u32 {
+    let final_decision = voters.min(size.voters);
+    debug_assert!(
+        weight_with(final_decision).all_lte(max_weight),
+        "weight_with({}) <= {}",
+        final_decision,
+        max_weight,
+    );
+    final_decision
+}
+
+pub fn unrelated_support_check() {
+    debug_assert!({
+        let expected_ok: Result<
+            crate::BoundedSupports<_, T::MaxWinners, T::MaxBackersPerWinner>,
+            _,
+        > = sp_npos_elections::to_supports(&staked).try_into();
+        expected_ok.is_ok()
+    });
+}
+
+pub fn unrelated_weight_check(max_weight: Weight) {
+    debug_assert!(
+        weight_with(final_decision).all_lte(max_weight),
+        "weight_with({}) <= {}",
+        final_decision,
+        max_weight,
+    );
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-phase/src/unsigned.rs",
+        code,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only multi-phase unsigned trimming invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_vesting_schedule_invariants_only() {
+    let code = r#"
+fn merge_vesting_info(
+    now: BlockNumberFor<T>,
+    schedule1: VestingInfo<BalanceOf<T>, BlockNumberFor<T>>,
+    schedule2: VestingInfo<BalanceOf<T>, BlockNumberFor<T>>,
+) -> Option<VestingInfo<BalanceOf<T>, BlockNumberFor<T>>> {
+    debug_assert!(
+        !locked.is_zero(),
+        "merge_vesting_info validation checks failed to catch a locked of 0"
+    );
+    debug_assert!(schedule.is_valid(), "merge_vesting_info schedule validation check failed");
+    Some(schedule)
+}
+
+fn do_vested_transfer(
+    source: &T::AccountId,
+    target: &T::AccountId,
+    schedule: VestingInfo<BalanceOf<T>, BlockNumberFor<T>>,
+) -> DispatchResult {
+    let res = Self::add_vesting_schedule(
+        target,
+        schedule.locked(),
+        schedule.per_block(),
+        schedule.starting_block(),
+    );
+    debug_assert!(res.is_ok(), "Failed to add a schedule when we had to succeed.");
+    Ok(())
+}
+
+fn exec_action(
+    schedules: Vec<VestingInfo<BalanceOf<T>, BlockNumberFor<T>>>,
+    action: VestingAction,
+) -> Result<(Vec<VestingInfo<BalanceOf<T>, BlockNumberFor<T>>>, BalanceOf<T>), DispatchError> {
+    debug_assert!(
+        locked_now > Zero::zero() && schedules.len() > 0 ||
+            locked_now == Zero::zero() && schedules.len() == 0
+    );
+    Ok((schedules, locked_now))
+}
+
+fn add_vesting_schedule(
+    who: &T::AccountId,
+    locked: BalanceOf<T>,
+    per_block: BalanceOf<T>,
+    starting_block: BlockNumberFor<T>,
+) -> DispatchResult {
+    ensure!(schedules.try_push(vesting_schedule).is_ok(), Error::<T>::AtMaxVestingSchedules);
+    debug_assert!(schedules.len() > 0, "schedules cannot be empty after insertion");
+    Ok(())
+}
+
+fn unrelated_merge_check() {
+    debug_assert!(
+        !locked.is_zero(),
+        "merge_vesting_info validation checks failed to catch a locked of 0"
+    );
+}
+
+fn unrelated_schedule_check() {
+    debug_assert!(schedule.is_valid(), "merge_vesting_info schedule validation check failed");
+}
+
+fn unrelated_transfer_check() {
+    debug_assert!(res.is_ok(), "Failed to add a schedule when we had to succeed.");
+}
+
+fn unrelated_exec_check() {
+    debug_assert!(
+        locked_now > Zero::zero() && schedules.len() > 0 ||
+            locked_now == Zero::zero() && schedules.len() == 0
+    );
+}
+
+fn unrelated_insert_check() {
+    debug_assert!(schedules.len() > 0, "schedules cannot be empty after insertion");
+}
+"#;
+    let diags = check_fixture("substrate/frame/vesting/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 5,
+        "SEC002 should skip only vesting schedule invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_contracts_storage_meter_invariants_only() {
+    let code = r#"
+pub fn update_contract<T: Config>(&self, info: Option<&mut ContractInfo<T>>) -> DepositOf<T> {
+    let info = if let Some(info) = info {
+        info
+    } else {
+        debug_assert_eq!(self.bytes_removed, 0);
+        debug_assert_eq!(self.items_removed, 0);
+        return bytes_deposit.saturating_add(&items_deposit);
+    };
+    Deposit::Charge(0u32.into())
+}
+
+pub fn nested(&self, limit: BalanceOf<T>) -> RawMeter<T, E, Nested> {
+    debug_assert!(matches!(self.contract_state(), ContractState::Alive));
+    RawMeter { limit, nested: Nested::OwnLimit, ..Default::default() }
+}
+
+pub fn charge_instantiate(
+    &mut self,
+    origin: &T::AccountId,
+    contract: &T::AccountId,
+    contract_info: &mut ContractInfo<T>,
+    code_info: &CodeInfo<T>,
+) -> Result<(), DispatchError> {
+    debug_assert!(matches!(self.contract_state(), ContractState::Alive));
+    Ok(())
+}
+
+pub fn terminate(&mut self, info: &ContractInfo<T>, beneficiary: T::AccountId) {
+    debug_assert!(matches!(self.contract_state(), ContractState::Alive));
+}
+
+pub fn unrelated_diff_check() {
+    debug_assert_eq!(self.items_removed, 0);
+}
+
+pub fn unrelated_contract_state_check() {
+    debug_assert!(matches!(self.contract_state(), ContractState::Alive));
+}
+"#;
+    let diags = check_fixture("substrate/frame/contracts/src/storage/meter.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only contracts storage meter invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_asset_tx_payment_fee_invariants_only() {
+    let code = r#"
+fn withdraw_fee(
+    &self,
+    who: &T::AccountId,
+    call: &T::RuntimeCall,
+    info: &DispatchInfoOf<T::RuntimeCall>,
+    fee: BalanceOf<T>,
+) -> Result<(BalanceOf<T>, InitialPayment<T>), TransactionValidityError> {
+    debug_assert!(self.tip <= fee, "tip should be included in the computed fee");
+    Ok((fee, InitialPayment::Nothing))
+}
+
+fn can_withdraw_fee(
+    &self,
+    who: &T::AccountId,
+    call: &T::RuntimeCall,
+    info: &DispatchInfoOf<T::RuntimeCall>,
+    fee: BalanceOf<T>,
+) -> Result<(), TransactionValidityError> {
+    debug_assert!(self.tip <= fee, "tip should be included in the computed fee");
+    Ok(())
+}
+
+fn post_dispatch_details(
+    pre: Self::Pre,
+    info: &DispatchInfoOf<T::RuntimeCall>,
+    post_info: &PostDispatchInfoOf<T::RuntimeCall>,
+    len: usize,
+    result: &DispatchResult,
+) -> Result<Weight, TransactionValidityError> {
+    debug_assert!(tip.is_zero(), "tip should be zero if initial fee was zero.");
+    Ok(extension_weight)
+}
+
+fn unrelated_fee_check() {
+    debug_assert!(self.tip <= fee, "tip should be included in the computed fee");
+}
+
+fn unrelated_tip_check() {
+    debug_assert!(tip.is_zero(), "tip should be zero if initial fee was zero.");
+}
+"#;
+    for path in [
+        "substrate/frame/transaction-payment/asset-tx-payment/src/lib.rs",
+        "substrate/frame/transaction-payment/asset-conversion-tx-payment/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, code);
+        let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+        assert_eq!(
+            sec002_count, 2,
+            "SEC002 should skip only asset transaction-payment fee invariants for {path}"
+        );
+    }
+}
+
+#[test]
+fn sec002_skips_preimage_request_counter_invariants_only() {
+    let code = r#"
+fn do_unrequest_preimage(hash: &T::Hash) -> DispatchResult {
+    match RequestStatusFor::<T>::get(hash).ok_or(Error::<T>::NotRequested)? {
+        RequestStatus::Requested { mut count, maybe_len, maybe_ticket } if count > 1 => {
+            count.saturating_dec();
+        },
+        RequestStatus::Requested { count, maybe_len, maybe_ticket } => {
+            debug_assert!(count == 1, "preimage request counter at zero?");
+        },
+        RequestStatus::Unrequested { .. } => return Err(Error::<T>::NotRequested.into()),
+    }
+    Ok(())
+}
+
+fn unrequest_preimage(hash: &T::Hash) {
+    let res = Self::do_unrequest_preimage(hash);
+    debug_assert!(res.is_ok(), "do_unrequest_preimage failed - counter underflow?");
+}
+
+fn unrequest(hash: &T::Hash) {
+    let res = Self::do_unrequest_preimage(hash);
+    debug_assert!(res.is_ok(), "do_unrequest_preimage failed - counter underflow?");
+}
+
+fn unrelated_count_check() {
+    debug_assert!(count == 1, "preimage request counter at zero?");
+}
+
+fn unrelated_result_check() {
+    debug_assert!(res.is_ok(), "do_unrequest_preimage failed - counter underflow?");
+}
+
+fn unnote_preimage(hash: &T::Hash) {
+    let res = Self::do_unrequest_preimage(hash);
+    debug_assert!(res.is_ok(), "unnote_preimage failed - request outstanding?");
+}
+"#;
+    let diags = check_fixture("substrate/frame/preimage/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 3,
+        "SEC002 should skip only preimage request counter invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_transaction_storage_internal_invariants_only() {
+    let code = r#"
+pub fn store(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+    Self::ensure_data_size_ok(data.len())?;
+    let chunks: Vec<_> = data.chunks(CHUNK_SIZE).map(|c| c.to_vec()).collect();
+    let chunk_count = chunks.len() as u32;
+    debug_assert_eq!(chunk_count, num_chunks(data.len() as u32));
+    Ok(())
+}
+
+fn apply_fee(sender: T::AccountId, size: u32) -> DispatchResult {
+    T::Currency::hold(&HoldReason::StorageFeeHold.into(), &sender, fee)?;
+    let (credit, _remainder) =
+        T::Currency::slash(&HoldReason::StorageFeeHold.into(), &sender, fee);
+    debug_assert!(_remainder.is_zero());
+    Ok(())
+}
+
+pub fn unrelated_chunk_check(data: Vec<u8>) {
+    debug_assert_eq!(chunk_count, num_chunks(data.len() as u32));
+}
+
+fn unrelated_remainder_check() {
+    debug_assert!(_remainder.is_zero());
+}
+"#;
+    let diags = check_fixture("substrate/frame/transaction-storage/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only transaction-storage internal invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_tips_payout_transfer_invariants_only() {
+    let code = r#"
+fn payout_tip(
+    hash: T::Hash,
+    tip: OpenTip<T::AccountId, BalanceOf<T, I>, BlockNumberFor<T>, T::Hash>,
+) -> DispatchResult {
+    let res = T::Currency::transfer(&treasury, &tip.finder, finders_fee, KeepAlive);
+    debug_assert!(res.is_ok());
+
+    let res = T::Currency::transfer(&treasury, &tip.who, payout, KeepAlive);
+    debug_assert!(res.is_ok());
+    Ok(())
+}
+
+fn unrelated_transfer_check() {
+    let res = T::Currency::transfer(&treasury, &who, amount, KeepAlive);
+    debug_assert!(res.is_ok());
+}
+"#;
+    let diags = check_fixture("substrate/frame/tips/src/lib.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip only tips payout transfer invariants"
+    );
+}
+
+#[test]
+fn sec002_skips_election_snapshot_encoding_invariants_only() {
+    let multi_phase = r#"
+fn create_snapshot_internal(
+    targets: Vec<T::AccountId>,
+    voters: Vec<VoterOf<T>>,
+    desired_targets: u32,
+) {
+    let snapshot = RoundSnapshot::<T::AccountId, VoterOf<T>> { voters, targets };
+    let size = snapshot.encoded_size();
+    let mut buffer = Vec::with_capacity(size);
+    snapshot.encode_to(&mut buffer);
+    debug_assert_eq!(buffer, snapshot.encode());
+    debug_assert!(buffer.len() == size && size == buffer.capacity());
+}
+
+fn unrelated_snapshot_check() {
+    debug_assert_eq!(buffer, snapshot.encode());
+    debug_assert!(buffer.len() == size && size == buffer.capacity());
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-phase/src/lib.rs",
+        multi_phase,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only multi-phase snapshot encoding invariants"
+    );
+
+    let multi_block = r#"
+fn write_storage_with_pre_allocate<E: Encode>(key: &[u8], data: E) -> T::Hash {
+    let size = data.encoded_size();
+    let mut buffer = Vec::with_capacity(size);
+    data.encode_to(&mut buffer);
+    debug_assert_eq!(buffer, data.encode());
+    debug_assert!(buffer.len() == size && size == buffer.capacity());
+    hash
+}
+
+fn unrelated_storage_check<E: Encode>(data: E) {
+    debug_assert_eq!(buffer, data.encode());
+    debug_assert!(buffer.len() == size && size == buffer.capacity());
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-block/src/lib.rs",
+        multi_block,
+    );
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 2,
+        "SEC002 should skip only multi-block snapshot encoding invariants"
+    );
+}
+
+#[test]
 fn sec002_skips_bounded_clear_prefix_result_assertions() {
     let code = r#"
 pub fn take_submission_with_data(round: u32, who: &T::AccountId) {
