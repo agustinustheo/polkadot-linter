@@ -2099,6 +2099,74 @@ impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
 }
 
 #[test]
+fn sec008_skips_genesis_config_helper_impls() {
+    let code = r#"
+impl<T: Config<I>, I: 'static> GenesisConfig<T, I> {
+    fn generate_random_accounts(count: u32) -> Vec<T::AccountId> {
+        (0..count)
+            .map(|index| {
+                let pair = Pair::from_string(&format!("//{index}"), None)
+                    .expect("genesis seed must derive");
+                T::AccountId::decode(&mut &pair.public().encode()[..])
+                    .expect("genesis account id must decode")
+            })
+            .collect()
+    }
+}
+
+impl<T: Config> GenesisConfig<T> {
+    fn generate_endowed_bonded_account(derivation: &str) -> T::AccountId {
+        let pair = Pair::from_string(derivation, None)
+            .expect("genesis seed must parse");
+        T::AccountId::decode(&mut &pair.public().encode()[..])
+            .expect("genesis account id must decode")
+    }
+}
+
+pub fn production_helper() {
+    let _value = Some(1u32).unwrap();
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking-async/src/pallet/mod.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip genesis config helper impls while still reporting production panics"
+    );
+}
+
+#[test]
+fn sec008_skips_const_unit_initializer_assertions() {
+    let code = r#"
+impl<T: Config> Precompiles<T> for Tuple {
+    const CHECK_COLLISION: () = {
+        let matchers = [for_tuples!( #( Tuple::MATCHER ),* )];
+        if BuiltinAddressMatcher::has_duplicates(&matchers) {
+            panic!("Precompiles with duplicate matcher detected")
+        }
+        for_tuples!(
+            #(
+                let is_fixed = Tuple::MATCHER.is_fixed();
+                let has_info = Tuple::HAS_CONTRACT_INFO;
+                assert!(is_fixed || !has_info, "Only fixed precompiles can have a contract info.");
+            )*
+        );
+    };
+}
+
+pub fn production_helper() {
+    panic!("runtime panic");
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/precompiles.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip compile-time unit const assertions while reporting runtime panics"
+    );
+}
+
+#[test]
 fn sec008_skips_runtime_benchmark_cfg_blocks() {
     let code = r#"
 #[cfg(feature = "runtime-benchmarks")]
@@ -2155,6 +2223,65 @@ pub fn helper(first: u32, second: u32) -> Result<u32, Error> {
 }
 
 #[test]
+fn production_security_rules_skip_remote_test_cfg_blocks() {
+    let code = r#"
+#[cfg(feature = "remote-test")]
+pub(crate) mod remote_tests {
+    pub async fn run_with_limits(first: u32, second: u32) -> Result<u32, Error> {
+        debug_assert!(first <= second);
+        let value = Some(first).unwrap();
+        Ok(value + second)
+    }
+}
+
+pub fn production_helper(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(second > 0);
+    let value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/state-trie-migration/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip remote-test-only blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_integrity_test_cfg_blocks() {
+    let code = r#"
+#[cfg(feature = "integrity-test")]
+mod integrity_tests {
+    fn ensure_priority_boost_is_sane(first: u32, second: u32) -> Result<u32, Error> {
+        debug_assert!(first <= second);
+        let value = Some(first).expect("integrity test setup must produce a value");
+        if value + second > 10 {
+            panic!("integrity test threshold exceeded");
+        }
+        Ok(value)
+    }
+}
+
+pub fn production_helper(first: u32, second: u32) -> Result<u32, Error> {
+    debug_assert!(second > 0);
+    let value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("bridges/modules/relayers/src/extension/priority.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip integrity-test-only blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
 fn production_security_rules_skip_cfg_expression_blocks() {
     let code = r#"
 pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
@@ -2176,6 +2303,94 @@ pub fn prod(first: u32, second: u32) -> Result<u32, Error> {
         assert_eq!(
             count, 1,
             "{rule_id} should skip cfg(test) expression blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_cfg_control_flow_blocks() {
+    let code = r#"
+pub fn prod(first: u32, second: u32, run_all: bool) -> Result<u32, Error> {
+    #[cfg(feature = "try-runtime")]
+    if run_all {
+        debug_assert!(first <= second);
+        let _value = Some(first).unwrap();
+        let _sum = first + second;
+    }
+
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/contracts/src/migration.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip cfg-gated control-flow blocks without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_cfg_multiline_statements() {
+    let code = r#"
+pub fn prod(first: u32, second: u32, cursor: Cursor) -> Result<u32, Error> {
+    #[cfg(feature = "try-runtime")]
+    T::Migrations::nth_post_upgrade(
+        cursor.index,
+        PreUpgradeBytes::<T>::get(&bounded_id).0,
+    )
+    .expect("Invalid cursor.index.")
+    .expect("Post-upgrade failed.");
+
+    #[cfg(feature = "try-runtime")]
+    let _sum = first + second;
+
+    debug_assert!(second > 0);
+    let _value = Some(second).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/migrations/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip cfg-gated multiline statements without masking following production code"
+        );
+    }
+}
+
+#[test]
+fn production_security_rules_skip_integrity_tests() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+        debug_assert!(T::MaxMembers::get() > 0);
+        T::BlockWeights::get().validate().expect("runtime config must be valid");
+    }
+}
+
+pub fn integrity_test(first: u32, second: u32) -> DispatchResult {
+    let _sum = first + second;
+    Ok(())
+}
+
+#[cfg(feature = "std")]
+pub fn native_only_helper(first: u32, second: u32) -> DispatchResult {
+    debug_assert!(first <= second);
+    let _value = Some(first).unwrap();
+    Ok(first + second)
+}
+"#;
+    let diags = check_fixture("substrate/frame/system/src/lib.rs", code);
+    for rule_id in ["SEC002", "SEC008", "SEC009"] {
+        let count = diags.iter().filter(|diag| diag.rule_id == rule_id).count();
+        assert_eq!(
+            count, 1,
+            "{rule_id} should skip integrity_test bodies while still reporting std-gated production helpers"
         );
     }
 }
