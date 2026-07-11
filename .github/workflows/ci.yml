@@ -31,7 +31,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-06-10
-          components: rustfmt
+          components: rustfmt,rustc-dev
 
       - name: Install build and test toolchain
         uses: dtolnay/rust-toolchain@master
@@ -53,6 +53,9 @@ jobs:
 
       - name: Build Polkadot Linter binary
         run: cargo +1.93.0 build
+
+      - name: Run rustc-backed SEC009 precision check
+        run: scripts/check-rustc-sec009.sh
 
       - name: Benchmark SEC rules against Polkadot SDK
         run: scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks

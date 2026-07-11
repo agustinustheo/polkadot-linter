@@ -35,6 +35,14 @@ log = "0.4"
 env_logger = "0.11"
 cargo_metadata = "0.20"
 
+[features]
+rustc-driver = []
+
+[[bin]]
+name = "polkadot-linter-rustc"
+path = "src/bin/polkadot-linter-rustc.rs"
+required-features = ["rustc-driver"]
+
 [dev-dependencies]
 tempfile = "3"
 insta = "1"
