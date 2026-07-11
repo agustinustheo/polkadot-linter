@@ -3045,6 +3045,29 @@ impl LintRule for DebugAssertInProduction {
                 })
         }
 
+        fn debug_assert_checks_bounded_clear_prefix_result(
+            mac: &Macro,
+            lines: &[&str],
+            line: usize,
+        ) -> bool {
+            let compact_tokens = mac
+                .tokens
+                .to_string()
+                .split_whitespace()
+                .collect::<String>();
+            if !compact_tokens.contains(".unique<=") {
+                return false;
+            }
+
+            let current_idx = line.saturating_sub(1);
+            let start = current_idx.saturating_sub(6);
+            let context = lines[start..current_idx.min(lines.len())].join("\n");
+            let lower_context = context.to_ascii_lowercase();
+            context.contains("clear_prefix(")
+                && lower_context.contains("safe to remove unbounded")
+                && lower_context.contains("at most")
+        }
+
         struct DebugAssertVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -3074,6 +3097,11 @@ impl LintRule for DebugAssertInProduction {
                     )
                     && !debug_assert_checks_defensive_result(mac, self.lines, span_line(mac.span()))
                     && !debug_assert_checks_balance_remainder(
+                        mac,
+                        self.lines,
+                        span_line(mac.span()),
+                    )
+                    && !debug_assert_checks_bounded_clear_prefix_result(
                         mac,
                         self.lines,
                         span_line(mac.span()),
