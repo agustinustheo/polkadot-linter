@@ -25,13 +25,14 @@ Validation evidence used for this matrix:
   findings, rustc path 1 finding; `SEC011` syntax path 1 finding, rustc path
   1 finding; `SEC012` syntax path 2 findings, rustc path 1 finding; `SEC013`
   syntax path 0 findings, rustc path 1 finding; `SEC017` syntax path 0
-  findings, rustc path 1 finding
+  findings, rustc path 1 finding; `SEC018` syntax path 0 findings, rustc path
+  1 finding
 - `scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks`: 13
   focused `SEC018` findings
 - `scripts/check-sec-benchmark-baseline.sh
-  .benchmarks/sec-rules-20260711T134459Z.json`: baseline matched
+  .benchmarks/sec-rules-20260711T135619Z.json`: baseline matched
 - unrestricted scan output:
-  `/tmp/polkadot-linter-sec-after-rustc-sec013-default-unrestricted.json`
+  `/tmp/polkadot-linter-sec-after-rustc-sec018-default-unrestricted.json`
 
 ## Research report concerns
 
@@ -61,8 +62,8 @@ Validation evidence used for this matrix:
 | `SEC017` had 21 findings with 57% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 12. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves an aliased `Vec` event payload that the syntax path misses while skipping a bounded event payload. Event payload safety still needs SDK-scale input-flow and weight-accounting evidence before this rule is audit-grade. |
 | Recommendation: run only `SEC001`, `SEC012`, `SEC013`, `SEC017` diff-scoped with a cap. | Superseded by current stabilization direction, not by final implementation yet. | The branch instead uses a focused validated `SEC018` benchmark and keeps unrestricted scans as stabilization evidence. The final goal is a compiler-backed linter, not a capped syntax-only integration. |
 | Recommendation: improve existing rule implementations. | Partially implemented. | Phase 1 added narrow, evidence-backed fixes and regression tests, reducing the unrestricted scan from the stale 5,563-result report to 348 current findings. |
-| Recommendation: develop new rules for weight annotations missing user-controlled input sizes. | Implemented as `SEC018`, but upstream findings are not fixed here. | `SEC018` is now the focused CI benchmark rule. The validated SDK baseline contains 13 findings, including the report's audit findings. |
-| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists with typed fixture-backed increments for `SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, and `SEC017`. The semantically hard rules still need full migration and SDK benchmark proof. |
+| Recommendation: develop new rules for weight annotations missing user-controlled input sizes. | Implemented as `SEC018`, with a first rustc-backed precision increment; upstream findings are not fixed here. | `SEC018` is now the focused CI benchmark rule. The validated SDK baseline contains 13 findings, including the report's audit findings. `scripts/check-rustc-hard-rules.sh` now also proves the rustc path resolves an aliased unbounded input in a weight-annotated callable that the syntax path misses. |
+| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists with typed fixture-backed increments for `SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`. The semantically hard rules still need full migration and SDK benchmark proof. |
 
 ## Audit report findings
 
@@ -81,10 +82,11 @@ benchmark is stale.
 The unrestricted rule set still emits 348 findings. That is evidence that Phase
 1 stabilization is not a substitute for Phase 2. The remaining hard classes are
 raw arithmetic, decode-depth, panic/debug-assert reachability,
-weight/input-accounting dataflow, and unbounded input/storage analysis.
+SDK-scale weight/input-accounting dataflow, and unbounded input/storage
+analysis.
 
 Only the first rustc-driver increments for `SEC001`, `SEC002`, `SEC003`,
-`SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, and `SEC017` have been
-implemented. The full compiler-backed transition remains incomplete until the
-hard rules above run through the compiler-backed pipeline with SDK benchmark
-proof and CI coverage.
+`SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018` have
+been implemented. The full compiler-backed transition remains incomplete until
+the hard rules above run through the compiler-backed pipeline with SDK
+benchmark proof and CI coverage.
