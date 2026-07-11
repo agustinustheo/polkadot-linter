@@ -88,6 +88,17 @@ use std::convert::Infallible;
 pub type Payload = Vec<u8>;
 pub struct BoundedVec<T, const N: usize>(T);
 pub type BoundedPayload = BoundedVec<u8, 32>;
+pub struct EncodedInput;
+
+pub trait Encode {
+    fn using_encoded<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R;
+}
+
+impl Encode for EncodedInput {
+    fn using_encoded<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        f(&[])
+    }
+}
 
 pub enum Event {
     Submitted { payload: Payload },
@@ -191,6 +202,21 @@ pub fn decode_alias_call(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     AliasCall::decode(&mut data)
 }
 
+pub fn decode_alias_in_encoded(payload: EncodedInput) -> Result<RuntimeCall, ()> {
+    payload.using_encoded(|mut encoded| AliasCall::decode(&mut encoded))
+}
+
+pub fn decode_alias_from_match(data: &[u8]) -> Result<RuntimeCall, ()> {
+    match (data, ()) {
+        (mut data, ()) => AliasCall::decode(&mut data),
+    }
+}
+
+pub fn decode_from_internal() -> Result<RuntimeCall, ()> {
+    let mut data = &[][..];
+    RuntimeCall::decode(&mut data)
+}
+
 pub fn decode_with_limit(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     RuntimeCall::decode_with_depth_limit(64, &mut data)
 }
@@ -228,8 +254,18 @@ pub fn unwrap_fallible_result(flag: bool) -> u32 {
     fallible_result(flag).expect("flag controls the error path")
 }
 
+#[allow(dead_code)]
+fn private_unwrap_fallible_result(flag: bool) -> u32 {
+    fallible_result(flag).expect("private helper is not a callable entry point")
+}
+
 pub fn raw_integer(a: u32, b: u32, c: u32) -> Result<u32, ()> {
     Ok((a + b) - c)
+}
+
+#[allow(dead_code)]
+fn private_raw_integer(a: u32, b: u32) -> Result<u32, ()> {
+    Ok(a + b)
 }
 
 pub struct Field;
@@ -379,35 +415,34 @@ echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
-test "$rustc_sec001_line" = "70"
+test "$rustc_sec001_line" = "81"
 test "$syn_sec002_count" = "2"
 test "$rustc_sec002_count" = "1"
-test "$rustc_sec002_line" = "127"
-test "$syn_sec003_count" = "0"
-test "$rustc_sec003_count" = "1"
-test "$rustc_sec003_line" = "110"
-test "$syn_sec008_count" = "2"
+test "$rustc_sec002_line" = "153"
+test "$syn_sec003_count" = "1"
+test "$rustc_sec003_count" = "3"
+test "$syn_sec008_count" = "3"
 test "$rustc_sec008_count" = "1"
-test "$rustc_sec008_line" = "147"
-test "$syn_sec009_count" = "2"
+test "$syn_sec009_count" = "3"
 test "$rustc_sec009_count" = "1"
-test "$rustc_sec009_line" = "151"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "1"
-test "$rustc_sec011_line" = "89"
+test "$rustc_sec008_line" = "173"
+test "$rustc_sec009_line" = "182"
+test "$rustc_sec011_line" = "100"
 test "$syn_sec012_count" = "2"
 test "$rustc_sec012_count" = "1"
-test "$rustc_sec012_line" = "97"
+test "$rustc_sec012_line" = "108"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "1"
-test "$rustc_sec013_line" = "34"
+test "$rustc_sec013_line" = "45"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "1"
-test "$rustc_sec017_line" = "12"
+test "$rustc_sec017_line" = "23"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "1"
-test "$rustc_sec018_line" = "70"
-test "$rustc_filtered_count" = "10"
+test "$rustc_sec018_line" = "81"
+test "$rustc_filtered_count" = "12"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "2"
 test "$rustc_rule_filtered_sec008_count" = "1"

@@ -1,5 +1,7 @@
 use std::{
-    env, fmt, fs,
+    env,
+    ffi::OsString,
+    fmt, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -14,7 +16,7 @@ pub struct RustcPipelineOptions {
     pub manifest_path: PathBuf,
     pub packages: Vec<String>,
     pub driver_path: PathBuf,
-    pub toolchain: Option<String>,
+    pub toolchain: String,
     pub target_dir: Option<PathBuf>,
     pub rules: Vec<String>,
     pub file_filters: Vec<String>,
@@ -31,6 +33,11 @@ pub enum RustcPipelineError {
         source: serde_json::Error,
     },
     CargoFailed {
+        status: Option<i32>,
+        stderr: String,
+    },
+    ToolchainProbe {
+        toolchain: String,
         status: Option<i32>,
         stderr: String,
     },
@@ -58,6 +65,17 @@ impl fmt::Display for RustcPipelineError {
                 }
                 Ok(())
             }
+            RustcPipelineError::ToolchainProbe {
+                toolchain,
+                status,
+                stderr,
+            } => write!(
+                f,
+                "failed to locate rustc compiler libraries for toolchain {toolchain} (status {}): {stderr}",
+                status
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "signal".to_string())
+            ),
         }
     }
 }
@@ -91,13 +109,12 @@ pub fn run_cargo_check(
         .as_ref()
         .map(|path| absolutize(path))
         .transpose()?;
+    let rustc_library_dir = rustc_library_dir(&options.toolchain)?;
 
     fs::File::create(&jsonl_path)?;
 
     let mut command = Command::new("cargo");
-    if let Some(toolchain) = &options.toolchain {
-        command.arg(format!("+{toolchain}"));
-    }
+    command.arg(format!("+{}", options.toolchain));
     command.arg("check");
     command.arg("--manifest-path").arg(&manifest_path);
     for package in &options.packages {
@@ -115,6 +132,7 @@ pub fn run_cargo_check(
         .env("POLKADOT_LINTER_RUSTC_JSONL", &jsonl_path)
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
+    prepend_dynamic_library_path(&mut command, &rustc_library_dir);
     if !options.rules.is_empty() {
         command.env("POLKADOT_LINTER_RUSTC_RULES", options.rules.join(","));
     }
@@ -158,6 +176,38 @@ pub fn run_cargo_check(
     });
 
     Ok(diagnostics.into_iter().map(Into::into).collect())
+}
+
+fn rustc_library_dir(toolchain: &str) -> Result<PathBuf, RustcPipelineError> {
+    let output = Command::new("rustc")
+        .arg(format!("+{toolchain}"))
+        .args(["--print", "sysroot"])
+        .output()?;
+    if !output.status.success() {
+        return Err(RustcPipelineError::ToolchainProbe {
+            toolchain: toolchain.to_string(),
+            status: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        });
+    }
+
+    Ok(PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()).join("lib"))
+}
+
+fn prepend_dynamic_library_path(command: &mut Command, library_dir: &Path) {
+    let variable = if cfg!(target_os = "macos") {
+        "DYLD_LIBRARY_PATH"
+    } else if cfg!(target_os = "windows") {
+        "PATH"
+    } else {
+        "LD_LIBRARY_PATH"
+    };
+    let mut paths = vec![library_dir.to_path_buf()];
+    if let Some(existing) = env::var_os(variable) {
+        paths.extend(env::split_paths(&existing));
+    }
+    let joined = env::join_paths(paths).unwrap_or_else(|_| OsString::from(library_dir));
+    command.env(variable, joined);
 }
 
 fn read_jsonl_diagnostics(path: &Path) -> Result<Vec<RustcDiagnostic>, RustcPipelineError> {

@@ -10,7 +10,7 @@ Current branch:
 
 - worktree branch: `fix/implementation-bugs-false-positives`
 - pinned SDK submodule commit: `b18fb34a8ae348df5866e4b718d82871d744e60d`
-- focused CI benchmark: 13 validated `SEC018` findings
+- focused CI syntax benchmark: 13 validated `SEC018` findings
 - unrestricted SEC scan: 348 findings
 
 Validation evidence used for this matrix:
@@ -20,8 +20,8 @@ Validation evidence used for this matrix:
 - `cargo +1.93.0 build`: passed
 - `scripts/check-rustc-hard-rules.sh`: `SEC001` syntax path 0 findings,
   rustc path 1 finding; `SEC002` syntax path 2 findings, rustc path 1
-  finding; `SEC003` syntax path 0 findings, rustc path 1 finding; `SEC008`
-  syntax path 2 findings, rustc path 1 finding; `SEC009` syntax path 2
+  finding; `SEC003` syntax path 1 finding, rustc path 3 findings; `SEC008`
+  syntax path 3 findings, rustc path 1 finding; `SEC009` syntax path 3
   findings, rustc path 1 finding; `SEC011` syntax path 1 finding, rustc path
   1 finding; `SEC012` syntax path 2 findings, rustc path 1 finding; `SEC013`
   syntax path 0 findings, rustc path 1 finding; `SEC017` syntax path 0
@@ -30,46 +30,48 @@ Validation evidence used for this matrix:
   findings and no other rule IDs
 - `scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks`:
   `pallet-multisig` checked successfully through the public `polkadot-linter`
-  CLI using `--rustc-cargo-manifest` and the rustc driver underneath, with 10
-  package-local, deduplicated rustc-backed `SEC001`/`SEC008` diagnostics
-  captured in the public JSON output; baseline
+  CLI using automatic Cargo manifest discovery and default compiler-backed routing, with
+  10 package-local, deduplicated rustc-backed `SEC001`/`SEC008` diagnostics
+  captured in the public JSON output after syntax findings for those migrated
+  rule IDs were demoted; baseline
   `benchmarks/polkadot-sdk-rustc-multisig-sec001-sec008-baseline.tsv` matched
 - `scripts/check-rustc-sdk-sec003.sh .repos/polkadot-sdk .benchmarks`:
   `pallet-xcm` checked successfully through the public `polkadot-linter` CLI
-  using `--rustc-cargo-manifest`; the current syntax rule reports 0
-  package-local `SEC003` findings while the rustc-backed rule reports 1
-  associated-projection decode finding at
+  using automatic Cargo manifest discovery and default compiler-backed routing; the
+  current syntax rule reports 0 package-local `SEC003` findings while the
+  rustc-backed rule reports 1 associated-projection decode finding at
   `polkadot/xcm/pallet-xcm/src/lib.rs:4111`; baseline
   `benchmarks/polkadot-sdk-rustc-pallet-xcm-sec003-baseline.tsv` matched
 - `scripts/check-rustc-sdk-sec009.sh .repos/polkadot-sdk .benchmarks`:
   `pallet-collective` checked successfully through the public
-  `polkadot-linter` CLI using `--rustc-cargo-manifest`; the current syntax
-  rule reports 5 package-local `SEC009` findings while the rustc-backed rule
-  reports 2 resolved-integer findings; baseline
+  `polkadot-linter` CLI using automatic Cargo manifest discovery and default
+  compiler-backed routing; the current syntax rule reports 5 package-local
+  `SEC009` findings while the final routed output contains the 2 rustc-backed
+  resolved-integer findings; baseline
   `benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv` matched
 - `scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks`: 13
   focused `SEC018` findings
 - `scripts/check-sec-benchmark-baseline.sh
-  .benchmarks/sec-rules-20260711T161609Z.json`: baseline matched
+  .benchmarks/sec-rules-20260711T172345Z.json`: baseline matched
 - unrestricted scan output:
-  `/tmp/polkadot-linter-sec-after-rustc-sec003-closure-unrestricted.json`
+  `/tmp/polkadot-linter-sec-after-default-rustc-routing-unrestricted.json`
 
 ## Research report concerns
 
 | Report concern | Current status | Evidence / response |
 | --- | --- | --- |
-| Full SEC run produced 5,563 findings across 15 rules. | Fixed for default CI benchmark; still true that unrestricted SEC remains noisy. | The default benchmark is now intentionally focused on the validated `SEC018` baseline and emits 13 findings. The unrestricted scan now emits 348 findings, not 5,563, but that unrestricted mode is still not audit-grade. |
+| Full SEC run produced 5,563 findings across 15 rules. | Fixed for focused CI benchmark; still true that unrestricted SEC remains noisy. | The focused syntax benchmark is intentionally limited to the validated `SEC018` baseline and emits 13 findings. The unrestricted syntax scan now emits 348 findings, not 5,563, but that unrestricted mode is still not audit-grade. |
 | `SEC004` and `SEC005` produced zero findings, so usefulness could not be judged from the benchmark. | Still true. | No current SDK benchmark evidence establishes audit precision for these rules. They are not part of the minimum compiler-backed migration set unless later evidence identifies them as semantically hard. |
 | `SEC001` had 104 findings with 60% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Phase 1 added privileged-origin and bounded-input handling. Current unrestricted count is 7. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves an aliased `Vec` input missed by the syntax rule. Remaining trust depends on resolved origin, parameter bounds, and input-flow evidence. |
 | `SEC001` false positives on `ensure_root` or privileged-origin extrinsics. | Partially fixed with tests; still needs semantic origin resolution for audit grade. | Stabilization added narrow privileged-origin and bounded-`Vec` cases with regression tests. The rustc increment resolves input types, but origin semantics across aliases/helpers still need compiler-backed modeling. |
 | `SEC002` had 457 findings with 77% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 70. Many exact SDK invariant clusters are suppressed with tests. `scripts/check-rustc-hard-rules.sh` now proves the rustc path reports only expanded active `debug_assert!` calls and skips cfg-disabled source. Full debug-assert safety still needs broader control-flow context and SDK benchmark proof. |
-| `SEC003` had 571 findings with 97% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` now reports decode calls using resolved return/receiver types, walks closure bodies, and handles associated projections such as `<T as Config>::RuntimeCall`. `scripts/check-rustc-hard-rules.sh` proves it catches an alias to `RuntimeCall` that the syntax path misses while skipping internal decode types. `scripts/check-rustc-sdk-sec003.sh` proves SDK coverage on `pallet-xcm`: syntax reports 0 findings while rustc reports the associated-projection decode at line 4111. Full migration still needs user-controlled input evidence and broader SDK package coverage. |
-| `SEC003` fired on non-recursive internal types and non-user-controlled decode calls. | Partially superseded by rustc-driver increment; still incomplete. | The rustc fixture skips `MigrationState::decode` because the resolved type is not a recursive runtime target. The SDK check also filters macro-generated pallet attribute decode noise. Non-user-controlled input taint remains future compiler-backed/dataflow work. |
+| `SEC003` had 571 findings with 97% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` now reports decode calls using resolved return/receiver types, handles associated projections such as `<T as Config>::RuntimeCall`, and requires propagated input evidence through parameters, locals, match patterns, and `using_encoded` closures. `scripts/check-rustc-hard-rules.sh` proves it catches aliased and match-derived runtime decodes while skipping an internal buffer. `scripts/check-rustc-sdk-sec003.sh` proves SDK coverage on `pallet-xcm`: syntax reports 0 findings while rustc reports the associated-projection decode at line 4111. Interprocedural taint and broader SDK package coverage remain. |
+| `SEC003` fired on non-recursive internal types and non-user-controlled decode calls. | Partially superseded by rustc-driver increment; still incomplete. | The rustc fixture skips `MigrationState::decode` because the resolved type is not a recursive runtime target and skips `RuntimeCall::decode` over an internal constant buffer. The SDK check also filters macro-generated pallet attribute decode noise. Cross-function input taint remains future compiler-backed/dataflow work. |
 | `SEC006` had 7 findings with 86% sampled FP rate. | Partially fixed; residual low volume remains. | Current unrestricted count is 1. Existing tests cover checked/discarded repatriate patterns. No compiler-backed migration is currently required by the report, but any remaining finding still needs manual validation. |
 | `SEC007` had 28 findings with 89% sampled FP rate. | Partially fixed; residual low volume remains. | Current unrestricted count is 2. Tests cover propagated errors, intentional ignores, and `try_mutate` false positives. |
-| `SEC008` had 3,524 findings with 94% sampled FP rate and was the biggest noise source. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 45. Stabilization removed benchmark/test/genesis/runtime-benchmark noise and documented invariant traps. `scripts/check-rustc-hard-rules.sh` now proves the rustc path can suppress `Result<T, Infallible>::unwrap()` while still reporting a reachable fallible `expect`. Full panic/debug-assert migration still needs macro-expanded cfg and control-flow evidence. |
+| `SEC008` had 3,524 findings with 94% sampled FP rate and was the biggest noise source. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 45. Stabilization removed benchmark/test/genesis/runtime-benchmark noise and documented invariant traps. The rustc path suppresses `Result<T, Infallible>::unwrap()` and private helper-only `expect` calls while retaining a public fallible `expect`. Full panic/debug-assert migration still needs interprocedural reachability, macro-expanded cfg, and control-flow evidence. |
 | `SEC008` false positives in `genesis_build`, benchmarks, `runtime-benchmarks`, and type-provably infallible conversions. | Partially superseded by rustc-driver increment; still incomplete. | Tests cover benchmark/runtime-benchmark/genesis/helper paths. The rustc fixture now covers one type-provably infallible conversion via `Result<T, Infallible>`. Broader panic reachability and debug assertion handling still require compiler-backed control-flow and cfg evidence. |
-| `SEC009` had 706 findings with 79% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` now reports `SEC009` from HIR/typeck for integer operands only. `scripts/check-rustc-hard-rules.sh` proves overloaded `Add` is removed on a fixture. `scripts/check-rustc-sdk-sec009.sh` proves SDK package precision on `pallet-collective`: syntax reports 5 findings, while rustc reports 2 resolved-integer findings and drops generic/operator and macro-generated noise. The default unrestricted syntax path still emits 142 `SEC009` findings, so the rule is not yet fully compiler-backed by default. |
+| `SEC009` had 706 findings with 79% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` now reports `SEC009` from HIR/typeck for integer operands only in public or hook entry points. `scripts/check-rustc-hard-rules.sh` proves overloaded `Add` and private helper arithmetic are removed on a fixture. `scripts/check-rustc-sdk-sec009.sh` proves SDK package precision on `pallet-collective`: syntax reports 5 findings, while default compiler-backed routing emits the 2 rustc-backed resolved-integer findings and drops generic/operator and macro-generated noise. Whole-program reachability still needs interprocedural analysis. |
 | `SEC010` had 16 findings with 88% sampled FP rate. | Still true unless later scoped evidence proves otherwise. | Current unrestricted scan has no `SEC010` findings after stabilization, but there is no compiler-backed proof for hook transactional semantics. |
 | `SEC011` had 4 findings with 100% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 1. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves associated-call owner types and reports `StorageMap::iter()` while skipping a syntax-only `Domain::iter()` false positive. SDK-scale hook/dispatchable coverage still needs the full compiler-backed FRAME model. |
 | `SEC012` had 14 findings with 64% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 8. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves `clear_prefix` owner types and reports unbounded limits only for FRAME storage owners, skipping a syntax-only `Domain::clear_prefix` false positive. SDK-scale migration still needs the compiler-backed pipeline wired as the final authority for this rule. |
@@ -83,7 +85,7 @@ Validation evidence used for this matrix:
 | Recommendation: run only `SEC001`, `SEC012`, `SEC013`, `SEC017` diff-scoped with a cap. | Superseded by current stabilization direction, not by final implementation yet. | The branch instead uses a focused validated `SEC018` benchmark and keeps unrestricted scans as stabilization evidence. The final goal is a compiler-backed linter, not a capped syntax-only integration. |
 | Recommendation: improve existing rule implementations. | Partially implemented. | Phase 1 added narrow, evidence-backed fixes and regression tests, reducing the unrestricted scan from the stale 5,563-result report to 348 current findings. |
 | Recommendation: develop new rules for weight annotations missing user-controlled input sizes. | Implemented as `SEC018`, with a first rustc-backed precision increment; upstream findings are not fixed here. | `SEC018` is now the focused CI benchmark rule. The validated SDK baseline contains 13 findings, including the report's audit findings. `scripts/check-rustc-hard-rules.sh` now also proves the rustc path resolves an aliased unbounded input in a weight-annotated callable that the syntax path misses. |
-| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists with typed fixture-backed increments for `SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`. The public CLI now invokes that driver through Cargo for pinned SDK `pallet-multisig`. The semantically hard rules still need full migration and SDK benchmark proof. |
+| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists with typed fixture-backed increments for `SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`. The public CLI now discovers a single project manifest and invokes that driver by default for migrated SEC rules, demoting syntax findings for those rule IDs. The semantically hard rules still need broader migration and SDK benchmark proof. |
 
 ## Audit report findings
 
@@ -95,9 +97,9 @@ Validation evidence used for this matrix:
 
 ## Current conclusion
 
-The immediate benchmark-noise problem is mitigated for CI because the default
-benchmark now emits only the validated `SEC018` baseline. The old 5,563-finding
-benchmark is stale.
+The immediate benchmark-noise problem is mitigated for CI because the focused
+syntax baseline explicitly uses `--no-rustc` and emits only the validated
+`SEC018` findings. The old 5,563-finding benchmark is stale.
 
 The unrestricted rule set still emits 348 findings. That is evidence that Phase
 1 stabilization is not a substitute for Phase 2. The remaining hard classes are
@@ -107,7 +109,9 @@ analysis.
 
 Only the first rustc-driver increments for `SEC001`, `SEC002`, `SEC003`,
 `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018` have
-been implemented. The stable CLI now has CI-covered Cargo integration against
-one pinned SDK pallet through the rustc-backed driver. The full compiler-backed
-transition remains incomplete until the hard rules above run through the
-compiler-backed pipeline with SDK benchmark proof and CI coverage.
+been implemented. The stable CLI now has CI-covered Cargo integration that uses
+automatic manifest-backed routing for migrated SEC rules and demotes syntax
+findings for those rule IDs. The full compiler-backed transition remains
+incomplete until the hard rules above have broader SDK benchmark proof,
+interprocedural dataflow/control-flow evidence where needed, and migration of
+the remaining syntax-authoritative rules.

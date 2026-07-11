@@ -19,6 +19,7 @@ SUMMARY_TXT="$OUTPUT_DIR/sec-rules-$TIMESTAMP-summary.txt"
 
 cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --rules SEC \
+  --no-rustc \
   -f json \
   "$TARGET_PATH" > "$RAW_JSON"
 

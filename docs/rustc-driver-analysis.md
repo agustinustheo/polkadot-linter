@@ -41,9 +41,10 @@ The driver currently includes typed checks for:
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
   reads resolved call return types and decode receiver types, so aliases to
   `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
-  resolution instead of source text matching. It also walks closure bodies, so
-  decode calls inside helpers such as `using_encoded(|mut bytes| ...)` are
-  analyzed, and filters macro-generated attribute-line spans.
+  resolution instead of source text matching. It requires direct input evidence
+  through function parameters, local bindings, match-arm bindings, and
+  `using_encoded(|mut bytes| ...)` closure inputs, and filters macro-generated
+  attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited.
@@ -116,27 +117,35 @@ driver:
   parameter is hidden behind a `Payload` alias, while the rustc-driver path
   resolves the alias and reports it while skipping bounded inputs
 
-The stable `polkadot-linter` CLI can now invoke the compiler-backed path for a
-Cargo package and emit normal linter diagnostics:
+The stable `polkadot-linter` CLI now treats the migrated SEC rules as
+compiler-backed by default when scan paths resolve to one Cargo project. It
+discovers the nearest `Cargo.toml`, uses `nightly-2025-06-10` unless overridden,
+and supplies that toolchain's compiler-library directory to the rustc wrapper.
+For selected migrated rules, syntax findings are demoted and removed from the
+final output, then the rustc-backed diagnostics are emitted in the normal
+public diagnostic format. Use `--no-rustc` only to request a legacy syntax-only
+scan:
 
 ```sh
 polkadot-linter \
-  --no-syntax \
   --format json \
-  --compiler-backed-rules SEC001,SEC008 \
-  --rustc-cargo-manifest .repos/polkadot-sdk/Cargo.toml \
+  --rules SEC001,SEC008 \
   --rustc-package pallet-multisig \
   --rustc-lib \
   --rustc-no-default-features \
   --rustc-driver target/debug/polkadot-linter-rustc \
   --rustc-toolchain nightly-2025-06-10 \
-  --rustc-source-filter substrate/frame/multisig/src/lib.rs
+  --rustc-source-filter substrate/frame/multisig/src/lib.rs \
+  .repos/polkadot-sdk/substrate/frame/multisig
 ```
 
 Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
 `RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
-back into the public diagnostic format. In wrapper mode, Cargo passes the real
-rustc path as the first argument; the driver preserves that invocation,
+back into the public diagnostic format. When `--compiler-backed-rules` is not
+specified, the CLI expands the requested rule filters to the migrated
+compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`,
+`SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
+passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
 JSONL file named by `POLKADOT_LINTER_RUSTC_JSONL`. Diagnostics are sorted and
 deduplicated before JSON/JSONL output. `POLKADOT_LINTER_RUSTC_FILE_CONTAINS`
@@ -153,8 +162,9 @@ scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
 ```
 
 That script builds `polkadot-linter-rustc`, invokes the stable
-`polkadot-linter` CLI with `--rustc-cargo-manifest`, and verifies
-package-local compiler-backed findings are captured from the pinned SDK
+`polkadot-linter` CLI without `--rustc-cargo-manifest`, `--no-syntax`, or
+`--compiler-backed-rules`, and verifies package-local
+compiler-backed findings are captured from the pinned SDK
 `pallet-multisig` package. The raw smoke artifact is filtered to the
 `substrate/frame/multisig/src/lib.rs` package file and currently contains 10
 deduplicated public linter diagnostics from the explicitly selected `SEC001`
@@ -175,7 +185,9 @@ on pinned SDK `pallet-xcm`. The syntax rule reports 0 package-local `SEC003`
 findings, while the rustc-backed rule reports the associated projection decode
 at `polkadot/xcm/pallet-xcm/src/lib.rs:4111` after walking the closure body and
 resolving `<T as Config>::RuntimeCall`. The rustc-backed summary is checked
-against `benchmarks/polkadot-sdk-rustc-pallet-xcm-sec003-baseline.tsv`.
+against `benchmarks/polkadot-sdk-rustc-pallet-xcm-sec003-baseline.tsv`, and
+the public CLI run relies on default compiler-backed routing rather than
+`--no-syntax`.
 
 Run the SDK `SEC009` precision check with:
 
@@ -189,7 +201,8 @@ on pinned SDK `pallet-collective`. The syntax rule reports 5 package-local
 rule reports 2 findings after using resolved integer operand types, ignoring
 macro-generated attribute spans, and deduplicating nested arithmetic to one
 finding per affected source line. The rustc-backed summary is checked against
-`benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`.
+`benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`, and the public
+CLI run relies on default compiler-backed routing rather than `--no-syntax`.
 
 The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
 the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
