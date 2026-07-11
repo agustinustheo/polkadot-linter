@@ -6051,6 +6051,37 @@ impl LintRule for VecInEvents {
 
         let test_mask = cfg_test_module_mask(ctx.content);
         let ast = ast_file(ctx)?;
+        let compact_content = ctx
+            .content
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
+
+        fn named_vec_event_fields(item: &ItemEnum) -> Vec<(String, String)> {
+            item.variants
+                .iter()
+                .flat_map(|variant| match &variant.fields {
+                    syn::Fields::Named(fields) => fields
+                        .named
+                        .iter()
+                        .filter(|field| type_contains_named(&field.ty, &["Vec"]))
+                        .filter_map(|field| {
+                            field
+                                .ident
+                                .as_ref()
+                                .map(|ident| (variant.ident.to_string(), ident.to_string()))
+                        })
+                        .collect::<Vec<_>>(),
+                    syn::Fields::Unnamed(_) | syn::Fields::Unit => Vec::new(),
+                })
+                .collect()
+        }
+
+        fn bounded_vec_event_flow(content: &str, variant_name: &str, field_name: &str) -> bool {
+            content.contains(&format!("{field_name}:BoundedVec<"))
+                && content.contains(&format!("{field_name}.into()"))
+                && content.contains(&format!("Event::{}{{", variant_name))
+        }
 
         struct EventVisitor<'a> {
             mask: &'a [bool],
@@ -6059,6 +6090,7 @@ impl LintRule for VecInEvents {
             severity: Severity,
             rule_id: &'a str,
             rule_name: &'a str,
+            compact_content: &'a str,
         }
 
         impl<'ast> Visit<'ast> for EventVisitor<'_> {
@@ -6069,19 +6101,23 @@ impl LintRule for VecInEvents {
                     return;
                 }
 
-                let has_vec_field = item.variants.iter().any(|variant| match &variant.fields {
-                    syn::Fields::Named(fields) => fields
-                        .named
-                        .iter()
-                        .any(|field| type_contains_named(&field.ty, &["Vec"])),
-                    syn::Fields::Unnamed(fields) => fields
-                        .unnamed
-                        .iter()
-                        .any(|field| type_contains_named(&field.ty, &["Vec"])),
-                    syn::Fields::Unit => false,
+                let named_vec_fields = named_vec_event_fields(item);
+                let has_unnamed_vec_field = item.variants.iter().any(|variant| {
+                    matches!(
+                        &variant.fields,
+                        syn::Fields::Unnamed(fields)
+                            if fields.unnamed.iter().any(|field| type_contains_named(&field.ty, &["Vec"]))
+                    )
                 });
+                let all_named_vec_fields_are_bounded_flows = !named_vec_fields.is_empty()
+                    && named_vec_fields.iter().all(|(variant_name, field_name)| {
+                        bounded_vec_event_flow(self.compact_content, variant_name, field_name)
+                    });
+                let has_vec_field = has_unnamed_vec_field || !named_vec_fields.is_empty();
 
-                if has_vec_field {
+                if has_vec_field
+                    && (has_unnamed_vec_field || !all_named_vec_fields_are_bounded_flows)
+                {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),
                         rule_name: self.rule_name.to_string(),
@@ -6114,6 +6150,7 @@ impl LintRule for VecInEvents {
             severity: config.rule_severity(self.id(), Severity::Warning),
             rule_id: self.id(),
             rule_name: self.name(),
+            compact_content: &compact_content,
         };
         visitor.visit_file(ast);
 
