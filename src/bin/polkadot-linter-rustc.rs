@@ -49,13 +49,14 @@ impl Callbacks for PolkadotCallbacks {
         }
 
         for def_id in tcx.hir_body_owners() {
-            if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            let body_owner_kind = tcx.hir_body_owner_kind(def_id);
+            if !matches!(body_owner_kind, BodyOwnerKind::Fn | BodyOwnerKind::Closure) {
                 continue;
             }
             let typeck = tcx.typeck(def_id);
             let body = tcx.hir_body_owned_by(def_id);
 
-            if self.rule_enabled("SEC018") {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC018") {
                 report_missing_weight_for_unbounded_inputs(
                     tcx,
                     def_id,
@@ -65,7 +66,7 @@ impl Callbacks for PolkadotCallbacks {
                 );
             }
 
-            if self.rule_enabled("SEC001") {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC001") {
                 report_unbounded_public_vec_inputs(
                     tcx,
                     def_id,
@@ -104,7 +105,10 @@ impl Callbacks for PolkadotCallbacks {
                 panic_visitor.visit_body(body);
             }
 
-            if self.rule_enabled("SEC011") && is_public_or_hook(tcx, def_id) {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn)
+                && self.rule_enabled("SEC011")
+                && is_public_or_hook(tcx, def_id)
+            {
                 let mut storage_iteration_visitor = Sec011Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
@@ -114,7 +118,7 @@ impl Callbacks for PolkadotCallbacks {
                 storage_iteration_visitor.visit_body(body);
             }
 
-            if self.rule_enabled("SEC012") {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC012") {
                 let mut clear_prefix_visitor = Sec012Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
@@ -124,7 +128,10 @@ impl Callbacks for PolkadotCallbacks {
                 clear_prefix_visitor.visit_body(body);
             }
 
-            if !self.rule_enabled("SEC009") || !returns_fallible(tcx, def_id) {
+            if !matches!(body_owner_kind, BodyOwnerKind::Fn)
+                || !self.rule_enabled("SEC009")
+                || !returns_fallible(tcx, def_id)
+            {
                 continue;
             }
 
@@ -132,6 +139,7 @@ impl Callbacks for PolkadotCallbacks {
                 source_map: tcx.sess.source_map(),
                 typeck,
                 diagnostics: &mut self.diagnostics,
+                reported_lines: HashSet::new(),
             };
             visitor.visit_body(body);
         }
@@ -342,14 +350,16 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
                 || decode_receiver_contains_recursive_target(self.tcx, self.typeck, expr))
         {
             let (file, line, column) = span_location(self.source_map, expr.span);
-            self.diagnostics.push(RustcDiagnostic {
-                rule_id: "SEC003",
-                rule_name: "missing-decode-depth-limit",
-                file,
-                line,
-                column,
-                message: "Recursive runtime type is decoded without a depth limit".to_string(),
-            });
+            if !span_line_starts_with_attribute(self.source_map, expr.span) {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC003",
+                    rule_name: "missing-decode-depth-limit",
+                    file,
+                    line,
+                    column,
+                    message: "Recursive runtime type is decoded without a depth limit".to_string(),
+                });
+            }
         }
 
         intravisit::walk_expr(self, expr);
@@ -393,16 +403,19 @@ struct Sec009Visitor<'a, 'tcx> {
     source_map: &'a SourceMap,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: HashSet<(String, usize)>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::Binary(op, lhs, rhs) = expr.kind {
-            if is_raw_arithmetic(op.node)
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            if !span_line_starts_with_attribute(self.source_map, expr.span)
+                && is_raw_arithmetic(op.node)
                 && is_integral(self.typeck.expr_ty(lhs))
                 && is_integral(self.typeck.expr_ty(rhs))
+                && self.reported_lines.insert((file.clone(), line))
             {
-                let (file, line, column) = span_location(self.source_map, expr.span);
                 self.diagnostics.push(RustcDiagnostic {
                     rule_id: "SEC009",
                     rule_name: "raw-arithmetic-in-fallible",
@@ -417,6 +430,14 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn span_line_starts_with_attribute(source_map: &SourceMap, span: Span) -> bool {
+    let location = source_map.lookup_char_pos(span.lo());
+    location
+        .file
+        .get_line(location.line.saturating_sub(1))
+        .is_some_and(|line| line.trim_start().starts_with("#["))
 }
 
 struct Sec011Visitor<'a, 'tcx> {
@@ -541,17 +562,23 @@ fn decode_receiver_contains_recursive_target<'tcx>(
     typeck: &rustc_middle::ty::TypeckResults<'tcx>,
     expr: &'tcx Expr<'tcx>,
 ) -> bool {
+    decode_receiver_type(typeck, expr)
+        .is_some_and(|ty| type_contains_recursive_decode_target(tcx, ty))
+}
+
+fn decode_receiver_type<'tcx>(
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+) -> Option<Ty<'tcx>> {
     match expr.kind {
         ExprKind::Call(callee, _) => {
             let ExprKind::Path(QPath::TypeRelative(ty, _)) = callee.kind else {
-                return false;
+                return None;
             };
-            type_contains_recursive_decode_target(tcx, typeck.node_type(ty.hir_id))
+            Some(typeck.node_type(ty.hir_id))
         }
-        ExprKind::MethodCall(_, receiver, _, _) => {
-            type_contains_recursive_decode_target(tcx, typeck.expr_ty(receiver))
-        }
-        _ => false,
+        ExprKind::MethodCall(_, receiver, _, _) => Some(typeck.expr_ty(receiver)),
+        _ => None,
     }
 }
 
@@ -611,8 +638,11 @@ fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) 
                     _ => false,
                 })
         }
-        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
-            .is_some_and(|expanded| type_contains_recursive_decode_target(tcx, expanded)),
+        TyKind::Alias(kind, alias_ty) => {
+            is_recursive_decode_target_name(&tcx.def_path_str(alias_ty.def_id))
+                || expand_alias_type(tcx, *kind, *alias_ty)
+                    .is_some_and(|expanded| type_contains_recursive_decode_target(tcx, expanded))
+        }
         _ => false,
     }
 }

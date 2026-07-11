@@ -1,0 +1,2 @@
+SEC009	substrate/frame/collective/src/lib.rs	961	Fallible function uses raw arithmetic on resolved integer operands
+SEC009	substrate/frame/collective/src/lib.rs	1088	Fallible function uses raw arithmetic on resolved integer operands

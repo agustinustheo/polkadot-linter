@@ -228,8 +228,8 @@ pub fn unwrap_fallible_result(flag: bool) -> u32 {
     fallible_result(flag).expect("flag controls the error path")
 }
 
-pub fn raw_integer(a: u32, b: u32) -> Result<u32, ()> {
-    Ok(a + b)
+pub fn raw_integer(a: u32, b: u32, c: u32) -> Result<u32, ()> {
+    Ok((a + b) - c)
 }
 
 pub struct Field;
