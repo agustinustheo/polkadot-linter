@@ -1262,6 +1262,37 @@ impl<T: Config> Pallet<T> {
 }
 
 #[test]
+fn sec001_allows_vec_inputs_accounted_for_in_weight() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::remark(remark.len() as u32))]
+    pub fn remark(origin: OriginFor<T>, remark: Vec<u8>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        let hash = T::Hashing::hash(&remark[..]);
+        Self::deposit_event(Event::Remarked { sender: who, hash });
+        Ok(())
+    }
+
+    #[pallet::call_index(1)]
+    #[pallet::weight(T::WeightInfo::submit())]
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = values;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec001_count = diags.iter().filter(|d| d.rule_id == "SEC001").count();
+    assert_eq!(
+        sec001_count, 1,
+        "SEC001 should skip length-weighted Vec inputs while still reporting unaccounted Vec inputs"
+    );
+}
+
+#[test]
 fn sec001_skips_deprecated_dispatchables() {
     let code = r#"
 #[pallet::call]
