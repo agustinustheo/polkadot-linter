@@ -4128,12 +4128,12 @@ impl<T: Config> Pallet<T> {
 // SEC014: Identity hasher on common key types
 // ==========================================================================
 #[test]
-fn sec014_detects_identity_hasher_on_account_id() {
+fn sec014_detects_identity_hasher_on_low_entropy_key() {
     let bad = include_str!("fixtures/bad_sec014.rs");
     let diags = check_fixture("pallets/foo/src/lib.rs", bad);
     assert!(
         has_rule(&diags, "SEC014"),
-        "SEC014 should fire on Identity hasher with AccountId/u32/u64/Balance keys"
+        "SEC014 should fire on Identity hasher with u32/u64/Balance/BlockNumber keys"
     );
 }
 
@@ -4172,6 +4172,28 @@ pub type HashAndIndex<T: Config> =
     assert!(
         has_rule(&diags, "SEC014"),
         "SEC014 should still report identity-hashed common keys in StorageDoubleMap"
+    );
+}
+
+#[test]
+fn sec014_allows_identity_hasher_on_account_id_keys() {
+    let code = r#"
+#[pallet::storage]
+pub type Accounts<T: Config> =
+    StorageMap<_, Identity, T::AccountId, BalanceOf<T>, ValueQuery>;
+
+#[pallet::storage]
+pub type Deposits<T: Config> =
+    StorageDoubleMap<_, Identity, T::AccountId, Identity, T::AccountId, BalanceOf<T>, ValueQuery>;
+
+#[pallet::storage]
+pub type AccountToCount<T: Config> =
+    StorageMap<_, Identity, T::AccountId, u32, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC014"),
+        "SEC014 should not report identity-hashed AccountId keys as predictable scalar keys"
     );
 }
 

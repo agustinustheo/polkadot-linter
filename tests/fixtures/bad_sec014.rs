@@ -1,5 +1,4 @@
-// BAD: Identity hasher is used for AccountId keys.
+// BAD: Identity hasher is used for low-entropy numeric keys.
 
 #[pallet::storage]
-pub type Accounts<T: Config> =
-    StorageMap<_, Identity, T::AccountId, BalanceOf<T>, ValueQuery>;
+pub type UserScores<T: Config> = StorageMap<_, Identity, u32, BalanceOf<T>, ValueQuery>;

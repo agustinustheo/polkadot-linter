@@ -6044,7 +6044,7 @@ impl LintRule for IdentityHasherOnCommonKeys {
         }
 
         fn is_common_storage_key_type(ty: &Type) -> bool {
-            type_contains_named(ty, &["AccountId", "Balance", "BlockNumber"])
+            type_contains_named(ty, &["Balance", "BlockNumber"])
                 || type_is_named(ty, &["u32", "u64"])
         }
 
@@ -6144,8 +6144,8 @@ impl LintRule for IdentityHasherOnCommonKeys {
 						column: Some(span_column(item.span())),
 						end_line: None,
 						message: "Storage map uses `Identity` hasher on a common key type".to_string(),
-						explanation: "`Identity` hashing on predictable keys like `AccountId`, \
-                            `u32`, `u64`, or balances can expose the trie to poor key dispersion \
+						explanation: "`Identity` hashing on predictable scalar keys like \
+                            `u32`, `u64`, block numbers, or balances can expose the trie to poor key dispersion \
                             and unsafe assumptions. Prefer a standard hasher such as `Blake2_128Concat`."
 							.to_string(),
 						suggestion: Some("Replace `Identity` with `Blake2_128Concat` unless the identity layout is strictly required".to_string()),
