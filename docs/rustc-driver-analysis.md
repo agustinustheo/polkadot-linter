@@ -41,7 +41,9 @@ The driver currently includes typed checks for:
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
   reads resolved call return types and decode receiver types, so aliases to
   `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
-  resolution instead of source text matching.
+  resolution instead of source text matching. It also walks closure bodies, so
+  decode calls inside helpers such as `using_encoded(|mut bytes| ...)` are
+  analyzed, and filters macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited.
@@ -162,4 +164,33 @@ the first end-to-end SDK Cargo integration baseline through the public CLI for
 the rustc-backed pipeline; it is not yet the final SDK-scale benchmark proof
 for every hard rule.
 
-The CI workflow runs both scripts after the default stable build.
+Run the SDK `SEC003` coverage check with:
+
+```sh
+scripts/check-rustc-sdk-sec003.sh .repos/polkadot-sdk .benchmarks
+```
+
+That script compares the current syntax rule against the compiler-backed rule
+on pinned SDK `pallet-xcm`. The syntax rule reports 0 package-local `SEC003`
+findings, while the rustc-backed rule reports the associated projection decode
+at `polkadot/xcm/pallet-xcm/src/lib.rs:4111` after walking the closure body and
+resolving `<T as Config>::RuntimeCall`. The rustc-backed summary is checked
+against `benchmarks/polkadot-sdk-rustc-pallet-xcm-sec003-baseline.tsv`.
+
+Run the SDK `SEC009` precision check with:
+
+```sh
+scripts/check-rustc-sdk-sec009.sh .repos/polkadot-sdk .benchmarks
+```
+
+That script compares the current syntax rule against the compiler-backed rule
+on pinned SDK `pallet-collective`. The syntax rule reports 5 package-local
+`SEC009` findings in `substrate/frame/collective/src/lib.rs`; the rustc-backed
+rule reports 2 findings after using resolved integer operand types, ignoring
+macro-generated attribute spans, and deduplicating nested arithmetic to one
+finding per affected source line. The rustc-backed summary is checked against
+`benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`.
+
+The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
+the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
+SDK precision baseline after the default stable build.
