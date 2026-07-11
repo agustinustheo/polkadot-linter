@@ -3889,6 +3889,66 @@ fn sec017_allows_bounded_event_payloads() {
     );
 }
 
+#[test]
+fn sec017_allows_vec_event_payloads_from_bounded_vec_inputs() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    NewFeedData { sender: T::AccountId, values: Vec<(T::OracleKey, T::OracleValue)> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn feed_values(
+        origin: OriginFor<T>,
+        values: BoundedVec<(T::OracleKey, T::OracleValue), T::MaxFeedValues>,
+    ) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        Self::do_feed_values(who, values.into());
+        Ok(())
+    }
+}
+
+impl<T: Config> Pallet<T> {
+    fn do_feed_values(who: T::AccountId, values: Vec<(T::OracleKey, T::OracleValue)>) {
+        Self::deposit_event(Event::NewFeedData { sender: who, values });
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC017"),
+        "SEC017 should allow Vec event fields sourced from BoundedVec extrinsic inputs"
+    );
+}
+
+#[test]
+fn sec017_reports_vec_event_payloads_from_unbounded_inputs() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    NewFeedData { sender: T::AccountId, values: Vec<(T::OracleKey, T::OracleValue)> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn feed_values(
+        origin: OriginFor<T>,
+        values: Vec<(T::OracleKey, T::OracleValue)>,
+    ) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        Self::deposit_event(Event::NewFeedData { sender: who, values });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC017"),
+        "SEC017 should still report Vec event fields sourced from unbounded inputs"
+    );
+}
+
 // ==========================================================================
 // SEC018: Missing weight term for unbounded input length
 // ==========================================================================
