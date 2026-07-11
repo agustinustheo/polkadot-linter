@@ -44,6 +44,7 @@ cargo +1.93.0 run \
   --config "$ROOT_DIR/config/default.toml" \
   --format json \
   --rules SEC009 \
+  --no-rustc \
   "$PACKAGE_DIR" \
   > "$SYNTAX_JSON"
 
@@ -52,10 +53,9 @@ cargo +1.93.0 run \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --bin polkadot-linter \
   -- \
-  --no-syntax \
+  --config "$ROOT_DIR/config/default.toml" \
   --format json \
-  --compiler-backed-rules SEC009 \
-  --rustc-cargo-manifest "$SDK_DIR/Cargo.toml" \
+  --rules SEC009 \
   --rustc-package "$PACKAGE" \
   --rustc-lib \
   --rustc-no-default-features \
@@ -63,6 +63,7 @@ cargo +1.93.0 run \
   --rustc-toolchain nightly-2025-06-10 \
   --rustc-target-dir "$SDK_TARGET_DIR" \
   --rustc-source-filter "$PACKAGE_FILE" \
+  "$PACKAGE_DIR" \
   > "$RUSTC_JSON"
 
 jq -r --arg package_file "$PACKAGE_FILE" '

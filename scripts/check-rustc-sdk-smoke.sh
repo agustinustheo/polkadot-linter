@@ -14,6 +14,7 @@ OUTPUT_DIR="${2:-$ROOT_DIR/.benchmarks}"
 [[ "$OUTPUT_DIR" = /* ]] || OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
 BASELINE="${3:-$ROOT_DIR/benchmarks/polkadot-sdk-rustc-multisig-sec001-sec008-baseline.tsv}"
 PACKAGE="pallet-multisig"
+PACKAGE_DIR="$SDK_DIR/substrate/frame/multisig"
 PACKAGE_FILE="substrate/frame/multisig/src/lib.rs"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -38,10 +39,8 @@ cargo +1.93.0 run \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --bin polkadot-linter \
   -- \
-  --no-syntax \
   --format json \
-  --compiler-backed-rules SEC001,SEC008 \
-  --rustc-cargo-manifest "$SDK_DIR/Cargo.toml" \
+  --rules SEC001,SEC008 \
   --rustc-package "$PACKAGE" \
   --rustc-lib \
   --rustc-no-default-features \
@@ -49,6 +48,7 @@ cargo +1.93.0 run \
   --rustc-toolchain nightly-2025-06-10 \
   --rustc-target-dir "$SDK_TARGET_DIR" \
   --rustc-source-filter "$PACKAGE_FILE" \
+  "$PACKAGE_DIR" \
   > "$RAW_JSON"
 
 jq -r --arg package_file "$PACKAGE_FILE" '

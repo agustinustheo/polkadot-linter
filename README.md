@@ -23,6 +23,14 @@ cargo run -- ../pallets -s warning --fail-on-warning
 
 # Add compiler-resolved rustdoc JSON evidence for typed prototype rules
 cargo run -- ../pallets --rules SEC013 --rustdoc-json target/doc/my_pallet.json
+
+# Route migrated SEC rules through the rustc-backed pipeline for a Cargo package.
+# The manifest is discovered from the scan path.
+cargo run -- \
+  --rules SEC003 \
+  --rustc-package pallet-xcm \
+  --rustc-lib \
+  ../polkadot-sdk/polkadot/xcm/pallet-xcm
 ```
 
 ## Rule Families
@@ -125,10 +133,14 @@ The full schema and defaults remain in [`config/default.toml`](config/default.to
 
 ## Security Roadmap
 
-The security rules are being improved in explicit phases. The current focus is
-stabilizing the existing `syn`-based tool, not redesigning the engine yet.
-See [`docs/security-linter-phases.md`](docs/security-linter-phases.md).
-The first opt-in rustdoc-backed analysis path is documented in
+The security rules are being improved in explicit phases. Migrated SEC rules
+now route through the rustc-backed pipeline by default when the scan path is
+inside a single Cargo project; the CLI discovers the nearest `Cargo.toml` and
+syntax findings for those migrated rule IDs are demoted to fallback behavior.
+Use `--no-rustc` only for an explicitly syntax-only scan. See
+[`docs/rustc-driver-analysis.md`](docs/rustc-driver-analysis.md) and
+[`docs/security-linter-phases.md`](docs/security-linter-phases.md). The
+rustdoc-backed analysis path is documented in
 [`docs/rustdoc-analysis.md`](docs/rustdoc-analysis.md).
 
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, use:

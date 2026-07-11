@@ -10,9 +10,10 @@ use std::{collections::HashSet, env, fs::OpenOptions, io::Write, path::Path, pro
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
+    def::Res,
     def_id::LocalDefId,
     intravisit::{self, Visitor},
-    BinOpKind, BodyOwnerKind, Expr, ExprKind, ItemKind, PatKind, QPath,
+    Arm, BinOpKind, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind, QPath,
 };
 use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
@@ -76,12 +77,17 @@ impl Callbacks for PolkadotCallbacks {
                 );
             }
 
-            if self.rule_enabled("SEC003") {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC003") {
                 let mut decode_visitor = Sec003Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
                     typeck,
                     diagnostics: &mut self.diagnostics,
+                    tainted_bindings: body
+                        .params
+                        .iter()
+                        .flat_map(|param| pattern_binding_ids(param.pat))
+                        .collect(),
                 };
                 decode_visitor.visit_body(body);
             }
@@ -95,7 +101,10 @@ impl Callbacks for PolkadotCallbacks {
                 debug_assert_visitor.visit_body(body);
             }
 
-            if self.rule_enabled("SEC008") {
+            if matches!(body_owner_kind, BodyOwnerKind::Fn)
+                && is_public_or_hook(tcx, def_id)
+                && self.rule_enabled("SEC008")
+            {
                 let mut panic_visitor = Sec008Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
@@ -129,6 +138,7 @@ impl Callbacks for PolkadotCallbacks {
             }
 
             if !matches!(body_owner_kind, BodyOwnerKind::Fn)
+                || !is_public_or_hook(tcx, def_id)
                 || !self.rule_enabled("SEC009")
                 || !returns_fallible(tcx, def_id)
             {
@@ -341,6 +351,7 @@ struct Sec003Visitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
+    tainted_bindings: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
@@ -348,6 +359,7 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
         if is_unlimited_decode_call(expr)
             && (type_contains_recursive_decode_target(self.tcx, self.typeck.expr_ty(expr))
                 || decode_receiver_contains_recursive_target(self.tcx, self.typeck, expr))
+            && decode_call_uses_tainted_input(self.typeck, expr, &self.tainted_bindings)
         {
             let (file, line, column) = span_location(self.source_map, expr.span);
             if !span_line_starts_with_attribute(self.source_map, expr.span) {
@@ -362,7 +374,66 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
             }
         }
 
+        if let ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
+            if segment.ident.name.as_str() == "using_encoded"
+                && expr_references_tainted_binding(self.typeck, receiver, &self.tainted_bindings)
+            {
+                self.visit_expr(receiver);
+                for arg in args {
+                    let ExprKind::Closure(closure) = arg.kind else {
+                        self.visit_expr(arg);
+                        continue;
+                    };
+                    let body = self.tcx.hir_body(closure.body);
+                    let mut closure_visitor = Sec003Visitor {
+                        source_map: self.source_map,
+                        tcx: self.tcx,
+                        // The enclosing body carries the resolved associated projection for
+                        // closures passed to generic encoding helpers.
+                        typeck: self.typeck,
+                        diagnostics: self.diagnostics,
+                        tainted_bindings: body
+                            .params
+                            .iter()
+                            .flat_map(|param| pattern_binding_ids(param.pat))
+                            .collect(),
+                    };
+                    closure_visitor.visit_body(body);
+                }
+                return;
+            }
+        }
+
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            for arm in arms {
+                let tainted_arm_bindings = tainted_pattern_binding_ids(
+                    self.typeck,
+                    scrutinee,
+                    arm,
+                    &self.tainted_bindings,
+                );
+                self.tainted_bindings
+                    .extend(tainted_arm_bindings.iter().copied());
+                self.visit_arm(arm);
+                for binding in tainted_arm_bindings {
+                    self.tainted_bindings.remove(&binding);
+                }
+            }
+            return;
+        }
+
         intravisit::walk_expr(self, expr);
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(|init| {
+            expr_references_tainted_binding(self.typeck, init, &self.tainted_bindings)
+        }) {
+            self.tainted_bindings.extend(pattern_binding_ids(local.pat));
+        }
+
+        intravisit::walk_local(self, local);
     }
 }
 
@@ -555,6 +626,125 @@ fn is_unlimited_decode_call(expr: &Expr<'_>) -> bool {
         ExprKind::MethodCall(segment, _, _, _) => segment.ident.name.as_str() == "decode",
         _ => false,
     }
+}
+
+fn decode_call_uses_tainted_input(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    tainted_bindings: &HashSet<HirId>,
+) -> bool {
+    match expr.kind {
+        ExprKind::Call(_, args) => args
+            .iter()
+            .any(|arg| expr_references_tainted_binding(typeck, arg, tainted_bindings)),
+        ExprKind::MethodCall(_, receiver, args, _) => {
+            expr_references_tainted_binding(typeck, receiver, tainted_bindings)
+                || args
+                    .iter()
+                    .any(|arg| expr_references_tainted_binding(typeck, arg, tainted_bindings))
+        }
+        _ => false,
+    }
+}
+
+fn expr_references_tainted_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    tainted_bindings: &HashSet<HirId>,
+) -> bool {
+    match expr.kind {
+        ExprKind::Path(qpath) => {
+            matches!(typeck.qpath_res(&qpath, expr.hir_id), Res::Local(hir_id) if tainted_bindings.contains(&hir_id))
+        }
+        ExprKind::AddrOf(_, _, inner)
+        | ExprKind::DropTemps(inner)
+        | ExprKind::Unary(_, inner)
+        | ExprKind::Cast(inner, _) => {
+            expr_references_tainted_binding(typeck, inner, tainted_bindings)
+        }
+        ExprKind::Field(inner, _) => {
+            expr_references_tainted_binding(typeck, inner, tainted_bindings)
+        }
+        ExprKind::Index(receiver, index, _) => {
+            expr_references_tainted_binding(typeck, receiver, tainted_bindings)
+                || expr_references_tainted_binding(typeck, index, tainted_bindings)
+        }
+        ExprKind::Call(callee, args) => {
+            expr_references_tainted_binding(typeck, callee, tainted_bindings)
+                || args
+                    .iter()
+                    .any(|arg| expr_references_tainted_binding(typeck, arg, tainted_bindings))
+        }
+        ExprKind::MethodCall(_, receiver, args, _) => {
+            expr_references_tainted_binding(typeck, receiver, tainted_bindings)
+                || args
+                    .iter()
+                    .any(|arg| expr_references_tainted_binding(typeck, arg, tainted_bindings))
+        }
+        ExprKind::Tup(values) | ExprKind::Array(values) => values
+            .iter()
+            .any(|value| expr_references_tainted_binding(typeck, value, tainted_bindings)),
+        _ => false,
+    }
+}
+
+fn pattern_binding_ids(pattern: &Pat<'_>) -> Vec<HirId> {
+    match pattern.kind {
+        PatKind::Binding(_, hir_id, _, subpattern) => std::iter::once(hir_id)
+            .chain(subpattern.into_iter().flat_map(pattern_binding_ids))
+            .collect(),
+        PatKind::Tuple(patterns, _) | PatKind::Or(patterns) => patterns
+            .iter()
+            .flat_map(|pattern| pattern_binding_ids(pattern))
+            .collect(),
+        PatKind::TupleStruct(_, patterns, _) => patterns
+            .iter()
+            .flat_map(|pattern| pattern_binding_ids(pattern))
+            .collect(),
+        PatKind::Struct(_, fields, _) => fields
+            .iter()
+            .flat_map(|field| pattern_binding_ids(field.pat))
+            .collect(),
+        PatKind::Box(inner) | PatKind::Deref(inner) | PatKind::Ref(inner, _) => {
+            pattern_binding_ids(inner)
+        }
+        PatKind::Slice(before, middle, after) => before
+            .iter()
+            .chain(middle)
+            .chain(after)
+            .flat_map(|pattern| pattern_binding_ids(pattern))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn tainted_pattern_binding_ids(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    source: &Expr<'_>,
+    arm: &Arm<'_>,
+    tainted_bindings: &HashSet<HirId>,
+) -> Vec<HirId> {
+    match (source.kind, arm.pat.kind) {
+        (ExprKind::Tup(values), PatKind::Tuple(patterns, _)) => values
+            .iter()
+            .zip(patterns.iter())
+            .flat_map(|(value, pattern)| {
+                tainted_pattern_binding_ids_for_value(typeck, value, pattern, tainted_bindings)
+            })
+            .collect(),
+        _ => tainted_pattern_binding_ids_for_value(typeck, source, arm.pat, tainted_bindings),
+    }
+}
+
+fn tainted_pattern_binding_ids_for_value(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    value: &Expr<'_>,
+    pattern: &Pat<'_>,
+    tainted_bindings: &HashSet<HirId>,
+) -> Vec<HirId> {
+    expr_references_tainted_binding(typeck, value, tainted_bindings)
+        .then(|| pattern_binding_ids(pattern))
+        .unwrap_or_default()
 }
 
 fn decode_receiver_contains_recursive_target<'tcx>(
