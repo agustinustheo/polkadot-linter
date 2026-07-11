@@ -1985,6 +1985,35 @@ pub fn transfer_deposit(from: &T::AccountId, to: &T::AccountId, amount: Balance)
 }
 
 #[test]
+fn sec006_allows_documented_infallible_debug_asserts() {
+    let code = r#"
+/// Either repatriate the deposit into the Society account or ban the vouching member.
+///
+/// In neither case can we do much if the action isn't completable, but there's
+/// no reason that either should fail.
+///
+/// WARNING: This alters voucher state. You must ensure that you do not
+/// accidentally overwrite it with an older value after calling this.
+fn reject_candidate(who: &T::AccountId, deposit: Balance) {
+    let pot = Self::account_id();
+    let r = T::Currency::repatriate_reserved(&who, &pot, deposit, BalanceStatus::Free);
+    debug_assert!(r.is_ok());
+}
+
+fn unchecked_repatriate(from: &T::AccountId, to: &T::AccountId, amount: Balance) {
+    let remaining = T::Currency::repatriate_reserved(from, to, amount, BalanceStatus::Free);
+    log::debug!("remaining = {:?}", remaining);
+}
+"#;
+    let diags = check_fixture("pallets/society/src/lib.rs", code);
+    let sec006_count = diags.iter().filter(|d| d.rule_id == "SEC006").count();
+    assert_eq!(
+        sec006_count, 1,
+        "SEC006 should skip documented infallible debug assertions while reporting unchecked results"
+    );
+}
+
+#[test]
 fn sec006_only_checks_direct_repatriate_initializer() {
     let code = r#"
 pub fn transfer_deposit(from: &T::AccountId, to: &T::AccountId, amount: Balance) -> DispatchResult {
