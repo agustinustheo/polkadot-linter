@@ -20,6 +20,37 @@ mkdir -p "$(dirname "$SYNTAX_FIXTURE")"
 
 cat > "$SYNTAX_FIXTURE" <<'RS'
 pub type Payload = Vec<u8>;
+pub type BoundedPayload = BoundedVec<u8, 32>;
+pub struct BoundedVec<T, const N: usize>(T);
+
+pub mod frame_support {
+    pub mod storage {
+        pub mod types {
+            pub struct StorageValue<K, V>(K, V);
+        }
+    }
+}
+
+#[pallet::storage]
+pub type AliasedStorage = frame_support::storage::types::StorageValue<(), Payload>;
+
+#[pallet::storage]
+pub type BoundedStorage = frame_support::storage::types::StorageValue<(), BoundedPayload>;
+
+#[pallet::event]
+pub enum Event {
+    Submitted { payload: Payload },
+}
+
+pub struct Domain;
+
+impl Domain {
+    pub fn iter() -> std::vec::IntoIter<u8> {
+        Vec::new().into_iter()
+    }
+
+    pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
+}
 
 #[pallet::call]
 impl<T: Config> Pallet<T> {
@@ -29,15 +60,71 @@ impl<T: Config> Pallet<T> {
         let _ = payload;
         Ok(())
     }
+
+    #[pallet::call_index(1)]
+    pub fn local_iteration(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = Domain::iter();
+        Ok(())
+    }
+
+    #[pallet::call_index(2)]
+    pub fn local_clear_prefix(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Domain::clear_prefix((), None);
+        Ok(())
+    }
 }
 RS
 
 cat > "$FIXTURE" <<'RS'
+#![feature(register_tool)]
+#![register_tool(pallet)]
+
 use std::ops::Add;
 use std::convert::Infallible;
 
 pub type Payload = Vec<u8>;
 pub struct BoundedVec<T, const N: usize>(T);
+pub type BoundedPayload = BoundedVec<u8, 32>;
+
+pub enum Event {
+    Submitted { payload: Payload },
+    Bounded { payload: BoundedPayload },
+}
+
+pub mod frame_support {
+    pub mod storage {
+        pub mod types {
+            pub struct StorageValue<K, V>(K, V);
+            pub struct StorageMap;
+
+            impl StorageMap {
+                pub fn iter() -> std::vec::IntoIter<u8> {
+                    Vec::new().into_iter()
+                }
+
+                pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
+            }
+        }
+    }
+}
+
+#[pallet::storage]
+pub type AliasedStorage = frame_support::storage::types::StorageValue<(), Payload>;
+
+#[pallet::storage]
+pub type BoundedStorage = frame_support::storage::types::StorageValue<(), BoundedPayload>;
+
+pub struct Domain;
+
+impl Domain {
+    pub fn iter() -> std::vec::IntoIter<u8> {
+        Vec::new().into_iter()
+    }
+
+    pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
+}
 
 pub struct RuntimeCall;
 pub type AliasCall = RuntimeCall;
@@ -70,6 +157,27 @@ pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
 
 fn helper_vec(payload: Vec<u8>) {
     let _ = payload;
+}
+
+pub fn storage_iteration() {
+    let _ = frame_support::storage::types::StorageMap::iter();
+}
+
+pub fn local_iteration() {
+    let _ = Domain::iter();
+}
+
+pub fn storage_clear_prefix_unbounded() {
+    frame_support::storage::types::StorageMap::clear_prefix((), Some(u32::MAX));
+}
+
+pub fn storage_clear_prefix_bounded() {
+    frame_support::storage::types::StorageMap::clear_prefix((), Some(10));
+}
+
+#[allow(dead_code)]
+fn private_storage_iteration() {
+    let _ = frame_support::storage::types::StorageMap::iter();
 }
 
 pub fn decode_alias_call(mut data: &[u8]) -> Result<RuntimeCall, ()> {
@@ -143,6 +251,10 @@ SEC002 = true
 SEC003 = true
 SEC008 = true
 SEC009 = true
+SEC011 = true
+SEC012 = true
+SEC013 = true
+SEC017 = true
 TOML
 
 SYN_JSON="$WORK_DIR/syn-hard-rules.json"
@@ -151,7 +263,7 @@ RUSTC_JSON="$WORK_DIR/rustc-hard-rules.json"
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
   "$WORK_DIR" \
-  --rules SEC001,SEC002,SEC003,SEC008,SEC009 \
+  --rules SEC001,SEC002,SEC003,SEC008,SEC009,SEC011,SEC012,SEC013,SEC017 \
   -f json > "$SYN_JSON"
 
 cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
@@ -168,16 +280,28 @@ syn_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$SYN_JSO
 syn_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$SYN_JSON")"
 syn_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$SYN_JSON")"
 syn_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$SYN_JSON")"
+syn_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$SYN_JSON")"
+syn_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$SYN_JSON")"
+syn_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYN_JSON")"
+syn_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$SYN_JSON")"
 rustc_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$RUSTC_JSON")"
 rustc_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$RUSTC_JSON")"
 rustc_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$RUSTC_JSON")"
 rustc_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_JSON")"
 rustc_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_JSON")"
+rustc_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC_JSON")"
+rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_JSON")"
+rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
+rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_JSON")"
 rustc_sec002_line="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON")"
 rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
 rustc_sec008_line="$(jq -r '.[] | select(.rule_id == "SEC008") | .line' "$RUSTC_JSON")"
 rustc_sec009_line="$(jq -r '.[] | select(.rule_id == "SEC009") | .line' "$RUSTC_JSON")"
+rustc_sec011_line="$(jq -r '.[] | select(.rule_id == "SEC011") | .line' "$RUSTC_JSON")"
+rustc_sec012_line="$(jq -r '.[] | select(.rule_id == "SEC012") | .line' "$RUSTC_JSON")"
+rustc_sec013_line="$(jq -r '.[] | select(.rule_id == "SEC013") | .line' "$RUSTC_JSON")"
+rustc_sec017_line="$(jq -r '.[] | select(.rule_id == "SEC017") | .line' "$RUSTC_JSON")"
 
 echo "syntax SEC001 findings: $syn_sec001_count"
 echo "rustc SEC001 findings: $rustc_sec001_count"
@@ -189,19 +313,39 @@ echo "syntax SEC008 findings: $syn_sec008_count"
 echo "rustc SEC008 findings: $rustc_sec008_count"
 echo "syntax SEC009 findings: $syn_sec009_count"
 echo "rustc SEC009 findings: $rustc_sec009_count"
+echo "syntax SEC011 findings: $syn_sec011_count"
+echo "rustc SEC011 findings: $rustc_sec011_count"
+echo "syntax SEC012 findings: $syn_sec012_count"
+echo "rustc SEC012 findings: $rustc_sec012_count"
+echo "syntax SEC013 findings: $syn_sec013_count"
+echo "rustc SEC013 findings: $rustc_sec013_count"
+echo "syntax SEC017 findings: $syn_sec017_count"
+echo "rustc SEC017 findings: $rustc_sec017_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
-test "$rustc_sec001_line" = "27"
+test "$rustc_sec001_line" = "69"
 test "$syn_sec002_count" = "2"
 test "$rustc_sec002_count" = "1"
-test "$rustc_sec002_line" = "58"
+test "$rustc_sec002_line" = "121"
 test "$syn_sec003_count" = "0"
 test "$rustc_sec003_count" = "1"
-test "$rustc_sec003_line" = "41"
+test "$rustc_sec003_line" = "104"
 test "$syn_sec008_count" = "2"
 test "$rustc_sec008_count" = "1"
-test "$rustc_sec008_line" = "78"
+test "$rustc_sec008_line" = "141"
 test "$syn_sec009_count" = "2"
 test "$rustc_sec009_count" = "1"
-test "$rustc_sec009_line" = "82"
+test "$rustc_sec009_line" = "145"
+test "$syn_sec011_count" = "1"
+test "$rustc_sec011_count" = "1"
+test "$rustc_sec011_line" = "83"
+test "$syn_sec012_count" = "2"
+test "$rustc_sec012_count" = "1"
+test "$rustc_sec012_line" = "91"
+test "$syn_sec013_count" = "0"
+test "$rustc_sec013_count" = "1"
+test "$rustc_sec013_line" = "34"
+test "$syn_sec017_count" = "0"
+test "$rustc_sec017_count" = "1"
+test "$rustc_sec017_line" = "12"

@@ -22,13 +22,16 @@ Validation evidence used for this matrix:
   rustc path 1 finding; `SEC002` syntax path 2 findings, rustc path 1
   finding; `SEC003` syntax path 0 findings, rustc path 1 finding; `SEC008`
   syntax path 2 findings, rustc path 1 finding; `SEC009` syntax path 2
+  findings, rustc path 1 finding; `SEC011` syntax path 1 finding, rustc path
+  1 finding; `SEC012` syntax path 2 findings, rustc path 1 finding; `SEC013`
+  syntax path 0 findings, rustc path 1 finding; `SEC017` syntax path 0
   findings, rustc path 1 finding
 - `scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks`: 13
   focused `SEC018` findings
 - `scripts/check-sec-benchmark-baseline.sh
-  .benchmarks/sec-rules-20260711T130359Z.json`: baseline matched
+  .benchmarks/sec-rules-20260711T134459Z.json`: baseline matched
 - unrestricted scan output:
-  `/tmp/polkadot-linter-sec-after-rustc-sec001-default-unrestricted.json`
+  `/tmp/polkadot-linter-sec-after-rustc-sec013-default-unrestricted.json`
 
 ## Research report concerns
 
@@ -47,19 +50,19 @@ Validation evidence used for this matrix:
 | `SEC008` false positives in `genesis_build`, benchmarks, `runtime-benchmarks`, and type-provably infallible conversions. | Partially superseded by rustc-driver increment; still incomplete. | Tests cover benchmark/runtime-benchmark/genesis/helper paths. The rustc fixture now covers one type-provably infallible conversion via `Result<T, Infallible>`. Broader panic reachability and debug assertion handling still require compiler-backed control-flow and cfg evidence. |
 | `SEC009` had 706 findings with 79% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` now reports `SEC009` from HIR/typeck for integer operands only. `scripts/check-rustc-hard-rules.sh` proves overloaded `Add` is removed on a fixture. The default unrestricted syntax path still emits 142 `SEC009` findings, so the rule is not yet fully compiler-backed. |
 | `SEC010` had 16 findings with 88% sampled FP rate. | Still true unless later scoped evidence proves otherwise. | Current unrestricted scan has no `SEC010` findings after stabilization, but there is no compiler-backed proof for hook transactional semantics. |
-| `SEC011` had 4 findings with 100% sampled FP rate. | Partially fixed; residual low volume remains. | Current unrestricted count is 1. Accurate storage-iteration risk still depends on resolved storage API semantics and bounds. |
-| `SEC012` had 14 findings with 64% sampled FP rate. | Partially fixed; still not default audit-grade. | Current unrestricted count is 8. The default benchmark does not include `SEC012`; it remains disabled from the focused CI baseline because the report found material noise. |
-| `SEC013` had 55 findings with 60% sampled FP rate. | Partially fixed; still requires compiler-backed storage modeling. | Current unrestricted count is 45. A rustdoc-backed prototype exists, but real FRAME macro output does not preserve enough storage alias/value detail for full SDK migration. Final precision requires rustc/Clippy-grade macro-expanded storage analysis. |
-| `SEC013` false positives on bounded storage wrappers. | Partially fixed with tests; not complete. | Syntax tests cover bounded wrappers and capacity-limited docs. The remaining issue is resolved type aliases and FRAME storage expansion. |
+| `SEC011` had 4 findings with 100% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 1. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves associated-call owner types and reports `StorageMap::iter()` while skipping a syntax-only `Domain::iter()` false positive. SDK-scale hook/dispatchable coverage still needs the full compiler-backed FRAME model. |
+| `SEC012` had 14 findings with 64% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 8. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves `clear_prefix` owner types and reports unbounded limits only for FRAME storage owners, skipping a syntax-only `Domain::clear_prefix` false positive. SDK-scale migration still needs the compiler-backed pipeline wired as the final authority for this rule. |
+| `SEC013` had 55 findings with 60% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 45. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves `#[pallet::storage]` value aliases and reports a hidden `Vec` payload that the syntax path misses. SDK-scale storage macro modeling is still needed before this rule is audit-grade. |
+| `SEC013` false positives on bounded storage wrappers. | Partially superseded by rustc-driver increment; not fully migrated. | Syntax tests cover bounded wrappers and capacity-limited docs. The rustc fixture now also skips a bounded storage alias after type resolution. Remaining risk is full FRAME storage expansion and SDK-scale proof. |
 | `SEC014` had 14 findings with 100% sampled FP rate. | Fixed for current SDK unrestricted scan. | Current unrestricted scan has no `SEC014` findings. Existing tests cover account-id keys and documented internal numeric layouts. |
 | `SEC015` had 12 findings with 75% sampled FP rate. | Fixed for current SDK unrestricted scan. | Current unrestricted scan has no `SEC015` findings. Existing tests cover verified root branches and bypass patterns. |
 | `SEC016` had 30 findings with 83% sampled FP rate. | Partially fixed; residual low volume remains. | Current unrestricted count is 2. Tests cover `VersionedMigration`, reconciliation, permanent migrations, and FRAME migration helpers. |
 | `SEC016` false positives for `VersionedMigration<N, M, ...>`. | Fixed with tests for the known pattern. | Stabilization added versioned migration handling and regression coverage. Remaining `SEC016` findings need manual review or stronger semantic modeling. |
-| `SEC017` had 21 findings with 57% sampled FP rate. | Partially fixed; still not default audit-grade. | Current unrestricted count is 12. Tests cover bounded, weight-accounted, and derived event payloads, but event payload safety still depends on input-flow evidence. |
+| `SEC017` had 21 findings with 57% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 12. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves an aliased `Vec` event payload that the syntax path misses while skipping a bounded event payload. Event payload safety still needs SDK-scale input-flow and weight-accounting evidence before this rule is audit-grade. |
 | Recommendation: run only `SEC001`, `SEC012`, `SEC013`, `SEC017` diff-scoped with a cap. | Superseded by current stabilization direction, not by final implementation yet. | The branch instead uses a focused validated `SEC018` benchmark and keeps unrestricted scans as stabilization evidence. The final goal is a compiler-backed linter, not a capped syntax-only integration. |
 | Recommendation: improve existing rule implementations. | Partially implemented. | Phase 1 added narrow, evidence-backed fixes and regression tests, reducing the unrestricted scan from the stale 5,563-result report to 348 current findings. |
 | Recommendation: develop new rules for weight annotations missing user-controlled input sizes. | Implemented as `SEC018`, but upstream findings are not fixed here. | `SEC018` is now the focused CI benchmark rule. The validated SDK baseline contains 13 findings, including the report's audit findings. |
-| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists, but only the first `SEC009` typed fixture is implemented. The semantically hard rules still need full migration and SDK benchmark proof. |
+| Recommendation: rewrite as a focused security linter. | In progress through compiler-backed migration, not complete. | A `rustc_driver` entry point now exists with typed fixture-backed increments for `SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, and `SEC017`. The semantically hard rules still need full migration and SDK benchmark proof. |
 
 ## Audit report findings
 
@@ -81,6 +84,7 @@ raw arithmetic, decode-depth, panic/debug-assert reachability,
 weight/input-accounting dataflow, and unbounded input/storage analysis.
 
 Only the first rustc-driver increments for `SEC001`, `SEC002`, `SEC003`,
-`SEC008`, and `SEC009` have been implemented. The full compiler-backed
-transition remains incomplete until the hard rules above run through the
-compiler-backed pipeline with SDK benchmark proof and CI coverage.
+`SEC008`, `SEC009`, `SEC011`, `SEC012`, `SEC013`, and `SEC017` have been
+implemented. The full compiler-backed transition remains incomplete until the
+hard rules above run through the compiler-backed pipeline with SDK benchmark
+proof and CI coverage.

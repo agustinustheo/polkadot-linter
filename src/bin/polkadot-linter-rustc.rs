@@ -12,10 +12,10 @@ use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
     def_id::LocalDefId,
     intravisit::{self, Visitor},
-    BinOpKind, BodyOwnerKind, Expr, ExprKind, QPath,
+    BinOpKind, BodyOwnerKind, Expr, ExprKind, ItemKind, QPath,
 };
 use rustc_middle::ty::{GenericArgKind, Ty, TyCtxt, TyKind};
-use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span};
+use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -39,6 +39,9 @@ impl Callbacks for PolkadotCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        report_unbounded_storage_aliases(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+
         for def_id in tcx.hir_body_owners() {
             if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
                 continue;
@@ -77,6 +80,24 @@ impl Callbacks for PolkadotCallbacks {
             };
             panic_visitor.visit_body(body);
 
+            if is_public_or_hook(tcx, def_id) {
+                let mut storage_iteration_visitor = Sec011Visitor {
+                    source_map: tcx.sess.source_map(),
+                    tcx,
+                    typeck,
+                    diagnostics: &mut self.diagnostics,
+                };
+                storage_iteration_visitor.visit_body(body);
+            }
+
+            let mut clear_prefix_visitor = Sec012Visitor {
+                source_map: tcx.sess.source_map(),
+                tcx,
+                typeck,
+                diagnostics: &mut self.diagnostics,
+            };
+            clear_prefix_visitor.visit_body(body);
+
             if !returns_fallible(tcx, def_id) {
                 continue;
             }
@@ -90,6 +111,68 @@ impl Callbacks for PolkadotCallbacks {
         }
 
         Compilation::Stop
+    }
+}
+
+fn report_unbounded_storage_aliases<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for item_id in tcx.hir_free_items() {
+        let item = tcx.hir_item(item_id);
+        if !matches!(item.kind, ItemKind::TyAlias(..))
+            || !has_hir_attr(tcx, item.hir_id(), &["pallet", "storage"])
+            || has_hir_attr(tcx, item.hir_id(), &["pallet", "unbounded"])
+        {
+            continue;
+        }
+
+        let alias_ty = tcx.type_of(item.owner_id.def_id).instantiate_identity();
+        if type_contains_unbounded_storage_collection(tcx, alias_ty) {
+            let (file, line, column) = span_location(source_map, item.span);
+            diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC013",
+                rule_name: "unbounded-storage-collections",
+                file,
+                line,
+                column,
+                message: "Storage alias resolves to an unbounded collection value".to_string(),
+            });
+        }
+    }
+}
+
+fn report_vec_event_fields<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for item_id in tcx.hir_free_items() {
+        let item = tcx.hir_item(item_id);
+        let ItemKind::Enum(ident, _, enum_def) = item.kind else {
+            continue;
+        };
+        if ident.name.as_str() != "Event" {
+            continue;
+        }
+
+        for variant in enum_def.variants {
+            for field in variant.data.fields() {
+                let field_ty = tcx.type_of(field.def_id).instantiate_identity();
+                if type_contains_unbounded_event_vec(tcx, field_ty) {
+                    let (file, line, column) = span_location(source_map, field.span);
+                    diagnostics.push(RustcDiagnostic {
+                        rule_id: "SEC017",
+                        rule_name: "vec-in-events",
+                        file,
+                        line,
+                        column,
+                        message: "Event field resolves to an unbounded Vec payload".to_string(),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -242,9 +325,86 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
     }
 }
 
+struct Sec011Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, _) = expr.kind {
+            if associated_call_name(callee).is_some_and(|name| name == "iter" || name == "drain")
+                && associated_call_receiver_type(self.typeck, callee)
+                    .is_some_and(|ty| type_is_frame_storage_owner(self.tcx, ty))
+            {
+                let (file, line, column) = span_location(self.source_map, expr.span);
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC011",
+                    rule_name: "storage-iteration-in-dispatchables",
+                    file,
+                    line,
+                    column,
+                    message: "Callable iterates a resolved FRAME storage collection".to_string(),
+                });
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+struct Sec012Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec012Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, args) = expr.kind {
+            if associated_call_name(callee).is_some_and(|name| name == "clear_prefix")
+                && associated_call_receiver_type(self.typeck, callee)
+                    .is_some_and(|ty| type_is_frame_storage_owner(self.tcx, ty))
+                && args
+                    .get(1)
+                    .is_some_and(|limit| is_unbounded_clear_prefix_limit(limit))
+            {
+                let (file, line, column) = span_location(self.source_map, expr.span);
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC012",
+                    rule_name: "unbounded-clear-prefix",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved FRAME storage clear_prefix uses an unbounded deletion limit"
+                        .to_string(),
+                });
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
 fn returns_fallible<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> bool {
     let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
     type_is_fallible(tcx, sig.output())
+}
+
+fn is_public_or_hook(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+    if tcx.local_visibility(def_id).is_public() {
+        return true;
+    }
+
+    let item_name = tcx.item_name(def_id.to_def_id());
+    let name = item_name.as_str();
+    matches!(
+        name,
+        "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
+    )
 }
 
 fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
@@ -316,6 +476,26 @@ fn qpath_last_segment<'tcx>(qpath: QPath<'tcx>) -> Option<&'tcx rustc_hir::PathS
     }
 }
 
+fn associated_call_name(expr: &Expr<'_>) -> Option<String> {
+    let ExprKind::Path(qpath) = expr.kind else {
+        return None;
+    };
+    match qpath {
+        QPath::TypeRelative(_, segment) => Some(segment.ident.name.to_string()),
+        QPath::Resolved(_, _) | QPath::LangItem(_, _) => None,
+    }
+}
+
+fn associated_call_receiver_type<'tcx>(
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+) -> Option<Ty<'tcx>> {
+    let ExprKind::Path(QPath::TypeRelative(ty, _)) = expr.kind else {
+        return None;
+    };
+    Some(typeck.node_type(ty.hir_id))
+}
+
 fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
     match ty.kind() {
         TyKind::Adt(adt, args) => {
@@ -360,8 +540,143 @@ fn type_contains_unbounded_vec<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
     }
 }
 
+fn type_contains_unbounded_event_vec<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, args) => {
+            let name = tcx.def_path_str(adt.did());
+            if is_bounded_vec_type_name(&name) {
+                return false;
+            }
+            is_vec_type_name(&name)
+                || args.iter().any(|arg| match arg.kind() {
+                    GenericArgKind::Type(arg_ty) => type_contains_unbounded_event_vec(tcx, arg_ty),
+                    _ => false,
+                })
+        }
+        TyKind::Alias(_, alias_ty) => {
+            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
+            type_contains_unbounded_event_vec(tcx, expanded)
+        }
+        TyKind::Ref(_, inner, _) => type_contains_unbounded_event_vec(tcx, *inner),
+        TyKind::Slice(_) => false,
+        TyKind::Array(inner, _) => type_contains_unbounded_event_vec(tcx, *inner),
+        TyKind::Tuple(types) => types
+            .iter()
+            .any(|inner| type_contains_unbounded_event_vec(tcx, inner)),
+        _ => false,
+    }
+}
+
+fn type_contains_unbounded_storage_collection<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, args) => {
+            let name = tcx.def_path_str(adt.did());
+            if is_bounded_storage_collection_type_name(&name) {
+                return false;
+            }
+            is_unbounded_storage_collection_type_name(&name)
+                || args.iter().any(|arg| match arg.kind() {
+                    GenericArgKind::Type(arg_ty) => {
+                        type_contains_unbounded_storage_collection(tcx, arg_ty)
+                    }
+                    _ => false,
+                })
+        }
+        TyKind::Alias(_, alias_ty) => {
+            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
+            type_contains_unbounded_storage_collection(tcx, expanded)
+        }
+        TyKind::Ref(_, inner, _) => type_contains_unbounded_storage_collection(tcx, *inner),
+        TyKind::Slice(_) => false,
+        TyKind::Array(inner, _) => type_contains_unbounded_storage_collection(tcx, *inner),
+        TyKind::Tuple(types) => types
+            .iter()
+            .any(|inner| type_contains_unbounded_storage_collection(tcx, inner)),
+        _ => false,
+    }
+}
+
 fn is_vec_type_name(name: &str) -> bool {
     matches!(name, "Vec") || name.ends_with("::Vec")
+}
+
+fn is_bounded_vec_type_name(name: &str) -> bool {
+    matches!(name, "BoundedVec" | "WeakBoundedVec")
+        || name.ends_with("::BoundedVec")
+        || name.ends_with("::WeakBoundedVec")
+}
+
+fn is_unbounded_storage_collection_type_name(name: &str) -> bool {
+    is_vec_type_name(name)
+        || matches!(name, "BTreeMap" | "BTreeSet" | "VecDeque")
+        || name.ends_with("::BTreeMap")
+        || name.ends_with("::BTreeSet")
+        || name.ends_with("::VecDeque")
+}
+
+fn is_bounded_storage_collection_type_name(name: &str) -> bool {
+    is_bounded_vec_type_name(name)
+        || matches!(name, "BoundedBTreeMap" | "BoundedBTreeSet")
+        || name.ends_with("::BoundedBTreeMap")
+        || name.ends_with("::BoundedBTreeSet")
+}
+
+fn type_is_frame_storage_owner<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, _) => {
+            let name = tcx.def_path_str(adt.did());
+            matches_frame_storage_owner_name(&name)
+        }
+        TyKind::Alias(_, alias_ty) => {
+            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
+            type_is_frame_storage_owner(tcx, expanded)
+        }
+        _ => false,
+    }
+}
+
+fn matches_frame_storage_owner_name(name: &str) -> bool {
+    if !name.contains("frame_support::storage") {
+        return false;
+    }
+
+    [
+        "CountedStorageMap",
+        "StorageDoubleMap",
+        "StorageMap",
+        "StorageNMap",
+        "StorageValue",
+    ]
+    .iter()
+    .any(|owner| name == *owner || name.ends_with(&format!("::{owner}")))
+}
+
+fn has_hir_attr(tcx: TyCtxt<'_>, hir_id: rustc_hir::HirId, path: &[&str]) -> bool {
+    let symbols = path
+        .iter()
+        .map(|segment| Symbol::intern(segment))
+        .collect::<Vec<_>>();
+    tcx.hir_attrs(hir_id)
+        .iter()
+        .any(|attr| attr.path_matches(&symbols))
+}
+
+fn is_unbounded_clear_prefix_limit(expr: &Expr<'_>) -> bool {
+    match expr.kind {
+        ExprKind::Path(qpath) => qpath_last_segment(qpath).is_some_and(|segment| {
+            let name = segment.ident.name.as_str();
+            name == "None" || name == "MAX"
+        }),
+        ExprKind::Call(callee, args) => {
+            associated_call_name(callee)
+                .or_else(|| qpath_call_name(callee))
+                .is_some_and(|name| name == "Some")
+                && args
+                    .first()
+                    .is_some_and(|inner| is_unbounded_clear_prefix_limit(inner))
+        }
+        _ => false,
+    }
 }
 
 fn receiver_is_result_with_uninhabited_error<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
