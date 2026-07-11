@@ -4614,6 +4614,126 @@ impl<T: Config> Pallet<T> {
     );
 }
 
+#[test]
+fn sec017_allows_weight_accounted_vec_event_payloads() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    Submitted { who: T::AccountId, values: Vec<u8> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::submit(values.len() as u32))]
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        Self::deposit_event(Event::Submitted { who, values });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC017"),
+        "SEC017 should allow Vec event fields when dispatch weight accounts for their length"
+    );
+}
+
+#[test]
+fn sec017_allows_renamed_weight_accounted_vec_event_payloads() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    ConnectionsAdded { who: T::AccountId, allowed_connections: Vec<Vec<u8>> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::add(connections.len() as u32))]
+    pub fn add(origin: OriginFor<T>, connections: Vec<Vec<u8>>) -> DispatchResult {
+        let who = ensure_signed(origin)?;
+        Self::deposit_event(Event::ConnectionsAdded {
+            who,
+            allowed_connections: connections,
+        });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC017"),
+        "SEC017 should allow renamed Vec event fields when the source parameter is weight-accounted"
+    );
+}
+
+#[test]
+fn sec017_reports_mixed_weighted_and_unweighted_vec_event_payloads() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    Submitted { values: Vec<u8>, extra: Vec<u8> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::submit(values.len() as u32))]
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>, extra: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Self::deposit_event(Event::Submitted { values, extra });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC017"),
+        "SEC017 should report the event if any Vec field remains unbounded and unweighted"
+    );
+}
+
+#[test]
+fn sec017_allows_vec_event_payloads_derived_from_weighted_inputs() {
+    let code = r#"
+#[pallet::event]
+pub enum Event<T: Config> {
+    Redeposited { collection: T::CollectionId, successful_items: Vec<T::ItemId> },
+}
+
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::redeposit(items.len() as u32))]
+    pub fn redeposit(
+        origin: OriginFor<T>,
+        collection: T::CollectionId,
+        items: Vec<T::ItemId>,
+    ) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let mut successful = Vec::with_capacity(items.len());
+        for item in items.into_iter() {
+            if Self::try_redeposit(&collection, &item).is_ok() {
+                successful.push(item);
+            }
+        }
+        Self::deposit_event(Event::<T, I>::Redeposited {
+            collection,
+            successful_items: successful,
+        });
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC017"),
+        "SEC017 should allow Vec event fields derived from a weight-accounted input"
+    );
+}
+
 // ==========================================================================
 // SEC018: Missing weight term for unbounded input length
 // ==========================================================================
