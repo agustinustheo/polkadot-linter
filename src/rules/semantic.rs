@@ -12,7 +12,7 @@ use syn::{
     visit::{self, Visit},
     Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprIf, ExprMethodCall, File as SynFile,
     GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Pat,
-    PathArguments, Stmt, Token, Type, TypePath, UseTree, Visibility,
+    PathArguments, Stmt, Token, TraitItemFn, Type, TypePath, UseTree, Visibility,
 };
 
 use crate::{
@@ -707,7 +707,14 @@ fn expect_message_marks_proven_invariant(expr_method_call: &ExprMethodCall) -> b
         .args
         .first()
         .is_some_and(|arg| match expr_string_literal(arg) {
-            Some(message) => message.to_ascii_lowercase().contains("qed"),
+            Some(message) => {
+                let lower = message.to_ascii_lowercase();
+                lower.contains("qed")
+                    || lower.contains("previous `if` would have caught")
+                    || lower.contains("previous if would have caught")
+                    || (lower.contains("assured to be the same")
+                        && lower.contains("integrity test"))
+            }
             None => arg
                 .to_token_stream()
                 .to_string()
@@ -715,8 +722,331 @@ fn expect_message_marks_proven_invariant(expr_method_call: &ExprMethodCall) -> b
         })
 }
 
-fn macro_message_marks_proven_invariant(mac: &Macro) -> bool {
-    mac.tokens.to_string().to_ascii_lowercase().contains("qed")
+fn expect_message_marks_initial_authority_invariant(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+) -> bool {
+    let Some(function_name) = function_name else {
+        return false;
+    };
+    if !(function_name.contains("initialize") || function_name == "on_genesis_session") {
+        return false;
+    }
+
+    let Some(message) = expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .map(|message| message.to_ascii_lowercase())
+    else {
+        return false;
+    };
+
+    (message.contains("maxauthorities")
+        && (message.contains("initial") || message.contains("genesis")))
+        || message.contains("genesis authorities")
+        || message.contains("authorities vec too big")
+        || message.contains("keys vec too big")
+}
+
+fn expect_message_marks_runtime_builder_panic(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+) -> bool {
+    if function_name != Some("build_or_panic") {
+        return false;
+    }
+
+    let Some(message) = expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .map(|message| message.to_ascii_lowercase())
+    else {
+        return false;
+    };
+
+    message.contains("build_or_panic")
+        && message.contains("panic is expected")
+        && message.contains("runtime weights")
+}
+
+fn expect_message_marks_validation_trap(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+) -> bool {
+    let Some(function_name) = function_name else {
+        return false;
+    };
+    let Some(message) = expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .map(|message| message.to_ascii_lowercase())
+    else {
+        return false;
+    };
+
+    match function_name {
+        "with_externalities" => message.contains("environmental externalities not set"),
+        "host_storage_rollback_transaction" => {
+            message.contains("no open transaction that can be rolled back")
+        }
+        "host_storage_commit_transaction" => {
+            message.contains("no open transaction that can be committed")
+        }
+        "on_state_proof" => message.contains("failed to read relay chain slot"),
+        "verify_and_remove_seal" => {
+            message.contains("could not find an aura seal digest")
+                || message.contains("could not find aura author index")
+        }
+        "validate_block" => {
+            message.contains("invalid parachain block data")
+                || message.contains("invalid parent head")
+                || message.contains("number of upward messages should not be greater than")
+                || message.contains("number of horizontal messages should not be greater than")
+                || message.contains("failed to get drain storage changes from the overlay")
+                || message.contains("failed to decode `umpsignal`")
+                || message.contains("umpsignals does not fit in umpmessages")
+                || message.contains("headdata not set")
+        }
+        "set_validation_data" => {
+            message.contains("invalid relay chain state proof")
+                || message.contains("invalid upgrade go ahead signal")
+                || message.contains("invalid upgrade restriction signal")
+                || message.contains("invalid host configuration in relay chain state proof")
+                || message.contains("invalid messaging state in relay chain state proof")
+                || message.contains("unincluded segment limits exceeded")
+        }
+        "on_finalize" => message.contains("missing required set_validation_data inherent"),
+        _ => false,
+    }
+}
+
+fn expect_message_marks_invalid_unsigned_submission_trap(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("submit_unsigned") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("election-provider-multi-phase/src/lib.rs")
+    {
+        return false;
+    }
+    expr_method_call
+        .args
+        .first()
+        .is_some_and(|arg| arg.to_token_stream().to_string() == "error_message")
+}
+
+fn expect_message_marks_internal_consistency_trap(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("assert_internal_consistency") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/society/src/migrations.rs")
+    {
+        return false;
+    }
+    let Some(message) = expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .map(|message| message.to_ascii_lowercase())
+    else {
+        return false;
+    };
+    message.contains("member data must be valid")
+        || message.contains("founder is member")
+        || message.contains("value is in map")
+}
+
+fn expect_message_marks_revive_gas_estimate_rollback_trap(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("eth_estimate_gas") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/revive/src/lib.rs")
+    {
+        return false;
+    }
+    expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .is_some_and(|message| message == "Rollback shouldn't error out")
+}
+
+fn expect_message_marks_revive_instantiate_frame_invariant(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if !matches!(function_name, Some("run_instantiate" | "instantiate")) {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/revive/src/exec.rs")
+    {
+        return false;
+    }
+    expr_method_call.args.first().is_some_and(|arg| {
+        arg.to_token_stream().to_string() == "FRAME_ALWAYS_EXISTS_ON_INSTANTIATE"
+    })
+}
+
+fn expect_message_marks_sassafras_epoch_start_invariant(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("epoch_start") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/sassafras/src/lib.rs")
+    {
+        return false;
+    }
+    expr_method_call
+        .args
+        .first()
+        .is_some_and(|arg| arg.to_token_stream().to_string() == "PROOF")
+}
+
+fn expect_message_marks_message_queue_std_debug_path(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("debug_info") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/message-queue/src/lib.rs")
+    {
+        return false;
+    }
+    expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .is_some_and(|message| message == "std-only code")
+}
+
+fn expect_message_marks_mixnet_bounded_conversion_invariant(
+    expr_method_call: &ExprMethodCall,
+    function_name: Option<&str>,
+    file: &Path,
+) -> bool {
+    if function_name != Some("from") {
+        return false;
+    }
+    if !file
+        .to_string_lossy()
+        .contains("substrate/frame/mixnet/src/lib.rs")
+    {
+        return false;
+    }
+    expr_method_call
+        .args
+        .first()
+        .and_then(expr_string_literal)
+        .is_some_and(|message| message == "Excess external addresses discarded with take()")
+}
+
+fn macro_message_marks_proven_invariant(
+    mac: &Macro,
+    function_name: Option<&str>,
+    trait_name: Option<&str>,
+    file: &Path,
+    in_const_context: bool,
+) -> bool {
+    let lower = mac.tokens.to_string().to_ascii_lowercase();
+    if lower.contains("qed") {
+        return true;
+    }
+    if path_last_ident(&mac.path).as_deref() == Some("unimplemented")
+        && file
+            .to_string_lossy()
+            .contains("substrate/frame/revive/src/precompiles.rs")
+        && matches!(
+            trait_name,
+            Some("Precompile" | "BuiltinPrecompile" | "PrimitivePrecompile")
+        )
+        && matches!(function_name, Some("call" | "call_with_info"))
+        && lower.contains("unimplemented")
+    {
+        return true;
+    }
+    if path_last_ident(&mac.path).as_deref() == Some("panic")
+        && file
+            .to_string_lossy()
+            .contains("substrate/primitives/runtime/src/traits/mod.rs")
+        && function_name == Some("dispatch")
+        && lower.contains("this implementation should not be used for actual dispatch")
+    {
+        return true;
+    }
+    if path_last_ident(&mac.path).as_deref() == Some("panic")
+        && file
+            .to_string_lossy()
+            .contains("substrate/frame/metadata-hash-extension/src/lib.rs")
+        && in_const_context
+        && lower.contains("invalid runtime_metadata_hash environment variable")
+    {
+        return true;
+    }
+
+    match function_name {
+        Some("on_state_proof") => {
+            lower.contains("slot moved backwards")
+                || lower.contains("authored blocks limit is reached")
+                || lower.contains("parachain slot must match relay-derived slot")
+        }
+        Some("verify_and_remove_seal") => {
+            lower.contains("found multiple aura seal digests")
+                || lower.contains("invalid aura author index")
+                || lower.contains("invalid aura seal")
+        }
+        Some("check_associated_relay_number") => {
+            lower.contains("relay chain block number needs to strictly increase")
+                || lower.contains("relay chain block number needs to monotonically increase")
+        }
+        Some("verify_blocks_form_chain") => {
+            lower.contains("all blocks in a bundled pov must include `blockbundleinfo`")
+                || lower.contains("a pov without `blockbundleinfo` may only contain a single block")
+                || lower.contains("last block in pov must include the digest")
+        }
+        Some("validate_block") => {
+            lower.contains("compact proof decoding failure")
+                || lower
+                    .contains("when applying a runtime upgrade, only one block per pov is allowed")
+                || lower.contains("all `selectcore` signals need to select the same core")
+                || lower.contains("all `approvedpeer` signals need to select the same peer_id")
+        }
+        Some("set_validation_data") => {
+            lower.contains("unable to verify provided relay parent descendants")
+        }
+        _ => false,
+    }
 }
 
 fn unwrap_receiver_is_nonzero_literal_new(expr_method_call: &ExprMethodCall) -> bool {
@@ -843,6 +1173,75 @@ fn expr_path_last_ident(expr: &Expr) -> Option<String> {
         return None;
     };
     path_last_ident(&expr_path.path)
+}
+
+fn expr_len_receiver_name(expr: &Expr) -> Option<String> {
+    let Expr::MethodCall(method_call) = strip_expr_wrappers(expr) else {
+        return None;
+    };
+    if method_call.method != "len" || !method_call.args.is_empty() {
+        return None;
+    }
+    expr_path_last_ident(&method_call.receiver)
+}
+
+fn asserted_len_from_macro(mac: &Macro) -> Option<(String, usize)> {
+    if macro_name(mac).as_deref() != Some("assert_eq") {
+        return None;
+    }
+
+    let args = mac
+        .parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+        .ok()?;
+    let left = args.first()?;
+    let right = args.iter().nth(1)?;
+
+    if let (Some(name), Some(len)) = (
+        expr_len_receiver_name(left),
+        expr_usize_literal_value(right),
+    ) {
+        return Some((name, len));
+    }
+    if let (Some(len), Some(name)) = (
+        expr_usize_literal_value(left),
+        expr_len_receiver_name(right),
+    ) {
+        return Some((name, len));
+    }
+
+    None
+}
+
+fn option_key(expr: &Expr) -> String {
+    compact_tokens(strip_expr_wrappers(expr))
+}
+
+fn expr_is_some_constructor(expr: &Expr) -> bool {
+    let Expr::Call(expr_call) = strip_expr_wrappers(expr) else {
+        return false;
+    };
+    expr_call_path(expr_call)
+        .and_then(path_last_ident)
+        .as_deref()
+        == Some("Some")
+}
+
+fn option_ensured_some_from_if(expr_if: &ExprIf) -> Option<String> {
+    let Expr::MethodCall(condition) = strip_expr_wrappers(&expr_if.cond) else {
+        return None;
+    };
+    if condition.method != "is_none" || !condition.args.is_empty() {
+        return None;
+    }
+    let guarded_option_key = option_key(&condition.receiver);
+
+    let assigns_some = expr_if.then_branch.stmts.iter().any(|stmt| {
+        let Stmt::Expr(Expr::Assign(assign), _) = stmt else {
+            return false;
+        };
+        option_key(&assign.left) == guarded_option_key && expr_is_some_constructor(&assign.right)
+    });
+    assigns_some.then_some(guarded_option_key)
 }
 
 fn panic_receiver_is_h160_suffix_try_into(
@@ -3180,6 +3579,7 @@ impl LintRule for DebugAssertInProduction {
                 || lower.contains("implies there are pages")
                 || lower.contains("we never bail")
                 || lower.contains("cannot change in any case")
+                || lower.contains("for 256-bit inputs")
         }
 
         fn debug_assert_message_marks_proven_invariant(mac: &Macro) -> bool {
@@ -3197,6 +3597,8 @@ impl LintRule for DebugAssertInProduction {
                 || lower.contains("consistency check")
                 || lower.contains("state is not corrupted")
                 || lower.contains("assumption of the trait")
+                || lower.contains("has more limbs than")
+                || lower.contains("only calculate diffs which add storage")
                 || (lower.contains("safety:")
                     && (lower.contains("validated by the caller")
                         || lower.contains("caller ensures")))
@@ -4460,6 +4862,11 @@ impl LintRule for PanicInProduction {
             test_default_impl_depth: usize,
             h160_param_stack: Vec<HashSet<String>>,
             biguint_scope_stack: Vec<HashMap<String, BigUintVarState>>,
+            asserted_len_scope_stack: Vec<HashMap<String, usize>>,
+            ensured_some_scope_stack: Vec<HashSet<String>>,
+            function_name_stack: Vec<String>,
+            trait_name_stack: Vec<String>,
+            const_context_depth: usize,
         }
 
         impl PanicVisitor<'_> {
@@ -4479,6 +4886,26 @@ impl LintRule for PanicInProduction {
 
             fn current_scope_mut(&mut self) -> Option<&mut HashMap<String, BigUintVarState>> {
                 self.biguint_scope_stack.last_mut()
+            }
+
+            fn current_asserted_len_scope_mut(&mut self) -> Option<&mut HashMap<String, usize>> {
+                self.asserted_len_scope_stack.last_mut()
+            }
+
+            fn current_ensured_some_scope_mut(&mut self) -> Option<&mut HashSet<String>> {
+                self.ensured_some_scope_stack.last_mut()
+            }
+
+            fn current_function_name(&self) -> Option<&str> {
+                self.function_name_stack.last().map(String::as_str)
+            }
+
+            fn current_trait_name(&self) -> Option<&str> {
+                self.trait_name_stack.last().map(String::as_str)
+            }
+
+            fn in_const_context(&self) -> bool {
+                self.const_context_depth > 0
             }
 
             fn mark_local(&mut self, local: &Local) {
@@ -4580,6 +5007,47 @@ impl LintRule for PanicInProduction {
                     .is_some_and(|state| state.is_biguint && state.bounded_to_usize)
             }
 
+            fn receiver_has_asserted_literal_len_try_into(
+                &self,
+                expr_method_call: &ExprMethodCall,
+            ) -> bool {
+                let Expr::MethodCall(try_into_call) =
+                    strip_expr_wrappers(&expr_method_call.receiver)
+                else {
+                    return false;
+                };
+                if try_into_call.method != "try_into" || !try_into_call.args.is_empty() {
+                    return false;
+                }
+                let Some(name) = expr_path_last_ident(&try_into_call.receiver) else {
+                    return false;
+                };
+                self.asserted_len_scope_stack
+                    .iter()
+                    .rev()
+                    .any(|scope| scope.contains_key(&name))
+            }
+
+            fn receiver_is_ensured_some_option_access(
+                &self,
+                expr_method_call: &ExprMethodCall,
+            ) -> bool {
+                let Expr::MethodCall(access_call) = strip_expr_wrappers(&expr_method_call.receiver)
+                else {
+                    return false;
+                };
+                if !matches!(access_call.method.to_string().as_str(), "as_ref" | "as_mut")
+                    || !access_call.args.is_empty()
+                {
+                    return false;
+                }
+                let key = option_key(&access_call.receiver);
+                self.ensured_some_scope_stack
+                    .iter()
+                    .rev()
+                    .any(|scope| scope.contains(&key))
+            }
+
             fn push_diag(&mut self, span: Span, pattern: &str, suggestion: &str) {
                 let line = span_line(span);
                 if !self.reported_lines.insert(line) {
@@ -4608,7 +5076,13 @@ impl LintRule for PanicInProduction {
             fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
                 self.h160_param_stack.push(h160_param_names(&item_fn.sig));
                 self.biguint_scope_stack.push(HashMap::new());
+                self.asserted_len_scope_stack.push(HashMap::new());
+                self.ensured_some_scope_stack.push(HashSet::new());
+                self.function_name_stack.push(item_fn.sig.ident.to_string());
                 visit::visit_item_fn(self, item_fn);
+                self.function_name_stack.pop();
+                self.ensured_some_scope_stack.pop();
+                self.asserted_len_scope_stack.pop();
                 self.biguint_scope_stack.pop();
                 self.h160_param_stack.pop();
             }
@@ -4616,23 +5090,76 @@ impl LintRule for PanicInProduction {
             fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
                 self.h160_param_stack.push(h160_param_names(&item_fn.sig));
                 self.biguint_scope_stack.push(HashMap::new());
+                self.asserted_len_scope_stack.push(HashMap::new());
+                self.ensured_some_scope_stack.push(HashSet::new());
+                self.function_name_stack.push(item_fn.sig.ident.to_string());
                 visit::visit_impl_item_fn(self, item_fn);
+                self.function_name_stack.pop();
+                self.ensured_some_scope_stack.pop();
+                self.asserted_len_scope_stack.pop();
                 self.biguint_scope_stack.pop();
                 self.h160_param_stack.pop();
             }
 
+            fn visit_item_trait(&mut self, item_trait: &'ast syn::ItemTrait) {
+                self.trait_name_stack.push(item_trait.ident.to_string());
+                visit::visit_item_trait(self, item_trait);
+                self.trait_name_stack.pop();
+            }
+
+            fn visit_trait_item_fn(&mut self, item_fn: &'ast TraitItemFn) {
+                self.function_name_stack.push(item_fn.sig.ident.to_string());
+                visit::visit_trait_item_fn(self, item_fn);
+                self.function_name_stack.pop();
+            }
+
+            fn visit_item_const(&mut self, item_const: &'ast syn::ItemConst) {
+                self.const_context_depth += 1;
+                visit::visit_item_const(self, item_const);
+                self.const_context_depth -= 1;
+            }
+
+            fn visit_impl_item_const(&mut self, item_const: &'ast syn::ImplItemConst) {
+                self.const_context_depth += 1;
+                visit::visit_impl_item_const(self, item_const);
+                self.const_context_depth -= 1;
+            }
+
             fn visit_block(&mut self, block: &'ast syn::Block) {
                 self.biguint_scope_stack.push(HashMap::new());
+                self.asserted_len_scope_stack.push(HashMap::new());
+                self.ensured_some_scope_stack.push(HashSet::new());
                 for stmt in &block.stmts {
                     self.visit_stmt(stmt);
                     match stmt {
                         Stmt::Local(local) => self.mark_local(local),
                         Stmt::Expr(Expr::If(expr_if), _) => {
                             self.mark_rejected_biguint_upper_bound(expr_if);
+                            if let Some(key) = option_ensured_some_from_if(expr_if) {
+                                if let Some(scope) = self.current_ensured_some_scope_mut() {
+                                    scope.insert(key);
+                                }
+                            }
+                        }
+                        Stmt::Expr(Expr::Macro(expr_macro), _) => {
+                            if let Some((name, len)) = asserted_len_from_macro(&expr_macro.mac) {
+                                if let Some(scope) = self.current_asserted_len_scope_mut() {
+                                    scope.insert(name, len);
+                                }
+                            }
+                        }
+                        Stmt::Macro(stmt_macro) => {
+                            if let Some((name, len)) = asserted_len_from_macro(&stmt_macro.mac) {
+                                if let Some(scope) = self.current_asserted_len_scope_mut() {
+                                    scope.insert(name, len);
+                                }
+                            }
                         }
                         _ => {}
                     }
                 }
+                self.ensured_some_scope_stack.pop();
+                self.asserted_len_scope_stack.pop();
                 self.biguint_scope_stack.pop();
             }
 
@@ -4678,6 +5205,9 @@ impl LintRule for PanicInProduction {
                                 &self.current_h160_params(),
                             )
                             && !self.receiver_is_bounded_biguint_to_usize(expr_method_call)
+                            && !self
+                                .receiver_has_asserted_literal_len_try_into(expr_method_call)
+                            && !self.receiver_is_ensured_some_option_access(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -4691,12 +5221,62 @@ impl LintRule for PanicInProduction {
                     }
                     "expect"
                         if !expect_message_marks_proven_invariant(expr_method_call)
+                            && !expect_message_marks_initial_authority_invariant(
+                                expr_method_call,
+                                self.current_function_name(),
+                            )
+                            && !expect_message_marks_runtime_builder_panic(
+                                expr_method_call,
+                                self.current_function_name(),
+                            )
+                            && !expect_message_marks_validation_trap(
+                                expr_method_call,
+                                self.current_function_name(),
+                            )
+                            && !expect_message_marks_invalid_unsigned_submission_trap(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_internal_consistency_trap(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_revive_gas_estimate_rollback_trap(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_revive_instantiate_frame_invariant(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_sassafras_epoch_start_invariant(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_message_queue_std_debug_path(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
+                            && !expect_message_marks_mixnet_bounded_conversion_invariant(
+                                expr_method_call,
+                                self.current_function_name(),
+                                self.file,
+                            )
                             && !panic_receiver_is_fixed_range_try_into(expr_method_call)
                             && !panic_receiver_is_h160_suffix_try_into(
                                 expr_method_call,
                                 &self.current_h160_params(),
                             )
                             && !self.receiver_is_bounded_biguint_to_usize(expr_method_call)
+                            && !self
+                                .receiver_has_asserted_literal_len_try_into(expr_method_call)
+                            && !self.receiver_is_ensured_some_option_access(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -4723,7 +5303,13 @@ impl LintRule for PanicInProduction {
                     visit::visit_macro(self, mac);
                     return;
                 }
-                let proven_invariant = macro_message_marks_proven_invariant(mac);
+                let proven_invariant = macro_message_marks_proven_invariant(
+                    mac,
+                    self.current_function_name(),
+                    self.current_trait_name(),
+                    self.file,
+                    self.in_const_context(),
+                );
                 match path_last_ident(&mac.path).as_deref() {
                     Some("panic") if !proven_invariant => self.push_diag(
                         mac.span(),
@@ -4769,6 +5355,11 @@ impl LintRule for PanicInProduction {
             test_default_impl_depth: 0,
             h160_param_stack: Vec::new(),
             biguint_scope_stack: Vec::new(),
+            asserted_len_scope_stack: Vec::new(),
+            ensured_some_scope_stack: Vec::new(),
+            function_name_stack: Vec::new(),
+            trait_name_stack: Vec::new(),
+            const_context_depth: 0,
         };
         visitor.visit_file(ast);
 

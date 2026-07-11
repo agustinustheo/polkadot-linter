@@ -1573,6 +1573,32 @@ pub fn normal_debug_assert() {
 }
 
 #[test]
+fn sec002_skips_documented_math_and_storage_diff_invariants() {
+    let code = r#"
+pub fn proven_math_invariant(new_a: BigUint, b: BigUint) {
+    // 100_000^2 is more than 2^32-1, thus `new_a` has more limbs than `b`.
+    debug_assert!(new_a.len() > b.len());
+
+    let overflow = addmul();
+    debug_assert!(!overflow, "addmul overflowed for 256-bit inputs");
+
+    // Without any contract info we can only calculate diffs which add storage
+    debug_assert_eq!(bytes_removed, 0);
+}
+
+pub fn normal_debug_assert() {
+    debug_assert!(external_condition);
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/vm/evm/stack.rs", code);
+    let sec002_count = diags.iter().filter(|d| d.rule_id == "SEC002").count();
+    assert_eq!(
+        sec002_count, 1,
+        "SEC002 should skip tightly documented math/storage invariants only"
+    );
+}
+
+#[test]
 fn sec002_skips_extended_invariant_comments_for_false_and_result_asserts() {
     let code = r#"
 pub fn notify_downward_message() {
@@ -3161,16 +3187,38 @@ pub fn proven_invariant_with_variable() {
     let _ = value;
 }
 
+pub fn previous_branch_proved_invariant(candidate_index: u32) {
+    if candidate_index == 0 {
+        return;
+    }
+    let value = usize::try_from(candidate_index - 1)
+        .expect("Previous `if` would have caught a 0 candidate index.");
+    let _ = value;
+}
+
+pub fn integrity_test_proved_invariant<T: Config>(supports: Vec<T::AccountId>) {
+    let bounded: BoundedVec<_, T::MaxWinnersPerPage> = supports
+        .into_iter()
+        .try_collect()
+        .expect("`SupportsOfVerifier` is bounded by `MaxWinnersPerPage`, which is assured to be the same as `T::MaxWinnersPerPage` in an integrity test");
+    let _ = bounded;
+}
+
 pub fn fallible_input() {
     let value = Some(3u32).expect("external input must be valid");
+    let _ = value;
+}
+
+pub fn vague_conversion() {
+    let value = Some(4u32).expect("valid conversion");
     let _ = value;
 }
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
     assert_eq!(
-        sec008_count, 1,
-        "SEC008 should skip qed-marked expect invariants while reporting normal expects"
+        sec008_count, 2,
+        "SEC008 should skip documented proven invariants while reporting normal expects"
     );
 }
 
@@ -3194,6 +3242,463 @@ pub fn fallible_input() {
     assert_eq!(
         sec008_count, 1,
         "SEC008 should skip qed-marked panic invariants while reporting normal panics"
+    );
+}
+
+#[test]
+fn sec008_skips_revive_precompile_default_unimplemented_only() {
+    let code = r#"
+const UNIMPLEMENTED: &str = "must be implemented by the selected precompile mode";
+
+pub trait Precompile {
+    fn call() -> Result<Vec<u8>, Error> {
+        unimplemented!("{UNIMPLEMENTED}")
+    }
+
+    fn call_with_info() -> Result<Vec<u8>, Error> {
+        unimplemented!("{UNIMPLEMENTED}")
+    }
+
+    fn helper() {
+        unimplemented!("{UNIMPLEMENTED}")
+    }
+}
+
+pub trait BuiltinPrecompile {
+    fn call() -> Result<Vec<u8>, Error> {
+        unimplemented!("{UNIMPLEMENTED}")
+    }
+}
+
+pub trait OtherTrait {
+    fn call() {
+        unimplemented!("{UNIMPLEMENTED}")
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/precompiles.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only Revive precompile default entry-point unimplemented macros"
+    );
+}
+
+#[test]
+fn sec008_skips_validation_trap_panics_only_in_validation_contexts() {
+    let code = r#"
+pub trait ConsensusHook {
+    fn on_state_proof();
+}
+
+pub struct Hook;
+
+impl ConsensusHook for Hook {
+    fn on_state_proof() {
+        let _slot = state_proof.read_slot().expect("failed to read relay chain slot");
+        panic!("Slot moved backwards: stored_slot=1, relay_chain_slot=0");
+    }
+}
+
+pub struct BlockExecutor;
+
+impl BlockExecutor {
+    fn verify_and_remove_seal() {
+        let seal = seal.expect("Could not find an AuRa seal digest!");
+        let author = author.expect("Could not find AuRa author index!");
+        panic!("Invalid AuRa seal");
+        let _ = (seal, author);
+    }
+}
+
+pub fn validate_block() {
+    let block_data = decode().expect("Invalid parachain block data");
+    let parent = decode().expect("Invalid parent head");
+    upward_messages.try_push(m).expect(
+        "Number of upward messages should not be greater than `MAX_UPWARD_MESSAGE_NUM`",
+    );
+    horizontal_messages.try_extend(messages).expect(
+        "Number of horizontal messages should not be greater than `MAX_HORIZONTAL_MESSAGE_NUM`",
+    );
+    changes.drain_storage_changes().expect("Failed to get drain storage changes from the overlay.");
+    let signal = UMPSignal::decode(&mut data).expect("Failed to decode `UMPSignal`");
+    upward_messages.try_push(separator).expect("UMPSignals does not fit in UMPMessages");
+    let head_data = head_data.expect("HeadData not set");
+    panic!("Compact proof decoding failure.");
+    panic!("When applying a runtime upgrade, only one block per PoV is allowed. Received 2.");
+    panic!("All `SelectCore` signals need to select the same core: a vs b");
+    panic!("All `ApprovedPeer` signals need to select the same peer_id: a vs b");
+    let _ = (block_data, parent, signal, head_data);
+}
+
+fn verify_blocks_form_chain() {
+    panic!("All blocks in a bundled PoV must include `BlockBundleInfo`");
+    panic!("A PoV without `BlockBundleInfo` may only contain a single block");
+    panic!("Last block in PoV must include the digest that marks it as the last block in the core");
+}
+
+pub fn set_validation_data() {
+    let proof = RelayChainStateProof::new().expect("Invalid relay chain state proof");
+    let host_config = proof
+        .read_abridged_host_configuration()
+        .expect("Invalid host configuration in relay chain state proof");
+    panic!("Unable to verify provided relay parent descendants. error: bad proof");
+    let _ = (proof, host_config);
+}
+
+fn host_storage_rollback_transaction() {
+    with_externalities(|ext| ext.storage_rollback_transaction().ok())
+        .expect("No open transaction that can be rolled back.");
+}
+
+fn host_storage_commit_transaction() {
+    with_externalities(|ext| ext.storage_commit_transaction().ok())
+        .expect("No open transaction that can be committed.");
+}
+
+pub fn normal_dispatchable() {
+    let value = maybe_value().expect("Invalid parent head");
+    panic!("Invalid AuRa seal");
+    let error_message = "Invalid unsigned submission must produce invalid block";
+    let other = maybe_value().expect(error_message);
+    let _ = other;
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("cumulus/pallets/parachain-system/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 3,
+        "SEC008 should skip exact validation traps only in validation functions"
+    );
+}
+
+#[test]
+fn sec008_skips_invalid_unsigned_submission_error_message_only_in_election_provider() {
+    let code = r#"
+pub fn submit_unsigned() {
+    let error_message = "Invalid unsigned submission must produce invalid block and deprive validator from their authoring reward.";
+    Self::unsigned_pre_dispatch_checks(&raw_solution).expect(error_message);
+    SnapshotMetadata::<T>::get().expect(error_message);
+    Self::feasibility_check(raw_solution, ElectionCompute::Unsigned).expect(error_message);
+}
+
+pub fn other_function() {
+    let error_message = "Invalid unsigned submission must produce invalid block";
+    let other = maybe_value().expect(error_message);
+    let _ = other;
+}
+"#;
+    let diags = check_fixture(
+        "substrate/frame/election-provider-multi-phase/src/lib.rs",
+        code,
+    );
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip election-provider invalid unsigned submission traps only in submit_unsigned"
+    );
+}
+
+#[test]
+fn sec008_skips_society_migration_internal_consistency_traps_only() {
+    let code = r#"
+/// Will panic if there are any inconsistencies in the pallet's state or old keys remaining.
+pub fn assert_internal_consistency<T: Config>() {
+    let member = Members::<T>::get(&m).expect("Member data must be valid");
+    let founder = Members::<T>::get(founder).expect("founder is member");
+    let raw = frame_support::storage::unhashed::get_raw(&key).expect("value is in map");
+    let _ = (member, founder, raw);
+}
+
+pub fn normal_migration_check<T: Config>() {
+    let member = Members::<T>::get(&m).expect("Member data must be valid");
+    let _ = member;
+}
+"#;
+    let diags = check_fixture("substrate/frame/society/src/migrations.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only Society migration internal-consistency expect traps"
+    );
+}
+
+#[test]
+fn sec008_skips_revive_eth_estimate_gas_rollback_trap_only() {
+    let code = r#"
+pub fn eth_estimate_gas() {
+    let dry_run_result = with_transaction(|| {
+        TransactionOutcome::Rollback(Ok::<_, DispatchError>(Self::dry_run_eth_transact()))
+    })
+    .expect("Rollback shouldn't error out");
+    let _ = dry_run_result;
+}
+
+pub fn other_transaction() {
+    let result = with_transaction(|| TransactionOutcome::Rollback(Ok::<_, DispatchError>(())));
+    let _ = result.expect("Rollback shouldn't error out");
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only Revive eth_estimate_gas rollback expect traps"
+    );
+}
+
+#[test]
+fn sec008_skips_revive_instantiate_frame_invariant_only() {
+    let code = r#"
+const FRAME_ALWAYS_EXISTS_ON_INSTANTIATE: &str = "The return value is only `None` if no contract exists at the specified address. This cannot happen on instantiate or delegate; qed";
+
+pub fn run_instantiate<T, E>() -> Result<(), ExecError> {
+    let (mut stack, executable) = Stack::<'_, T, E>::new()?
+        .expect(FRAME_ALWAYS_EXISTS_ON_INSTANTIATE);
+    let _ = (stack, executable);
+    Ok(())
+}
+
+fn instantiate<T, E>() -> Result<(), ExecError> {
+    let executable = self.push_frame()?.expect(FRAME_ALWAYS_EXISTS_ON_INSTANTIATE);
+    let _ = executable;
+    Ok(())
+}
+
+pub fn run_call<T, E>() -> Result<(), ExecError> {
+    let executable = self.push_frame()?.expect(FRAME_ALWAYS_EXISTS_ON_INSTANTIATE);
+    let _ = executable;
+    Ok(())
+}
+
+pub fn run_instantiate_with_other_message<T, E>() -> Result<(), ExecError> {
+    let executable = self.push_frame()?.expect(EXTERNAL_INPUT_IS_VALID);
+    let _ = executable;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/revive/src/exec.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only Revive instantiate frame invariant expects"
+    );
+}
+
+#[test]
+fn sec008_skips_fake_dispatchable_sentinel_panics_only() {
+    let code = r#"
+impl Dispatchable for () {
+    type RuntimeOrigin = ();
+    type Config = ();
+    type Info = ();
+    type PostInfo = ();
+    fn dispatch(
+        self,
+        _origin: Self::RuntimeOrigin,
+    ) -> crate::DispatchResultWithInfo<Self::PostInfo> {
+        panic!("This implementation should not be used for actual dispatch.");
+    }
+}
+
+pub struct FakeDispatchable<Inner>(pub Inner);
+impl<Inner> Dispatchable for FakeDispatchable<Inner> {
+    type RuntimeOrigin = ();
+    type Config = ();
+    type Info = ();
+    type PostInfo = ();
+    fn dispatch(
+        self,
+        _origin: Self::RuntimeOrigin,
+    ) -> crate::DispatchResultWithInfo<Self::PostInfo> {
+        panic!("This implementation should not be used for actual dispatch.");
+    }
+}
+
+impl RuntimeCall {
+    fn dispatch(self, origin: RuntimeOrigin) -> DispatchResult {
+        panic!("external dispatch must not panic");
+    }
+}
+"#;
+    let diags = check_fixture("substrate/primitives/runtime/src/traits/mod.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only fake dispatchable sentinel panics"
+    );
+}
+
+#[test]
+fn sec008_skips_sassafras_epoch_start_proof_expects_only() {
+    let code = r#"
+fn epoch_start(epoch_index: u64) -> Slot {
+    const PROOF: &str = "slot number is u64; it should relate in some way to wall clock time; if u64 is not enough we should crash for safety; qed.";
+
+    let epoch_start = epoch_index.checked_mul(T::EpochLength::get() as u64).expect(PROOF);
+    GenesisSlot::<T>::get().checked_add(epoch_start).expect(PROOF).into()
+}
+
+fn other_epoch_math(epoch_index: u64) -> Slot {
+    const PROOF: &str = "slot number is u64; it should relate in some way to wall clock time; if u64 is not enough we should crash for safety; qed.";
+    epoch_index.checked_add(1).expect(PROOF).into()
+}
+
+fn initialize(authorities: &[AuthorityId]) {
+    if !prev_authorities.is_empty() {
+        panic!("Authorities were already initialized");
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/sassafras/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only Sassafras epoch_start proof expects"
+    );
+}
+
+#[test]
+fn sec008_skips_message_queue_std_debug_info_conversion_only() {
+    let code = r#"
+#[cfg(feature = "std")]
+pub fn debug_info() -> String {
+    page.peek_index(i.try_into().expect("std-only code"));
+    String::new()
+}
+
+pub fn process_message() {
+    page.peek_index(i.try_into().expect("std-only code"));
+}
+"#;
+    let diags = check_fixture("substrate/frame/message-queue/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only message-queue debug_info std-only conversions"
+    );
+}
+
+#[test]
+fn sec008_skips_metadata_hash_compile_time_env_panic_only() {
+    let code = r#"
+const RUNTIME_METADATA: Option<[u8; 32]> = if let Some(hex) = option_env!("RUNTIME_METADATA_HASH") {
+    match const_hex::const_decode_to_array(hex.as_bytes()) {
+        Ok(hex) => Some(hex),
+        Err(_) => panic!(
+            "Invalid RUNTIME_METADATA_HASH environment variable: it must be a 32 bytes value in hexadecimal"
+        ),
+    }
+} else {
+    None
+};
+
+pub fn runtime_check() {
+    panic!("Invalid RUNTIME_METADATA_HASH environment variable at runtime");
+}
+"#;
+    let diags = check_fixture("substrate/frame/metadata-hash-extension/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only metadata hash compile-time env validation panics"
+    );
+}
+
+#[test]
+fn sec008_skips_mixnet_take_bounded_conversion_only() {
+    let code = r#"
+impl<MaxExternalAddressSize: Get<u32>, MaxExternalAddresses: Get<u32>> From<Mixnode>
+    for BoundedMixnode<BoundedVec<BoundedVec<u8, MaxExternalAddressSize>, MaxExternalAddresses>>
+{
+    fn from(mixnode: Mixnode) -> Self {
+        Self {
+            external_addresses: mixnode
+                .external_addresses
+                .into_iter()
+                .take(MaxExternalAddresses::get() as usize)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("Excess external addresses discarded with take()"),
+        }
+    }
+}
+
+pub fn convert_unbounded(input: Vec<Vec<u8>>) {
+    let _bounded: BoundedVec<_, MaxExternalAddresses> = input
+        .try_into()
+        .expect("Excess external addresses discarded with take()");
+}
+"#;
+    let diags = check_fixture("substrate/frame/mixnet/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should skip only Mixnet conversion after excess addresses are discarded"
+    );
+}
+
+#[test]
+fn sec008_skips_initial_authority_bound_expects_only_in_initializers() {
+    let code = r#"
+pub fn initialize_authorities<T: Config>(authorities: &[T::AuthorityId]) {
+    let bounded = <BoundedSlice<'_, _, T::MaxAuthorities>>::try_from(authorities)
+        .expect("Initial authority set must be less than T::MaxAuthorities");
+    let _ = bounded;
+}
+
+fn initialize_keys<T: Config>(keys: Vec<T::AuthorityId>) {
+    let bounded_keys =
+        WeakBoundedVec::<_, T::MaxAuthorities>::try_from(keys).expect("Keys vec too big");
+    let _ = bounded_keys;
+}
+
+fn on_genesis_session<T: Config>(authorities: Vec<T::AuthorityId>) {
+    Self::initialize(&authorities).expect("Authorities vec too big");
+}
+
+pub fn update_authorities<T: Config>(authorities: &[T::AuthorityId]) {
+    let bounded = <BoundedSlice<'_, _, T::MaxAuthorities>>::try_from(authorities)
+        .expect("Initial authority set must be less than T::MaxAuthorities");
+    let _ = bounded;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should only skip initial authority bound expects inside initializer functions"
+    );
+}
+
+#[test]
+fn sec008_skips_documented_runtime_weight_builder_panic_only() {
+    let code = r#"
+pub struct BlockWeightsBuilder;
+pub struct BlockWeights;
+
+impl BlockWeightsBuilder {
+    pub fn build(self) -> Result<BlockWeights, ()> {
+        Ok(BlockWeights)
+    }
+
+    pub fn build_or_panic(self) -> BlockWeights {
+        self.build().expect(
+            "Builder finished with `build_or_panic`; The panic is expected if runtime weights are not correct"
+        )
+    }
+
+    pub fn get_ingress_channel_or_panic(self) -> BlockWeights {
+        self.build().expect("missing channel")
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "SEC008 should only skip documented runtime weight builder panics"
     );
 }
 
@@ -3335,6 +3840,90 @@ pub fn fixed_ranges(address: &H160, data: &[u8], offset: usize, start: usize, ru
     assert_eq!(
         sec008_count, 3,
         "SEC008 should skip only try_into unwraps whose slice length is statically known"
+    );
+}
+
+#[test]
+fn sec008_skips_try_into_after_same_scope_len_assertion_only() {
+    let code = r#"
+pub fn checked_digest(input: impl Into<Vec<u8>>) {
+    let digest = input.into();
+    assert_eq!(digest.len(), 32);
+    let _digest: [u8; 32] = digest.try_into().expect("digest length checked");
+}
+
+pub fn reverse_assertion(input: impl Into<Vec<u8>>) {
+    let digest = input.into();
+    assert_eq!(32, digest.len());
+    let _digest: [u8; 32] = digest.try_into().unwrap();
+}
+
+pub fn assertion_after(input: impl Into<Vec<u8>>) {
+    let digest = input.into();
+    let _digest: [u8; 32] = digest.try_into().expect("digest length checked later");
+    assert_eq!(digest.len(), 32);
+}
+
+pub fn different_variable(input: impl Into<Vec<u8>>, other: impl Into<Vec<u8>>) {
+    let digest = input.into();
+    let unrelated = other.into();
+    assert_eq!(unrelated.len(), 32);
+    let _digest: [u8; 32] = digest.try_into().expect("wrong variable checked");
+}
+"#;
+    let diags = check_fixture("substrate/frame/alliance/src/types.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should skip only try_into calls whose own receiver length was already asserted"
+    );
+}
+
+#[test]
+fn sec008_skips_option_access_after_same_scope_some_guard_only() {
+    let code = r#"
+pub struct ExtraMutator<T> {
+    original: T,
+    pending: Option<T>,
+    other: Option<T>,
+}
+
+impl<T: Clone> ExtraMutator<T> {
+    pub fn safe_mut(&mut self) -> &mut T {
+        if self.pending.is_none() {
+            self.pending = Some(self.original.clone());
+        }
+        self.pending.as_mut().unwrap()
+    }
+
+    pub fn safe_ref(&mut self) -> &T {
+        if self.pending.is_none() {
+            self.pending = Some(self.original.clone());
+        }
+        self.pending.as_ref().expect("initialized above")
+    }
+
+    pub fn before_guard(&mut self) -> &mut T {
+        let value = self.pending.as_mut().unwrap();
+        if self.pending.is_none() {
+            self.pending = Some(self.original.clone());
+        }
+        value
+    }
+
+    pub fn different_option(&mut self) -> &mut T {
+        if self.pending.is_none() {
+            self.pending = Some(self.original.clone());
+        }
+        self.other.as_mut().unwrap()
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/assets/src/extra_mutator.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 2,
+        "SEC008 should only skip option unwraps after a guard that initializes the same option"
     );
 }
 
