@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::{path::PathBuf, process};
 
-use polkadot_linter::{config::Config, diagnostics, engine::LintEngine};
+use polkadot_linter::{config::Config, diagnostics, engine::LintEngine, rustdoc_analysis};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -45,6 +45,14 @@ struct Cli {
     /// Show verbose output
     #[arg(short, long)]
     verbose: bool,
+
+    /// rustdoc JSON files to analyze with the experimental rustc-backed path
+    #[arg(long = "rustdoc-json")]
+    rustdoc_json: Vec<PathBuf>,
+
+    /// Source root used to resolve relative rustdoc JSON spans
+    #[arg(long = "rustdoc-source-root")]
+    rustdoc_source_root: Option<PathBuf>,
 }
 
 fn main() {
@@ -69,7 +77,7 @@ fn main() {
         }
     };
 
-    let mut engine = LintEngine::new(config);
+    let mut engine = LintEngine::new(config.clone());
 
     // Apply CLI overrides
     if let Some(ref rules) = cli.rules {
@@ -85,6 +93,39 @@ fn main() {
     let mut results = Vec::new();
     for path in &cli.paths {
         results.extend(engine.scan(path));
+    }
+
+    let run_rustdoc_sec013 = cli
+        .rules
+        .as_ref()
+        .is_none_or(|rules| rules.iter().any(|rule| rule == "SEC" || rule == "SEC013"));
+    if run_rustdoc_sec013 {
+        for rustdoc_json_path in &cli.rustdoc_json {
+            let content = match std::fs::read_to_string(rustdoc_json_path) {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!(
+                        "Error loading rustdoc JSON {}: {e}",
+                        rustdoc_json_path.display()
+                    );
+                    process::exit(2);
+                }
+            };
+            match rustdoc_analysis::analyze_rustdoc_json_str(
+                &content,
+                cli.rustdoc_source_root.as_deref(),
+                &config,
+            ) {
+                Ok(mut diagnostics) => results.append(&mut diagnostics),
+                Err(e) => {
+                    eprintln!(
+                        "Error analyzing rustdoc JSON {}: {e}",
+                        rustdoc_json_path.display()
+                    );
+                    process::exit(2);
+                }
+            }
+        }
     }
 
     let filtered = results

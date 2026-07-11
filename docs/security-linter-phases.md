@@ -35,6 +35,14 @@ Non-goals:
 Goal: move important rules off pure syntax matching and onto a typed semantic
 layer.
 
+Current implementation:
+
+- an opt-in rustdoc JSON backend can be supplied with `--rustdoc-json`
+- the first prototype migrates `SEC013` storage value-shape detection onto
+  compiler-resolved type aliases
+- the default fast scanner remains unchanged while typed rules are validated
+  rule by rule
+
 Expected work:
 
 - add a cargo/rustc-backed project model so scans understand declared target
@@ -42,6 +50,9 @@ Expected work:
 - evaluate `rustc`/Clippy-style analysis as the backend for hard rules
 - resolve types, cfg gates, macro expansion, and call targets where needed
 - reimplement high-noise rules that cannot be fixed reliably with `syn` alone
+
+See [`rustdoc-analysis.md`](rustdoc-analysis.md) for the current backend,
+migration plan, and compatibility story.
 
 ## Phase 3: Rebuild as a Focused FRAME Security Analyzer
 
