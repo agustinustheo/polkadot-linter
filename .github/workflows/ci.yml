@@ -54,8 +54,8 @@ jobs:
       - name: Build Polkadot Linter binary
         run: cargo +1.93.0 build
 
-      - name: Run rustc-backed SEC009 precision check
-        run: scripts/check-rustc-sec009.sh
+      - name: Run rustc-backed hard-rule precision checks
+        run: scripts/check-rustc-hard-rules.sh
 
       - name: Benchmark SEC rules against Polkadot SDK
         run: scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks
