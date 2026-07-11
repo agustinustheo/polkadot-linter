@@ -17,7 +17,7 @@ mkdir -p "$OUTPUT_DIR"
 RAW_JSON="$OUTPUT_DIR/sec-rules-$TIMESTAMP.json"
 SUMMARY_TXT="$OUTPUT_DIR/sec-rules-$TIMESTAMP-summary.txt"
 
-cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" -- \
+cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --rules SEC \
   -f json \
   "$TARGET_PATH" > "$RAW_JSON"
