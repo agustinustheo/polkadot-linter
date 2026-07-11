@@ -2,7 +2,8 @@
 
 `polkadot-linter-rustc` is the compiler-backed analysis entry point. It is
 gated behind the `rustc-driver` feature because it depends on nightly
-`rustc_private` APIs and the `rustc-dev` component.
+`rustc_private` APIs plus the `rustc-dev` and `llvm-tools-preview`
+components.
 
 ## Toolchain
 
@@ -12,10 +13,11 @@ The supported toolchain for the current driver is:
 nightly-2025-06-10
 ```
 
-Install the required component with:
+Install the required components with:
 
 ```sh
 rustup component add rustc-dev --toolchain nightly-2025-06-10
+rustup component add llvm-tools-preview --toolchain nightly-2025-06-10
 ```
 
 The default syntax-based CLI still builds on the stable project toolchain. The

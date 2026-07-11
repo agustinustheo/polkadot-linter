@@ -31,7 +31,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2025-06-10
-          components: rustfmt,rustc-dev
+          components: rustfmt,rustc-dev,llvm-tools-preview
 
       - name: Install build and test toolchain
         uses: dtolnay/rust-toolchain@master
