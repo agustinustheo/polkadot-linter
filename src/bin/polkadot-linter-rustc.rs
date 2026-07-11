@@ -6,7 +6,7 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use std::{collections::HashSet, env, process};
+use std::{collections::HashSet, env, fs::OpenOptions, io::Write, path::Path, process};
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
@@ -14,11 +14,11 @@ use rustc_hir::{
     intravisit::{self, Visitor},
     BinOpKind, BodyOwnerKind, Expr, ExprKind, ItemKind, PatKind, QPath,
 };
-use rustc_middle::ty::{GenericArgKind, Ty, TyCtxt, TyKind};
+use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct RustcDiagnostic {
     rule_id: &'static str,
     rule_name: &'static str,
@@ -31,6 +31,8 @@ struct RustcDiagnostic {
 #[derive(Default)]
 struct PolkadotCallbacks {
     diagnostics: Vec<RustcDiagnostic>,
+    continue_compilation: bool,
+    enabled_rules: HashSet<String>,
 }
 
 impl Callbacks for PolkadotCallbacks {
@@ -39,8 +41,12 @@ impl Callbacks for PolkadotCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
-        report_unbounded_storage_aliases(tcx, tcx.sess.source_map(), &mut self.diagnostics);
-        report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        if self.rule_enabled("SEC013") {
+            report_unbounded_storage_aliases(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
+        if self.rule_enabled("SEC017") {
+            report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
 
         for def_id in tcx.hir_body_owners() {
             if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
@@ -49,46 +55,56 @@ impl Callbacks for PolkadotCallbacks {
             let typeck = tcx.typeck(def_id);
             let body = tcx.hir_body_owned_by(def_id);
 
-            report_missing_weight_for_unbounded_inputs(
-                tcx,
-                def_id,
-                body,
-                tcx.sess.source_map(),
-                &mut self.diagnostics,
-            );
+            if self.rule_enabled("SEC018") {
+                report_missing_weight_for_unbounded_inputs(
+                    tcx,
+                    def_id,
+                    body,
+                    tcx.sess.source_map(),
+                    &mut self.diagnostics,
+                );
+            }
 
-            report_unbounded_public_vec_inputs(
-                tcx,
-                def_id,
-                body,
-                tcx.sess.source_map(),
-                &mut self.diagnostics,
-            );
+            if self.rule_enabled("SEC001") {
+                report_unbounded_public_vec_inputs(
+                    tcx,
+                    def_id,
+                    body,
+                    tcx.sess.source_map(),
+                    &mut self.diagnostics,
+                );
+            }
 
-            let mut decode_visitor = Sec003Visitor {
-                source_map: tcx.sess.source_map(),
-                tcx,
-                typeck,
-                diagnostics: &mut self.diagnostics,
-            };
-            decode_visitor.visit_body(body);
+            if self.rule_enabled("SEC003") {
+                let mut decode_visitor = Sec003Visitor {
+                    source_map: tcx.sess.source_map(),
+                    tcx,
+                    typeck,
+                    diagnostics: &mut self.diagnostics,
+                };
+                decode_visitor.visit_body(body);
+            }
 
-            let mut debug_assert_visitor = Sec002Visitor {
-                source_map: tcx.sess.source_map(),
-                diagnostics: &mut self.diagnostics,
-                reported_lines: HashSet::new(),
-            };
-            debug_assert_visitor.visit_body(body);
+            if self.rule_enabled("SEC002") {
+                let mut debug_assert_visitor = Sec002Visitor {
+                    source_map: tcx.sess.source_map(),
+                    diagnostics: &mut self.diagnostics,
+                    reported_lines: HashSet::new(),
+                };
+                debug_assert_visitor.visit_body(body);
+            }
 
-            let mut panic_visitor = Sec008Visitor {
-                source_map: tcx.sess.source_map(),
-                tcx,
-                typeck,
-                diagnostics: &mut self.diagnostics,
-            };
-            panic_visitor.visit_body(body);
+            if self.rule_enabled("SEC008") {
+                let mut panic_visitor = Sec008Visitor {
+                    source_map: tcx.sess.source_map(),
+                    tcx,
+                    typeck,
+                    diagnostics: &mut self.diagnostics,
+                };
+                panic_visitor.visit_body(body);
+            }
 
-            if is_public_or_hook(tcx, def_id) {
+            if self.rule_enabled("SEC011") && is_public_or_hook(tcx, def_id) {
                 let mut storage_iteration_visitor = Sec011Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
@@ -98,15 +114,17 @@ impl Callbacks for PolkadotCallbacks {
                 storage_iteration_visitor.visit_body(body);
             }
 
-            let mut clear_prefix_visitor = Sec012Visitor {
-                source_map: tcx.sess.source_map(),
-                tcx,
-                typeck,
-                diagnostics: &mut self.diagnostics,
-            };
-            clear_prefix_visitor.visit_body(body);
+            if self.rule_enabled("SEC012") {
+                let mut clear_prefix_visitor = Sec012Visitor {
+                    source_map: tcx.sess.source_map(),
+                    tcx,
+                    typeck,
+                    diagnostics: &mut self.diagnostics,
+                };
+                clear_prefix_visitor.visit_body(body);
+            }
 
-            if !returns_fallible(tcx, def_id) {
+            if !self.rule_enabled("SEC009") || !returns_fallible(tcx, def_id) {
                 continue;
             }
 
@@ -118,7 +136,20 @@ impl Callbacks for PolkadotCallbacks {
             visitor.visit_body(body);
         }
 
-        Compilation::Stop
+        if self.continue_compilation {
+            Compilation::Continue
+        } else {
+            Compilation::Stop
+        }
+    }
+}
+
+impl PolkadotCallbacks {
+    fn rule_enabled(&self, rule_id: &str) -> bool {
+        self.enabled_rules.is_empty()
+            || self.enabled_rules.iter().any(|enabled| {
+                enabled == "SEC" || rule_id == enabled || rule_id.starts_with(enabled)
+            })
     }
 }
 
@@ -559,6 +590,15 @@ fn associated_call_receiver_type<'tcx>(
     Some(typeck.node_type(ty.hir_id))
 }
 
+fn expand_alias_type<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    kind: AliasTyKind,
+    alias_ty: rustc_middle::ty::AliasTy<'tcx>,
+) -> Option<Ty<'tcx>> {
+    matches!(kind, AliasTyKind::Free | AliasTyKind::Opaque)
+        .then(|| tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args))
+}
+
 fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
     match ty.kind() {
         TyKind::Adt(adt, args) => {
@@ -571,10 +611,8 @@ fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) 
                     _ => false,
                 })
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_contains_recursive_decode_target(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_contains_recursive_decode_target(tcx, expanded)),
         _ => false,
     }
 }
@@ -589,10 +627,8 @@ fn type_contains_unbounded_vec<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
                     _ => false,
                 })
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_contains_unbounded_vec(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_contains_unbounded_vec(tcx, expanded)),
         TyKind::Ref(_, inner, _) => type_contains_unbounded_vec(tcx, *inner),
         TyKind::Slice(_) => false,
         TyKind::Array(inner, _) => type_contains_unbounded_vec(tcx, *inner),
@@ -616,10 +652,8 @@ fn type_contains_unbounded_event_vec<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> b
                     _ => false,
                 })
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_contains_unbounded_event_vec(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_contains_unbounded_event_vec(tcx, expanded)),
         TyKind::Ref(_, inner, _) => type_contains_unbounded_event_vec(tcx, *inner),
         TyKind::Slice(_) => false,
         TyKind::Array(inner, _) => type_contains_unbounded_event_vec(tcx, *inner),
@@ -645,10 +679,8 @@ fn type_contains_unbounded_storage_collection<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'t
                     _ => false,
                 })
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_contains_unbounded_storage_collection(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_contains_unbounded_storage_collection(tcx, expanded)),
         TyKind::Ref(_, inner, _) => type_contains_unbounded_storage_collection(tcx, *inner),
         TyKind::Slice(_) => false,
         TyKind::Array(inner, _) => type_contains_unbounded_storage_collection(tcx, *inner),
@@ -690,10 +722,8 @@ fn type_is_frame_storage_owner<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
             let name = tcx.def_path_str(adt.did());
             matches_frame_storage_owner_name(&name)
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_is_frame_storage_owner(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_frame_storage_owner(tcx, expanded)),
         _ => false,
     }
 }
@@ -792,10 +822,8 @@ fn type_is_uninhabited<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
                 || name.ends_with("::Infallible")
                 || adt.variants().is_empty()
         }
-        TyKind::Alias(_, alias_ty) => {
-            let expanded = tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args);
-            type_is_uninhabited(tcx, expanded)
-        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_uninhabited(tcx, expanded)),
         _ => false,
     }
 }
@@ -832,13 +860,107 @@ fn span_location(source_map: &SourceMap, span: Span) -> (String, usize, usize) {
     )
 }
 
+fn first_arg_is_rustc(args: &[String]) -> bool {
+    args.first()
+        .and_then(|arg| Path::new(arg).file_name())
+        .and_then(|file_name| file_name.to_str())
+        .is_some_and(|file_name| file_name == "rustc" || file_name.starts_with("rustc-"))
+}
+
+fn append_jsonl_diagnostics(path: &str, diagnostics: &[RustcDiagnostic]) {
+    if diagnostics.is_empty() {
+        return;
+    }
+
+    let mut output = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .expect("rustc diagnostics output should be writable");
+
+    for diagnostic in diagnostics {
+        writeln!(
+            output,
+            "{}",
+            serde_json::to_string(diagnostic).expect("rustc diagnostic should serialize")
+        )
+        .expect("rustc diagnostic should be written");
+    }
+}
+
+fn output_file_filters() -> Vec<String> {
+    env::var("POLKADOT_LINTER_RUSTC_FILE_CONTAINS")
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn enabled_rule_filters() -> HashSet<String> {
+    env::var("POLKADOT_LINTER_RUSTC_RULES")
+        .ok()
+        .into_iter()
+        .flat_map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn filtered_unique_diagnostics(
+    diagnostics: &[RustcDiagnostic],
+    file_filters: &[String],
+) -> Vec<RustcDiagnostic> {
+    let mut filtered = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            file_filters.is_empty()
+                || file_filters
+                    .iter()
+                    .any(|needle| diagnostic.file.contains(needle))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    filtered.sort_by(|a, b| {
+        a.rule_id
+            .cmp(b.rule_id)
+            .then(a.file.cmp(&b.file))
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+            .then(a.message.cmp(&b.message))
+    });
+    filtered.dedup_by(|a, b| {
+        a.rule_id == b.rule_id
+            && a.file == b.file
+            && a.line == b.line
+            && a.column == b.column
+            && a.message == b.message
+    });
+    filtered
+}
+
 fn main() {
     let mut rustc_args = env::args().skip(1).collect::<Vec<_>>();
     if rustc_args.is_empty() {
         eprintln!("usage: polkadot-linter-rustc <rustc args>");
         process::exit(2);
     }
-    rustc_args.insert(0, "rustc".to_string());
+    let wrapper_mode = first_arg_is_rustc(&rustc_args);
+    if !wrapper_mode {
+        rustc_args.insert(0, "rustc".to_string());
+    }
     if !rustc_args.iter().any(|arg| arg == "--crate-name") {
         rustc_args.push("--crate-name".to_string());
         rustc_args.push("lint_target".to_string());
@@ -847,14 +969,23 @@ fn main() {
         rustc_args.push("--error-format=json".to_string());
     }
 
-    let mut callbacks = PolkadotCallbacks::default();
-    let result = rustc_driver::catch_with_exit_code(move || {
+    let mut callbacks = PolkadotCallbacks {
+        continue_compilation: wrapper_mode,
+        enabled_rules: enabled_rule_filters(),
+        ..PolkadotCallbacks::default()
+    };
+    let result = rustc_driver::catch_with_exit_code(|| {
         rustc_driver::run_compiler(&rustc_args, &mut callbacks);
+    });
+    let diagnostics = filtered_unique_diagnostics(&callbacks.diagnostics, &output_file_filters());
+
+    if let Ok(path) = env::var("POLKADOT_LINTER_RUSTC_JSONL") {
+        append_jsonl_diagnostics(&path, &diagnostics);
+    } else if !wrapper_mode {
         println!(
             "{}",
-            serde_json::to_string_pretty(&callbacks.diagnostics)
-                .expect("rustc diagnostics should serialize")
+            serde_json::to_string_pretty(&diagnostics).expect("rustc diagnostics should serialize")
         );
-    });
+    }
     process::exit(result);
 }

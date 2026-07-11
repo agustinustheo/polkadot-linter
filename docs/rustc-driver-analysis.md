@@ -114,4 +114,52 @@ driver:
   parameter is hidden behind a `Payload` alias, while the rustc-driver path
   resolves the alias and reports it while skipping bounded inputs
 
-The CI workflow runs this script after the default stable build.
+The stable `polkadot-linter` CLI can now invoke the compiler-backed path for a
+Cargo package and emit normal linter diagnostics:
+
+```sh
+polkadot-linter \
+  --no-syntax \
+  --format json \
+  --compiler-backed-rules SEC001,SEC008 \
+  --rustc-cargo-manifest .repos/polkadot-sdk/Cargo.toml \
+  --rustc-package pallet-multisig \
+  --rustc-lib \
+  --rustc-no-default-features \
+  --rustc-driver target/debug/polkadot-linter-rustc \
+  --rustc-toolchain nightly-2025-06-10 \
+  --rustc-source-filter substrate/frame/multisig/src/lib.rs
+```
+
+Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
+`RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
+back into the public diagnostic format. In wrapper mode, Cargo passes the real
+rustc path as the first argument; the driver preserves that invocation,
+continues compilation after analysis, and appends linter diagnostics to the
+JSONL file named by `POLKADOT_LINTER_RUSTC_JSONL`. Diagnostics are sorted and
+deduplicated before JSON/JSONL output. `POLKADOT_LINTER_RUSTC_FILE_CONTAINS`
+can be set to a comma-separated list of file substrings to capture only
+package-local benchmark output while Cargo still compiles dependencies
+normally. `POLKADOT_LINTER_RUSTC_RULES` can be set to a comma-separated list
+of rule families or IDs, such as `SEC` or `SEC008,SEC009`, so migrated rules
+can be benchmarked and wired independently.
+
+Run the SDK smoke check with:
+
+```sh
+scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
+```
+
+That script builds `polkadot-linter-rustc`, invokes the stable
+`polkadot-linter` CLI with `--rustc-cargo-manifest`, and verifies
+package-local compiler-backed findings are captured from the pinned SDK
+`pallet-multisig` package. The raw smoke artifact is filtered to the
+`substrate/frame/multisig/src/lib.rs` package file and currently contains 10
+deduplicated public linter diagnostics from the explicitly selected `SEC001`
+and `SEC008` rustc-backed rules. The summary is checked against
+`benchmarks/polkadot-sdk-rustc-multisig-sec001-sec008-baseline.tsv`. This is
+the first end-to-end SDK Cargo integration baseline through the public CLI for
+the rustc-backed pipeline; it is not yet the final SDK-scale benchmark proof
+for every hard rule.
+
+The CI workflow runs both scripts after the default stable build.
