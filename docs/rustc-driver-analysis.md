@@ -64,13 +64,18 @@ The driver currently includes typed checks for:
 - `SEC017`: unbounded event payloads. The rustc-backed implementation visits
   event-like enums and reads resolved field types, so aliases to `Vec<T>` are
   reported while bounded wrappers such as `BoundedVec` are skipped.
+- `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
+  implementation reads `#[pallet::weight(...)]` attributes plus resolved
+  function parameter types, so aliased `Vec<T>` inputs are reported when the
+  weight expression does not reference the parameter length or encoded size.
 
 This removes syntax-level false negatives for aliased unbounded inputs and
 aliased recursive decode targets, storage payloads, and event payloads, plus
 syntax-level false positives for cfg-disabled debug assertions,
 type-provably infallible unwraps, overloaded arithmetic, ordinary non-storage
-`iter()` calls, and ordinary non-storage `clear_prefix` calls. Source spelling
-alone is no longer the authority for these checks.
+`iter()` calls, ordinary non-storage `clear_prefix` calls, and bounded
+weight-input cases. Source spelling alone is no longer the authority for these
+checks.
 
 Run the reproducible precision check with:
 
@@ -105,5 +110,8 @@ driver:
 - for `SEC017`, the syntax path misses an event payload behind a `Payload`
   alias, while the rustc-driver path resolves the alias and reports it while
   skipping a `BoundedVec` event payload
+- for `SEC018`, the syntax path misses a weight annotation whose unaccounted
+  parameter is hidden behind a `Payload` alias, while the rustc-driver path
+  resolves the alias and reports it while skipping bounded inputs
 
 The CI workflow runs this script after the default stable build.

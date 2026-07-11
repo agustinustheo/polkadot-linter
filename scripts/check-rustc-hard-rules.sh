@@ -55,6 +55,7 @@ impl Domain {
 #[pallet::call]
 impl<T: Config> Pallet<T> {
     #[pallet::call_index(0)]
+    #[pallet::weight(T::WeightInfo::submit_alias())]
     pub fn submit_alias(origin: OriginFor<T>, payload: Payload) -> DispatchResult {
         let _ = ensure_signed(origin)?;
         let _ = payload;
@@ -146,12 +147,18 @@ impl MigrationState {
     }
 }
 
+#[pallet::weight(WeightInfo::submit_missing())]
 pub fn submit_alias(payload: Payload) {
     let _ = payload;
     helper_vec(Vec::new());
 }
 
 pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
+    let _ = payload;
+}
+
+#[pallet::weight(WeightInfo::submit_bounded())]
+pub fn weighted_bounded(payload: BoundedPayload) {
     let _ = payload;
 }
 
@@ -255,6 +262,7 @@ SEC011 = true
 SEC012 = true
 SEC013 = true
 SEC017 = true
+SEC018 = true
 TOML
 
 SYN_JSON="$WORK_DIR/syn-hard-rules.json"
@@ -263,7 +271,7 @@ RUSTC_JSON="$WORK_DIR/rustc-hard-rules.json"
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
   "$WORK_DIR" \
-  --rules SEC001,SEC002,SEC003,SEC008,SEC009,SEC011,SEC012,SEC013,SEC017 \
+  --rules SEC001,SEC002,SEC003,SEC008,SEC009,SEC011,SEC012,SEC013,SEC017,SEC018 \
   -f json > "$SYN_JSON"
 
 cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
@@ -284,6 +292,7 @@ syn_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$SYN_JSO
 syn_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$SYN_JSON")"
 syn_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYN_JSON")"
 syn_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$SYN_JSON")"
+syn_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$SYN_JSON")"
 rustc_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$RUSTC_JSON")"
 rustc_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$RUSTC_JSON")"
 rustc_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$RUSTC_JSON")"
@@ -293,6 +302,7 @@ rustc_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC
 rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_JSON")"
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
+rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
 rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_JSON")"
 rustc_sec002_line="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON")"
 rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
@@ -302,6 +312,7 @@ rustc_sec011_line="$(jq -r '.[] | select(.rule_id == "SEC011") | .line' "$RUSTC_
 rustc_sec012_line="$(jq -r '.[] | select(.rule_id == "SEC012") | .line' "$RUSTC_JSON")"
 rustc_sec013_line="$(jq -r '.[] | select(.rule_id == "SEC013") | .line' "$RUSTC_JSON")"
 rustc_sec017_line="$(jq -r '.[] | select(.rule_id == "SEC017") | .line' "$RUSTC_JSON")"
+rustc_sec018_line="$(jq -r '.[] | select(.rule_id == "SEC018") | .line' "$RUSTC_JSON")"
 
 echo "syntax SEC001 findings: $syn_sec001_count"
 echo "rustc SEC001 findings: $rustc_sec001_count"
@@ -321,31 +332,36 @@ echo "syntax SEC013 findings: $syn_sec013_count"
 echo "rustc SEC013 findings: $rustc_sec013_count"
 echo "syntax SEC017 findings: $syn_sec017_count"
 echo "rustc SEC017 findings: $rustc_sec017_count"
+echo "syntax SEC018 findings: $syn_sec018_count"
+echo "rustc SEC018 findings: $rustc_sec018_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
-test "$rustc_sec001_line" = "69"
+test "$rustc_sec001_line" = "70"
 test "$syn_sec002_count" = "2"
 test "$rustc_sec002_count" = "1"
-test "$rustc_sec002_line" = "121"
+test "$rustc_sec002_line" = "127"
 test "$syn_sec003_count" = "0"
 test "$rustc_sec003_count" = "1"
-test "$rustc_sec003_line" = "104"
+test "$rustc_sec003_line" = "110"
 test "$syn_sec008_count" = "2"
 test "$rustc_sec008_count" = "1"
-test "$rustc_sec008_line" = "141"
+test "$rustc_sec008_line" = "147"
 test "$syn_sec009_count" = "2"
 test "$rustc_sec009_count" = "1"
-test "$rustc_sec009_line" = "145"
+test "$rustc_sec009_line" = "151"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "1"
-test "$rustc_sec011_line" = "83"
+test "$rustc_sec011_line" = "89"
 test "$syn_sec012_count" = "2"
 test "$rustc_sec012_count" = "1"
-test "$rustc_sec012_line" = "91"
+test "$rustc_sec012_line" = "97"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "1"
 test "$rustc_sec013_line" = "34"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "1"
 test "$rustc_sec017_line" = "12"
+test "$syn_sec018_count" = "0"
+test "$rustc_sec018_count" = "1"
+test "$rustc_sec018_line" = "70"

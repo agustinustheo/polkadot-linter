@@ -12,7 +12,7 @@ use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
     def_id::LocalDefId,
     intravisit::{self, Visitor},
-    BinOpKind, BodyOwnerKind, Expr, ExprKind, ItemKind, QPath,
+    BinOpKind, BodyOwnerKind, Expr, ExprKind, ItemKind, PatKind, QPath,
 };
 use rustc_middle::ty::{GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
@@ -48,6 +48,14 @@ impl Callbacks for PolkadotCallbacks {
             }
             let typeck = tcx.typeck(def_id);
             let body = tcx.hir_body_owned_by(def_id);
+
+            report_missing_weight_for_unbounded_inputs(
+                tcx,
+                def_id,
+                body,
+                tcx.sess.source_map(),
+                &mut self.diagnostics,
+            );
 
             report_unbounded_public_vec_inputs(
                 tcx,
@@ -204,6 +212,61 @@ fn report_unbounded_public_vec_inputs<'tcx>(
             column,
             message: "Public callable accepts an unbounded Vec parameter after type resolution"
                 .to_string(),
+        });
+    }
+}
+
+fn report_missing_weight_for_unbounded_inputs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    body: &'tcx rustc_hir::Body<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    if !tcx.local_visibility(def_id).is_public() {
+        return;
+    }
+
+    let hir_id = tcx.local_def_id_to_hir_id(def_id);
+    let Some(weight_attr) = tcx
+        .hir_attrs(hir_id)
+        .iter()
+        .find(|attr| attr.path_matches(&[Symbol::intern("pallet"), Symbol::intern("weight")]))
+    else {
+        return;
+    };
+    let weight_snippet = source_map
+        .span_to_snippet(weight_attr.span())
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+
+    let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
+    for (idx, ty) in sig.inputs().iter().enumerate() {
+        if !type_contains_unbounded_vec(tcx, *ty) {
+            continue;
+        }
+        let Some(param) = body.params.get(idx) else {
+            continue;
+        };
+        let Some(param_name) = body_param_name(param) else {
+            continue;
+        };
+        if weight_accounts_for_param(&weight_snippet, &param_name) {
+            continue;
+        }
+
+        let (file, line, column) = span_location(source_map, param.span);
+        diagnostics.push(RustcDiagnostic {
+            rule_id: "SEC018",
+            rule_name: "missing-weight-for-unbounded-input",
+            file,
+            line,
+            column,
+            message: format!(
+                "Weight attribute does not account for resolved unbounded `{param_name}` input"
+            ),
         });
     }
 }
@@ -659,6 +722,30 @@ fn has_hir_attr(tcx: TyCtxt<'_>, hir_id: rustc_hir::HirId, path: &[&str]) -> boo
     tcx.hir_attrs(hir_id)
         .iter()
         .any(|attr| attr.path_matches(&symbols))
+}
+
+fn body_param_name(param: &rustc_hir::Param<'_>) -> Option<String> {
+    match param.pat.kind {
+        PatKind::Binding(_, _, ident, _) => Some(ident.name.to_string()),
+        PatKind::Ref(inner, _) => match inner.kind {
+            PatKind::Binding(_, _, ident, _) => Some(ident.name.to_string()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn weight_accounts_for_param(weight_snippet: &str, param_name: &str) -> bool {
+    [
+        format!("{param_name}.len()"),
+        format!("{param_name}.encoded_size()"),
+        format!("{param_name}.using_encoded("),
+        format!("{param_name}.using_encoded(|"),
+        format!("encoded_size({param_name})"),
+        format!("encoded_size(&{param_name})"),
+    ]
+    .iter()
+    .any(|needle| weight_snippet.contains(needle))
 }
 
 fn is_unbounded_clear_prefix_limit(expr: &Expr<'_>) -> bool {
