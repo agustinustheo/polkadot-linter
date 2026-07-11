@@ -6433,7 +6433,7 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
         fn nearby_comments_mark_idempotent_migration(lines: &[&str], line: usize) -> bool {
             let current_idx = line.saturating_sub(1);
             let start = current_idx.saturating_sub(18);
-            lines[start..current_idx.min(lines.len())]
+            let comments = lines[start..current_idx.min(lines.len())]
                 .iter()
                 .filter_map(|source_line| source_line.split_once("//").map(|(_, comment)| comment))
                 .any(|comment| {
@@ -6445,7 +6445,22 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                         || lower.contains("if out of sync")
                         || lower.contains("only updates if")
                         || lower.contains("permanently added to the runtime migrations")
-                })
+                });
+            if comments {
+                return true;
+            }
+
+            let comment_text = lines[start..current_idx.min(lines.len())]
+                .iter()
+                .filter_map(|source_line| source_line.split_once("//").map(|(_, comment)| comment))
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+
+            comment_text.contains("undecodable storage")
+                && (comment_text.contains("delete")
+                    || comment_text.contains("remove")
+                    || comment_text.contains("destroy"))
         }
 
         struct UpgradeBodyVisitor {

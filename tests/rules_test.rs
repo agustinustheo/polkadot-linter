@@ -4412,6 +4412,46 @@ impl<T: Config> OnRuntimeUpgrade for UnguardedOneShot<T> {
 }
 
 #[test]
+fn sec016_allows_documented_undecodable_storage_cleanup() {
+    let cleanup_migration = r#"
+/// Chain has undecodable storage, delete it.
+///
+/// First remove the bad hold, then destroy the bad collection.
+pub struct DeleteUndecodableStorage;
+
+impl OnRuntimeUpgrade for DeleteUndecodableStorage {
+    fn on_runtime_upgrade() -> Weight {
+        Holds::<T>::remove(account());
+        Nfts::<T>::remove(collection());
+        T::DbWeight::get().writes(2)
+    }
+}
+"#;
+    let diags = check_fixture("runtime/src/lib.rs", cleanup_migration);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should allow migrations documented as deleting undecodable storage"
+    );
+
+    let vague_cleanup = r#"
+/// Cleanup legacy storage before the next release.
+pub struct CleanupLegacyStorage;
+
+impl OnRuntimeUpgrade for CleanupLegacyStorage {
+    fn on_runtime_upgrade() -> Weight {
+        Legacy::<T>::remove(key());
+        T::DbWeight::get().writes(1)
+    }
+}
+"#;
+    let diags = check_fixture("runtime/src/lib.rs", vague_cleanup);
+    assert!(
+        has_rule(&diags, "SEC016"),
+        "SEC016 should still report ordinary cleanup migrations without StorageVersion checks"
+    );
+}
+
+#[test]
 fn sec016_allows_documented_current_value_reconciliation() {
     let code = r#"
 /// Checks and updates `TotalValueLocked` if out of sync.
