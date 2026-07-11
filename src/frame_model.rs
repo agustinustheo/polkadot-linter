@@ -29,6 +29,7 @@ pub struct Dispatchable {
     pub params: Vec<DispatchableParam>,
     pub is_deprecated: bool,
     pub consumes_max_block: bool,
+    pub body_tokens: String,
     weight_expr: Option<Expr>,
 }
 
@@ -114,6 +115,7 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                     params,
                     is_deprecated: has_attr_ending_with(&method.attrs, "deprecated"),
                     consumes_max_block: body_consumes_max_block(&method.block),
+                    body_tokens: compact_tokens(&method.block),
                     weight_expr: method
                         .attrs
                         .iter()

@@ -6712,7 +6712,106 @@ impl LintRule for VecInEvents {
         fn bounded_vec_event_flow(content: &str, variant_name: &str, field_name: &str) -> bool {
             content.contains(&format!("{field_name}:BoundedVec<"))
                 && content.contains(&format!("{field_name}.into()"))
-                && content.contains(&format!("Event::{}{{", variant_name))
+                && contains_event_variant_constructor(content, variant_name)
+        }
+
+        fn contains_event_variant_constructor(content: &str, variant_name: &str) -> bool {
+            content.contains(&format!("Event::{}{{", variant_name))
+                || (content.contains("Event::<")
+                    && content.contains(&format!(">::{}{{", variant_name)))
+        }
+
+        struct WeightedDispatchVecFlow {
+            body_tokens: String,
+            weighted_params: HashSet<String>,
+        }
+
+        fn weighted_dispatch_vec_event_flow(
+            variant_name: &str,
+            field_name: &str,
+            weighted_flows: &[WeightedDispatchVecFlow],
+        ) -> bool {
+            weighted_flows.iter().any(|flow| {
+                contains_event_variant_constructor(&flow.body_tokens, variant_name)
+                    && flow.weighted_params.iter().any(|param_name| {
+                        weighted_param_deposited_as_field(&flow.body_tokens, field_name, param_name)
+                            || weighted_param_derived_local_deposited_as_field(
+                                &flow.body_tokens,
+                                field_name,
+                                param_name,
+                            )
+                    })
+            })
+        }
+
+        fn weighted_param_deposited_as_field(
+            body_tokens: &str,
+            field_name: &str,
+            param_name: &str,
+        ) -> bool {
+            if field_name == param_name {
+                body_tokens.contains(&format!("{field_name},"))
+                    || body_tokens.contains(&format!("{field_name}}}"))
+                    || body_tokens.contains(&format!("{field_name}:{param_name}"))
+            } else {
+                body_tokens.contains(&format!("{field_name}:{param_name}"))
+            }
+        }
+
+        fn weighted_param_derived_local_deposited_as_field(
+            body_tokens: &str,
+            field_name: &str,
+            param_name: &str,
+        ) -> bool {
+            bounded_locals_derived_from_weighted_param(body_tokens, param_name)
+                .iter()
+                .any(|local_name| {
+                    if field_name == local_name {
+                        body_tokens.contains(&format!("{field_name},"))
+                            || body_tokens.contains(&format!("{field_name}}}"))
+                            || body_tokens.contains(&format!("{field_name}:{local_name}"))
+                    } else {
+                        body_tokens.contains(&format!("{field_name}:{local_name}"))
+                    }
+                })
+        }
+
+        fn bounded_locals_derived_from_weighted_param(
+            body_tokens: &str,
+            param_name: &str,
+        ) -> Vec<String> {
+            let marker = format!("=Vec::with_capacity({param_name}.len());");
+            let mut locals = Vec::new();
+
+            for (idx, _) in body_tokens.match_indices(&marker) {
+                let Some(local_name) = local_name_before_assignment(&body_tokens[..idx]) else {
+                    continue;
+                };
+
+                let iterates_param = body_tokens.contains(&format!("in{param_name}.into_iter()"))
+                    || body_tokens.contains(&format!("in{param_name}.iter()"));
+                let pushes_into_local = body_tokens.contains(&format!("{local_name}.push("));
+                if iterates_param && pushes_into_local {
+                    locals.push(local_name);
+                }
+            }
+
+            locals
+        }
+
+        fn local_name_before_assignment(prefix: &str) -> Option<String> {
+            let start = prefix.rfind("letmut").or_else(|| prefix.rfind("let"))?;
+            let name_start = if prefix[start..].starts_with("letmut") {
+                start + "letmut".len()
+            } else {
+                start + "let".len()
+            };
+            let name = prefix[name_start..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                .collect::<String>();
+
+            (!name.is_empty()).then_some(name)
         }
 
         struct EventVisitor<'a> {
@@ -6723,6 +6822,7 @@ impl LintRule for VecInEvents {
             rule_id: &'a str,
             rule_name: &'a str,
             compact_content: &'a str,
+            weighted_flows: &'a [WeightedDispatchVecFlow],
         }
 
         impl<'ast> Visit<'ast> for EventVisitor<'_> {
@@ -6744,6 +6844,11 @@ impl LintRule for VecInEvents {
                 let all_named_vec_fields_are_bounded_flows = !named_vec_fields.is_empty()
                     && named_vec_fields.iter().all(|(variant_name, field_name)| {
                         bounded_vec_event_flow(self.compact_content, variant_name, field_name)
+                            || weighted_dispatch_vec_event_flow(
+                                variant_name,
+                                field_name,
+                                self.weighted_flows,
+                            )
                     });
                 let has_vec_field = has_unnamed_vec_field || !named_vec_fields.is_empty();
 
@@ -6775,6 +6880,22 @@ impl LintRule for VecInEvents {
             }
         }
 
+        let weighted_flows = collect_dispatchables(ast, &test_mask)
+            .into_iter()
+            .filter_map(|dispatchable| {
+                let weighted_params = dispatchable
+                    .unbounded_vec_params()
+                    .filter(|param| dispatchable.weight_accounts_for_param(&param.name))
+                    .map(|param| param.name.clone())
+                    .collect::<HashSet<_>>();
+
+                (!weighted_params.is_empty()).then_some(WeightedDispatchVecFlow {
+                    body_tokens: dispatchable.body_tokens,
+                    weighted_params,
+                })
+            })
+            .collect::<Vec<_>>();
+
         let mut visitor = EventVisitor {
             mask: &test_mask,
             diagnostics: Vec::new(),
@@ -6783,6 +6904,7 @@ impl LintRule for VecInEvents {
             rule_id: self.id(),
             rule_name: self.name(),
             compact_content: &compact_content,
+            weighted_flows: &weighted_flows,
         };
         visitor.visit_file(ast);
 
