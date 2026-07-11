@@ -773,6 +773,77 @@ fn panic_receiver_is_fixed_range_try_into(expr_method_call: &ExprMethodCall) -> 
     half_open_range_has_static_len(expr_range)
 }
 
+fn h160_param_names(signature: &syn::Signature) -> HashSet<String> {
+    signature
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            let syn::FnArg::Typed(pat_type) = arg else {
+                return None;
+            };
+            if type_last_ident(&pat_type.ty).as_deref() != Some("H160") {
+                return None;
+            }
+            let Pat::Ident(pat_ident) = strip_pat_wrappers(&pat_type.pat) else {
+                return None;
+            };
+            Some(pat_ident.ident.to_string())
+        })
+        .collect()
+}
+
+fn expr_path_last_ident(expr: &Expr) -> Option<String> {
+    let Expr::Path(expr_path) = strip_expr_wrappers(expr) else {
+        return None;
+    };
+    path_last_ident(&expr_path.path)
+}
+
+fn panic_receiver_is_h160_suffix_try_into(
+    expr_method_call: &ExprMethodCall,
+    h160_names: &HashSet<String>,
+) -> bool {
+    if !matches!(
+        expr_method_call.method.to_string().as_str(),
+        "unwrap" | "expect"
+    ) {
+        return false;
+    }
+
+    let Expr::MethodCall(try_into_call) = strip_expr_wrappers(&expr_method_call.receiver) else {
+        return false;
+    };
+    if try_into_call.method != "try_into" || !try_into_call.args.is_empty() {
+        return false;
+    }
+
+    let Expr::Index(expr_index) = strip_expr_wrappers(&try_into_call.receiver) else {
+        return false;
+    };
+    let Expr::Range(expr_range) = strip_expr_wrappers(&expr_index.index) else {
+        return false;
+    };
+    if !matches!(expr_range.limits, syn::RangeLimits::HalfOpen(_))
+        || expr_range.end.is_some()
+        || expr_range
+            .start
+            .as_ref()
+            .and_then(|start| expr_usize_literal_value(start))
+            != Some(12)
+    {
+        return false;
+    }
+
+    let Expr::MethodCall(as_ref_call) = strip_expr_wrappers(&expr_index.expr) else {
+        return false;
+    };
+    as_ref_call.method == "as_ref"
+        && as_ref_call.args.is_empty()
+        && expr_path_last_ident(&as_ref_call.receiver)
+            .as_ref()
+            .is_some_and(|ident| h160_names.contains(ident))
+}
+
 fn expr_integer_literal_value(expr: &Expr) -> Option<u128> {
     let Expr::Lit(expr_lit) = strip_expr_wrappers(expr) else {
         return None;
@@ -986,6 +1057,16 @@ fn strip_expr_wrappers(mut expr: &Expr) -> &Expr {
             Expr::Cast(cast) => &cast.expr,
             Expr::Try(expr_try) => &expr_try.expr,
             _ => return expr,
+        };
+    }
+}
+
+fn strip_pat_wrappers(mut pat: &Pat) -> &Pat {
+    loop {
+        pat = match pat {
+            Pat::Paren(paren) => &paren.pat,
+            Pat::Reference(reference) => &reference.pat,
+            _ => return pat,
         };
     }
 }
@@ -4185,9 +4266,17 @@ impl LintRule for PanicInProduction {
             const_int_values: &'a HashMap<String, u128>,
             uninhabited_impl_depth: usize,
             test_default_impl_depth: usize,
+            h160_param_stack: Vec<HashSet<String>>,
         }
 
         impl PanicVisitor<'_> {
+            fn current_h160_params(&self) -> HashSet<String> {
+                self.h160_param_stack
+                    .iter()
+                    .flat_map(|params| params.iter().cloned())
+                    .collect()
+            }
+
             fn push_diag(&mut self, span: Span, pattern: &str, suggestion: &str) {
                 let line = span_line(span);
                 if !self.reported_lines.insert(line) {
@@ -4213,6 +4302,18 @@ impl LintRule for PanicInProduction {
         }
 
         impl<'ast> Visit<'ast> for PanicVisitor<'_> {
+            fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
+                self.h160_param_stack.push(h160_param_names(&item_fn.sig));
+                visit::visit_item_fn(self, item_fn);
+                self.h160_param_stack.pop();
+            }
+
+            fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
+                self.h160_param_stack.push(h160_param_names(&item_fn.sig));
+                visit::visit_impl_item_fn(self, item_fn);
+                self.h160_param_stack.pop();
+            }
+
             fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
                 let is_uninhabited_impl = type_last_ident(&item_impl.self_ty)
                     .as_ref()
@@ -4250,6 +4351,10 @@ impl LintRule for PanicInProduction {
                     "unwrap"
                         if !unwrap_receiver_is_nonzero_literal_new(expr_method_call)
                             && !panic_receiver_is_fixed_range_try_into(expr_method_call)
+                            && !panic_receiver_is_h160_suffix_try_into(
+                                expr_method_call,
+                                &self.current_h160_params(),
+                            )
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -4264,6 +4369,10 @@ impl LintRule for PanicInProduction {
                     "expect"
                         if !expect_message_marks_proven_invariant(expr_method_call)
                             && !panic_receiver_is_fixed_range_try_into(expr_method_call)
+                            && !panic_receiver_is_h160_suffix_try_into(
+                                expr_method_call,
+                                &self.current_h160_params(),
+                            )
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -4333,6 +4442,7 @@ impl LintRule for PanicInProduction {
             const_int_values: &const_int_values,
             uninhabited_impl_depth: 0,
             test_default_impl_depth: 0,
+            h160_param_stack: Vec::new(),
         };
         visitor.visit_file(ast);
 

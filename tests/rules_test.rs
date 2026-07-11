@@ -3041,20 +3041,24 @@ pub fn bounded_literal(value: Item, other: Item, runtime_values: Vec<Item>) {
 #[test]
 fn sec008_skips_fixed_range_try_into_unwraps() {
     let code = r#"
-pub fn fixed_ranges(data: &[u8], offset: usize, start: usize, runtime_end: usize) {
+use sp_core::H160;
+
+pub fn fixed_ranges(address: &H160, data: &[u8], offset: usize, start: usize, runtime_end: usize) {
     let _word: &[u8; 32] = data[offset..offset + 32].try_into().unwrap();
     let _prefix: &[u8; 4] = data[..4].try_into().expect("fixed prefix");
     let _middle: &[u8; 8] = data[12..20].try_into().unwrap();
+    let _account = u64::from_be_bytes(address.as_ref()[12..].try_into().unwrap());
 
     let _open: &[u8; 8] = data[12..].try_into().unwrap();
+    let _untyped_suffix = u64::from_be_bytes(data[12..].try_into().unwrap());
     let _runtime: &[u8; 8] = data[start..runtime_end].try_into().unwrap();
 }
 "#;
     let diags = check_fixture("substrate/frame/revive/src/vm/evm/memory.rs", code);
     let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
     assert_eq!(
-        sec008_count, 2,
-        "SEC008 should skip only try_into unwraps whose slice range has a static length"
+        sec008_count, 3,
+        "SEC008 should skip only try_into unwraps whose slice length is statically known"
     );
 }
 
