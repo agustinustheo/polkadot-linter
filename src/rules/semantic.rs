@@ -3894,6 +3894,36 @@ impl LintRule for UncheckedRepatriateReserved {
             })
         }
 
+        fn has_documented_infallible_debug_assert(
+            lines: &[&str],
+            mask: &[bool],
+            line: usize,
+            name: &str,
+        ) -> bool {
+            let line_idx = line.saturating_sub(1);
+            let comment_start = line_idx.saturating_sub(16);
+            let docs_say_not_actionable = lines[comment_start..line_idx.min(lines.len())]
+                .iter()
+                .filter_map(|source_line| source_line.split_once("//").map(|(_, comment)| comment))
+                .map(str::to_ascii_lowercase)
+                .any(|comment| {
+                    (comment.contains("no reason") && comment.contains("should fail"))
+                        || (comment.contains("cannot do much") && comment.contains("fail"))
+                        || (comment.contains("can't do much") && comment.contains("fail"))
+                });
+            if !docs_say_not_actionable {
+                return false;
+            }
+
+            let window_end = (line + 5).min(lines.len());
+            (line..window_end).any(|j| {
+                !mask[j]
+                    && lines[j].contains("debug_assert")
+                    && lines[j].contains(name)
+                    && (lines[j].contains(".is_ok()") || lines[j].contains("Ok("))
+            })
+        }
+
         struct RepatriateVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -3950,6 +3980,11 @@ impl LintRule for UncheckedRepatriateReserved {
                             span_line(local.span()),
                             &name,
                         ) && !has_remaining_accounted_in_transfer_amount(
+                            self.lines,
+                            self.mask,
+                            span_line(local.span()),
+                            &name,
+                        ) && !has_documented_infallible_debug_assert(
                             self.lines,
                             self.mask,
                             span_line(local.span()),
