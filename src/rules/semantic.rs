@@ -12,7 +12,7 @@ use syn::{
     visit::{self, Visit},
     Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprIf, ExprMethodCall, File as SynFile,
     GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Pat,
-    PathArguments, Token, Type, TypePath, UseTree, Visibility,
+    PathArguments, Stmt, Token, Type, TypePath, UseTree, Visibility,
 };
 
 use crate::{
@@ -389,9 +389,55 @@ where
 
 fn cfg_test_module_mask(content: &str) -> Vec<bool> {
     merge_masks(
-        &item_mask_by_attr(content, is_masked_cfg_attribute),
+        &merge_masks(
+            &item_mask_by_attr(content, is_masked_cfg_attribute),
+            &non_production_cfg_expr_block_mask(content),
+        ),
         &documented_test_only_item_mask(content),
     )
+}
+
+fn non_production_cfg_expr_block_mask(content: &str) -> Vec<bool> {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut mask = vec![false; lines.len()];
+    let mut masked_depth: Option<i32> = None;
+    let mut brace_depth: i32 = 0;
+    let mut mask_block_entered = false;
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let starts_masked_block = masked_depth.is_none()
+            && (trimmed.starts_with("if cfg!(debug_assertions)")
+                || trimmed.starts_with("if cfg!(feature = \"runtime-benchmarks\")")
+                || trimmed.starts_with("if cfg!(feature = \"try-runtime\")")
+                || trimmed.starts_with("if cfg!(feature = \"test-helpers\")")
+                || trimmed.starts_with("if cfg!(feature = \"remote-test\")")
+                || trimmed.starts_with("if cfg!(feature = \"integrity-test\")"));
+
+        let open = line.chars().filter(|&c| c == '{').count() as i32;
+        let close = line.chars().filter(|&c| c == '}').count() as i32;
+
+        if starts_masked_block {
+            masked_depth = Some(brace_depth);
+            mask_block_entered = false;
+        }
+
+        brace_depth += open;
+        brace_depth -= close;
+
+        if let Some(td) = masked_depth {
+            mask[i] = true;
+            if brace_depth > td || (starts_masked_block && open > 0) {
+                mask_block_entered = true;
+            }
+            if mask_block_entered && brace_depth <= td {
+                masked_depth = None;
+                mask_block_entered = false;
+            }
+        }
+    }
+
+    mask
 }
 
 fn documented_test_only_item_mask(content: &str) -> Vec<bool> {
@@ -3124,6 +3170,15 @@ impl LintRule for DebugAssertInProduction {
                 || lower.contains("defensive")
                 || lower.contains("should not fail")
                 || lower.contains("should never")
+                || lower.contains("should resolve to")
+                || lower.contains("should be handled")
+                || lower.contains("was supposed to be")
+                || lower.contains("should exist in storage")
+                || lower.contains("outgoing must be only item")
+                || lower.contains("must be in ready ring")
+                || lower.contains("implies there are pages")
+                || lower.contains("we never bail")
+                || lower.contains("cannot change in any case")
         }
 
         fn debug_assert_message_marks_proven_invariant(mac: &Macro) -> bool {
@@ -3138,6 +3193,13 @@ impl LintRule for DebugAssertInProduction {
                 || lower.contains("sanity")
                 || lower.contains("post-condition")
                 || lower.contains("postcondition")
+                || lower.contains("consistency check")
+                || lower.contains("state is not corrupted")
+                || lower.contains("assumption of the trait")
+                || (lower.contains("safety:")
+                    && (lower.contains("validated by the caller")
+                        || lower.contains("caller ensures")))
+                || lower.contains("verified by the client")
                 || lower.contains("verify the expectation")
         }
 
@@ -4254,6 +4316,100 @@ impl LintRule for PanicInProduction {
             (arg_len as u128) <= bound
         }
 
+        fn vec_literal_try_into_fits_min_one_bound(expr_method_call: &ExprMethodCall) -> bool {
+            if expr_method_call.method != "expect" {
+                return false;
+            }
+            let Some(message) = expr_method_call.args.first().and_then(expr_string_literal) else {
+                return false;
+            };
+            if !message
+                .to_ascii_lowercase()
+                .contains("must be greater than or equal to 1")
+            {
+                return false;
+            }
+
+            let Expr::MethodCall(try_into_call) = strip_expr_wrappers(&expr_method_call.receiver)
+            else {
+                return false;
+            };
+            if try_into_call.method != "try_into" || !try_into_call.args.is_empty() {
+                return false;
+            }
+
+            vec_macro_literal_len(&try_into_call.receiver).is_some_and(|len| len <= 1)
+        }
+
+        #[derive(Clone, Copy)]
+        struct BigUintVarState {
+            is_biguint: bool,
+            const_value: Option<u128>,
+            bounded_to_usize: bool,
+        }
+
+        fn biguint_from_call_value(expr_call: &ExprCall) -> Option<Option<u128>> {
+            let path = expr_call_path(expr_call)?;
+            if path_owner_name(path).as_deref() != Some("BigUint") {
+                return None;
+            }
+
+            match path_last_ident(path).as_deref() {
+                Some("from_bytes_be") => Some(None),
+                Some("from") => expr_call
+                    .args
+                    .first()
+                    .and_then(expr_integer_literal_value)
+                    .map(Some),
+                _ => None,
+            }
+        }
+
+        fn biguint_state_from_expr(expr: &Expr) -> Option<BigUintVarState> {
+            let Expr::Call(expr_call) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            biguint_from_call_value(expr_call).map(|const_value| BigUintVarState {
+                is_biguint: true,
+                const_value,
+                bounded_to_usize: const_value.is_some_and(|value| value <= u32::MAX as u128),
+            })
+        }
+
+        fn err_is_propagated(expr: &Expr) -> bool {
+            match expr {
+                Expr::Try(expr_try) => {
+                    let Expr::Call(expr_call) = strip_expr_wrappers(&expr_try.expr) else {
+                        return false;
+                    };
+                    expr_call_path(expr_call)
+                        .and_then(path_last_ident)
+                        .as_deref()
+                        == Some("Err")
+                }
+                Expr::Return(expr_return) => {
+                    let Some(expr) = expr_return.expr.as_deref() else {
+                        return false;
+                    };
+                    let Expr::Call(expr_call) = strip_expr_wrappers(expr) else {
+                        return false;
+                    };
+                    expr_call_path(expr_call)
+                        .and_then(path_last_ident)
+                        .as_deref()
+                        == Some("Err")
+                }
+                _ => false,
+            }
+        }
+
+        fn block_rejects_path(block: &syn::Block) -> bool {
+            block.stmts.iter().any(|stmt| match stmt {
+                Stmt::Expr(expr, _) => err_is_propagated(expr),
+                _ => false,
+            })
+        }
+
         struct PanicVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             reported_lines: HashSet<usize>,
@@ -4267,6 +4423,7 @@ impl LintRule for PanicInProduction {
             uninhabited_impl_depth: usize,
             test_default_impl_depth: usize,
             h160_param_stack: Vec<HashSet<String>>,
+            biguint_scope_stack: Vec<HashMap<String, BigUintVarState>>,
         }
 
         impl PanicVisitor<'_> {
@@ -4275,6 +4432,116 @@ impl LintRule for PanicInProduction {
                     .iter()
                     .flat_map(|params| params.iter().cloned())
                     .collect()
+            }
+
+            fn current_biguint_state(&self, name: &str) -> Option<BigUintVarState> {
+                self.biguint_scope_stack
+                    .iter()
+                    .rev()
+                    .find_map(|scope| scope.get(name).copied())
+            }
+
+            fn current_scope_mut(&mut self) -> Option<&mut HashMap<String, BigUintVarState>> {
+                self.biguint_scope_stack.last_mut()
+            }
+
+            fn mark_local(&mut self, local: &Local) {
+                let Pat::Ident(pat_ident) = strip_pat_wrappers(&local.pat) else {
+                    return;
+                };
+                let state = local
+                    .init
+                    .as_ref()
+                    .and_then(|init| biguint_state_from_expr(&init.expr))
+                    .unwrap_or(BigUintVarState {
+                        is_biguint: false,
+                        const_value: None,
+                        bounded_to_usize: false,
+                    });
+                if let Some(scope) = self.current_scope_mut() {
+                    scope.insert(pat_ident.ident.to_string(), state);
+                }
+            }
+
+            fn expr_biguint_bound_value(&self, expr: &Expr) -> Option<u128> {
+                if let Some(value) = expr_integer_literal_value(expr) {
+                    return Some(value);
+                }
+                if let Some(ident) = expr_path_last_ident(expr) {
+                    if let Some(value) = self
+                        .current_biguint_state(&ident)
+                        .and_then(|state| state.const_value)
+                    {
+                        return Some(value);
+                    }
+                }
+                let Expr::Call(expr_call) = strip_expr_wrappers(expr) else {
+                    return None;
+                };
+                biguint_from_call_value(expr_call).flatten()
+            }
+
+            fn bounded_biguint_from_rejecting_if(&self, expr_if: &ExprIf) -> Option<String> {
+                if !block_rejects_path(&expr_if.then_branch) {
+                    return None;
+                }
+                let Expr::Binary(expr_binary) = strip_expr_wrappers(&expr_if.cond) else {
+                    return None;
+                };
+
+                let (candidate, bound_expr) = match expr_binary.op {
+                    syn::BinOp::Gt(_) | syn::BinOp::Ge(_) => {
+                        (&expr_binary.left, &expr_binary.right)
+                    }
+                    syn::BinOp::Lt(_) | syn::BinOp::Le(_) => {
+                        (&expr_binary.right, &expr_binary.left)
+                    }
+                    _ => return None,
+                };
+
+                let name = expr_path_last_ident(candidate)?;
+                let state = self.current_biguint_state(&name)?;
+                if !state.is_biguint {
+                    return None;
+                }
+                let bound = self.expr_biguint_bound_value(bound_expr)?;
+                (bound <= u32::MAX as u128).then_some(name)
+            }
+
+            fn mark_rejected_biguint_upper_bound(&mut self, expr_if: &ExprIf) {
+                let Some(name) = self.bounded_biguint_from_rejecting_if(expr_if) else {
+                    return;
+                };
+                let mut state = self
+                    .current_biguint_state(&name)
+                    .unwrap_or(BigUintVarState {
+                        is_biguint: true,
+                        const_value: None,
+                        bounded_to_usize: false,
+                    });
+                state.bounded_to_usize = true;
+                if let Some(scope) = self.current_scope_mut() {
+                    scope.insert(name, state);
+                }
+            }
+
+            fn receiver_is_bounded_biguint_to_usize(
+                &self,
+                expr_method_call: &ExprMethodCall,
+            ) -> bool {
+                let Expr::MethodCall(to_usize_call) =
+                    strip_expr_wrappers(&expr_method_call.receiver)
+                else {
+                    return false;
+                };
+                if to_usize_call.method != "to_usize" || !to_usize_call.args.is_empty() {
+                    return false;
+                }
+                let Some(name) = expr_path_last_ident(&to_usize_call.receiver) else {
+                    return false;
+                };
+                self.current_biguint_state(&name)
+                    .is_some_and(|state| state.is_biguint && state.bounded_to_usize)
             }
 
             fn push_diag(&mut self, span: Span, pattern: &str, suggestion: &str) {
@@ -4304,14 +4571,33 @@ impl LintRule for PanicInProduction {
         impl<'ast> Visit<'ast> for PanicVisitor<'_> {
             fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
                 self.h160_param_stack.push(h160_param_names(&item_fn.sig));
+                self.biguint_scope_stack.push(HashMap::new());
                 visit::visit_item_fn(self, item_fn);
+                self.biguint_scope_stack.pop();
                 self.h160_param_stack.pop();
             }
 
             fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
                 self.h160_param_stack.push(h160_param_names(&item_fn.sig));
+                self.biguint_scope_stack.push(HashMap::new());
                 visit::visit_impl_item_fn(self, item_fn);
+                self.biguint_scope_stack.pop();
                 self.h160_param_stack.pop();
+            }
+
+            fn visit_block(&mut self, block: &'ast syn::Block) {
+                self.biguint_scope_stack.push(HashMap::new());
+                for stmt in &block.stmts {
+                    self.visit_stmt(stmt);
+                    match stmt {
+                        Stmt::Local(local) => self.mark_local(local),
+                        Stmt::Expr(Expr::If(expr_if), _) => {
+                            self.mark_rejected_biguint_upper_bound(expr_if);
+                        }
+                        _ => {}
+                    }
+                }
+                self.biguint_scope_stack.pop();
             }
 
             fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
@@ -4355,6 +4641,7 @@ impl LintRule for PanicInProduction {
                                 expr_method_call,
                                 &self.current_h160_params(),
                             )
+                            && !self.receiver_is_bounded_biguint_to_usize(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
@@ -4373,10 +4660,12 @@ impl LintRule for PanicInProduction {
                                 expr_method_call,
                                 &self.current_h160_params(),
                             )
+                            && !self.receiver_is_bounded_biguint_to_usize(expr_method_call)
                             && !bounded_vec_literal_try_from_fits_bound(
                                 expr_method_call,
                                 self.const_int_values,
-                            ) =>
+                            )
+                            && !vec_literal_try_into_fits_min_one_bound(expr_method_call) =>
                     {
                         self.push_diag(
                             expr_method_call.span(),
@@ -4443,6 +4732,7 @@ impl LintRule for PanicInProduction {
             uninhabited_impl_depth: 0,
             test_default_impl_depth: 0,
             h160_param_stack: Vec::new(),
+            biguint_scope_stack: Vec::new(),
         };
         visitor.visit_file(ast);
 
