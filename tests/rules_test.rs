@@ -4349,6 +4349,47 @@ impl<T: Config> OnRuntimeUpgrade for SetNextAssetId<T> {
 }
 
 #[test]
+fn sec016_allows_permanent_runtime_migrations() {
+    let permanent_migration = r#"
+/// When adding a new XCM version, we need to run this migration for `pallet_xcm` to ensure that all
+/// previously stored data with subkey prefix `XCM_VERSION-1` (and below) are migrated to the
+/// `XCM_VERSION`.
+///
+/// NOTE: This migration can be permanently added to the runtime migrations.
+pub struct MigrateToLatestXcmVersion<T>(PhantomData<T>);
+
+impl<T: Config> OnRuntimeUpgrade for MigrateToLatestXcmVersion<T> {
+    fn on_runtime_upgrade() -> Weight {
+        CurrentMigration::<T>::put(VersionMigrationStage::default());
+        Pallet::<T>::migrate_data_to_xcm_version(CurrentXcmVersion::get());
+        T::DbWeight::get().writes(1)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/xcm/src/migration.rs", permanent_migration);
+    assert!(
+        !has_rule(&diags, "SEC016"),
+        "SEC016 should skip migrations documented as permanently added to runtime migrations"
+    );
+
+    let unguarded_migration = r#"
+pub struct UnguardedOneShot<T>(PhantomData<T>);
+
+impl<T: Config> OnRuntimeUpgrade for UnguardedOneShot<T> {
+    fn on_runtime_upgrade() -> Weight {
+        LegacyValue::<T>::put(1u32);
+        T::DbWeight::get().writes(1)
+    }
+}
+"#;
+    let diags = check_fixture("pallets/xcm/src/migration.rs", unguarded_migration);
+    assert!(
+        has_rule(&diags, "SEC016"),
+        "SEC016 should still report ordinary unguarded migrations"
+    );
+}
+
+#[test]
 fn sec016_allows_documented_current_value_reconciliation() {
     let code = r#"
 /// Checks and updates `TotalValueLocked` if out of sync.

@@ -6444,6 +6444,7 @@ impl LintRule for MissingStorageVersionCheckInRuntimeUpgrade {
                         || lower.contains("does not exist yet")
                         || lower.contains("if out of sync")
                         || lower.contains("only updates if")
+                        || lower.contains("permanently added to the runtime migrations")
                 })
         }
 
