@@ -52,6 +52,7 @@ struct PolkadotCallbacks {
     enabled_rules: HashSet<String>,
     parsed_weight_attributes: Vec<ParsedWeightAttribute>,
     parsed_item_attributes: Vec<ParsedItemAttributes>,
+    parsed_transactional_attributes: Vec<ParsedTransactionalAttribute>,
 }
 
 #[derive(Clone)]
@@ -74,6 +75,13 @@ struct ParsedItemAttributes {
     event: bool,
 }
 
+#[derive(Clone)]
+struct ParsedTransactionalAttribute {
+    function_name: String,
+    file: String,
+    line: usize,
+}
+
 struct EventFieldCandidate {
     span: Span,
     macro_consumed_event_marker: bool,
@@ -89,6 +97,7 @@ impl Callbacks for PolkadotCallbacks {
             source_map: compiler.sess.source_map(),
             parsed_attributes: &mut self.parsed_weight_attributes,
             parsed_item_attributes: &mut self.parsed_item_attributes,
+            parsed_transactional_attributes: &mut self.parsed_transactional_attributes,
         };
         ast_visit::walk_crate(&mut visitor, krate);
         Compilation::Continue
@@ -114,6 +123,14 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("SEC010") {
+            report_missing_transactional_hooks(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_transactional_attributes,
+                &mut self.diagnostics,
+            );
+        }
         let sec017_tainted_bodies = self
             .rule_enabled("SEC017")
             .then(|| {
@@ -135,6 +152,7 @@ impl Callbacks for PolkadotCallbacks {
                 tcx,
                 tcx.sess.source_map(),
                 &self.parsed_item_attributes,
+                &self.parsed_weight_attributes,
                 &sec017_tainted_bodies,
                 &mut self.diagnostics,
             );
@@ -733,6 +751,139 @@ fn report_reachable_clear_prefix<'tcx>(
     }
 }
 
+fn report_missing_transactional_hooks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    parsed_transactional_attributes: &[ParsedTransactionalAttribute],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn)
+            || !is_frame_lifecycle_hook(tcx, def_id)
+            || has_transactional_hook_attribute(
+                tcx,
+                def_id,
+                source_map,
+                parsed_transactional_attributes,
+            )
+        {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec010Visitor {
+            tcx,
+            typeck: tcx.typeck(def_id),
+            storage_writes: 0,
+            has_fallible_path_after_write: false,
+        };
+        visitor.visit_body(body);
+        if visitor.storage_writes < 2 || !visitor.has_fallible_path_after_write {
+            continue;
+        }
+        let (file, line, column) = span_location(source_map, tcx.def_span(def_id));
+        diagnostics.push(RustcDiagnostic {
+            rule_id: "SEC010",
+            rule_name: "missing-transactional-in-hook",
+            file,
+            line,
+            column,
+            message: format!(
+                "FRAME hook has {} resolved storage writes before a fallible path without a transactional storage layer",
+                visitor.storage_writes
+            ),
+        });
+    }
+}
+
+fn has_transactional_hook_attribute(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    parsed_transactional_attributes: &[ParsedTransactionalAttribute],
+) -> bool {
+    if has_hir_attr(tcx, tcx.local_def_id_to_hir_id(def_id), &["transactional"]) {
+        return true;
+    }
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let location = source_map.lookup_char_pos(definition_span.lo());
+    let function_name = tcx.item_name(def_id.to_def_id());
+    parsed_transactional_attributes.iter().any(|attribute| {
+        attribute.function_name == function_name.as_str()
+            && attribute.file == location.file.name.prefer_local().to_string()
+            && attribute.line == location.line
+    })
+}
+
+struct Sec010Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    storage_writes: usize,
+    has_fallible_path_after_write: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec010Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, args) = expr.kind {
+            if is_frame_storage_layer_call(self.tcx, self.typeck, callee) {
+                // The closure executes in a storage transaction; evidence inside it cannot leave
+                // partial state if its Result is an error.
+                return;
+            }
+            if let ExprKind::Closure(closure) = callee.kind {
+                for argument in args {
+                    self.visit_expr(argument);
+                }
+                self.visit_body(self.tcx.hir_body(closure.body));
+                return;
+            }
+            if is_frame_storage_write_call(self.tcx, self.typeck, callee) {
+                self.storage_writes += 1;
+            }
+        }
+
+        if matches!(
+            expr.kind,
+            ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_))
+        ) && self.storage_writes > 0
+        {
+            self.has_fallible_path_after_write = true;
+        }
+
+        if matches!(expr.kind, ExprKind::Closure(_)) {
+            return;
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn is_frame_storage_write_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    associated_call_name(callee).is_some_and(|name| {
+        matches!(
+            name.as_str(),
+            "put" | "insert" | "mutate" | "remove" | "kill" | "set"
+        )
+    }) && is_frame_storage_associated_call(tcx, typeck, callee)
+}
+
+fn is_frame_storage_layer_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    matches!(callee.kind, ExprKind::Path(qpath) if matches!(typeck.qpath_res(&qpath, callee.hir_id), Res::Def(_, def_id) if {
+        let path = tcx.def_path_str(def_id);
+        is_frame_support_path(&path) && path.ends_with("::with_storage_layer")
+    }))
+}
+
 impl PolkadotCallbacks {
     fn rule_enabled(&self, rule_id: &str) -> bool {
         self.enabled_rules.is_empty()
@@ -863,6 +1014,7 @@ fn report_vec_event_fields<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
     parsed_item_attributes: &[ParsedItemAttributes],
+    parsed_weight_attributes: &[ParsedWeightAttribute],
     tainted_bodies: &HashMap<LocalDefId, HashSet<HirId>>,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
@@ -918,6 +1070,12 @@ fn report_vec_event_fields<'tcx>(
             typeck,
             fields_by_variant: &fields_by_variant,
             unbounded_bindings: unbounded_bindings.clone(),
+            weight_accounted_bindings: weight_accounted_dispatchable_bindings(
+                tcx,
+                *def_id,
+                source_map,
+                parsed_weight_attributes,
+            ),
             emitted_field_indices: &mut emitted_field_indices,
         };
         visitor.visit_body(body);
@@ -939,6 +1097,33 @@ fn report_vec_event_fields<'tcx>(
     }
 }
 
+fn weight_accounted_dispatchable_bindings(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+) -> HashSet<HirId> {
+    if !is_frame_dispatchable(tcx, def_id, source_map, parsed_weight_attributes) {
+        return HashSet::new();
+    }
+    let Some(weight_attributes) =
+        pallet_weight_attributes(tcx, def_id, source_map, parsed_weight_attributes)
+    else {
+        return HashSet::new();
+    };
+    tcx.hir_maybe_body_owned_by(def_id)
+        .into_iter()
+        .flat_map(|body| {
+            body.params.iter().filter_map(|param| {
+                let name = body_param_name(param)?;
+                weight_accounts_for_param(&weight_attributes.expression, &name)
+                    .then(|| pattern_binding_ids(param.pat))
+            })
+        })
+        .flatten()
+        .collect()
+}
+
 fn source_has_generate_deposit_attribute(source_map: &SourceMap, span: Span) -> bool {
     let location = source_map.lookup_char_pos(span.lo());
     let Ok(source) = std::fs::read_to_string(location.file.name.prefer_local().to_string()) else {
@@ -956,6 +1141,7 @@ struct Sec017Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     fields_by_variant: &'a HashMap<DefId, HashMap<Symbol, usize>>,
     unbounded_bindings: HashSet<HirId>,
+    weight_accounted_bindings: HashSet<HirId>,
     emitted_field_indices: &'a mut HashSet<usize>,
 }
 
@@ -967,6 +1153,13 @@ impl<'tcx> Visitor<'tcx> for Sec017Visitor<'_, 'tcx> {
                     self.unbounded_bindings.insert(binding);
                 } else {
                     self.unbounded_bindings.remove(&binding);
+                }
+                if local_binding_id(self.typeck, value).is_some_and(|value_binding| {
+                    self.weight_accounted_bindings.contains(&value_binding)
+                }) {
+                    self.weight_accounted_bindings.insert(binding);
+                } else {
+                    self.weight_accounted_bindings.remove(&binding);
                 }
             }
         }
@@ -983,6 +1176,10 @@ impl<'tcx> Visitor<'tcx> for Sec017Visitor<'_, 'tcx> {
                             self.typeck,
                             field.expr,
                             &self.unbounded_bindings,
+                        ) && !expr_references_tainted_binding(
+                            self.typeck,
+                            field.expr,
+                            &self.weight_accounted_bindings,
                         ) {
                             self.emitted_field_indices.insert(*index);
                         }
@@ -999,11 +1196,21 @@ impl<'tcx> Visitor<'tcx> for Sec017Visitor<'_, 'tcx> {
         if local.init.is_some_and(|init| {
             expr_references_tainted_binding(self.typeck, init, &self.unbounded_bindings)
         }) {
-            self.unbounded_bindings.extend(bindings);
+            self.unbounded_bindings.extend(bindings.iter().copied());
         } else {
-            for binding in bindings {
-                self.unbounded_bindings.remove(&binding);
-            }
+            self.unbounded_bindings
+                .retain(|binding| !bindings.contains(binding));
+        }
+        if local
+            .init
+            .and_then(|init| local_binding_id(self.typeck, init))
+            .is_some_and(|value_binding| self.weight_accounted_bindings.contains(&value_binding))
+        {
+            self.weight_accounted_bindings
+                .extend(bindings.iter().copied());
+        } else {
+            self.weight_accounted_bindings
+                .retain(|binding| !bindings.contains(binding));
         }
 
         intravisit::walk_local(self, local);
@@ -1398,6 +1605,7 @@ struct ParsedWeightAttributeVisitor<'a> {
     source_map: &'a SourceMap,
     parsed_attributes: &'a mut Vec<ParsedWeightAttribute>,
     parsed_item_attributes: &'a mut Vec<ParsedItemAttributes>,
+    parsed_transactional_attributes: &'a mut Vec<ParsedTransactionalAttribute>,
 }
 
 impl ParsedWeightAttributeVisitor<'_> {
@@ -1407,6 +1615,17 @@ impl ParsedWeightAttributeVisitor<'_> {
         span: Span,
         attributes: &[rustc_ast::ast::Attribute],
     ) {
+        if attributes.iter().any(|attribute| {
+            matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if normal.item.path.segments.last().is_some_and(|segment| segment.ident.name.as_str() == "transactional"))
+        }) {
+            let location = self.source_map.lookup_char_pos(span.lo());
+            self.parsed_transactional_attributes
+                .push(ParsedTransactionalAttribute {
+                    function_name: function_name.to_string(),
+                    file: location.file.name.prefer_local().to_string(),
+                    line: location.line,
+                });
+        }
         let Some(weight_attribute) = attributes.iter().find(|attribute| {
             matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "weight"]))
         }) else {
@@ -2921,6 +3140,22 @@ fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     }
 
     tcx.local_visibility(def_id).is_public()
+}
+
+fn is_frame_lifecycle_hook(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+    let Some(trait_id) = tcx
+        .impl_of_method(def_id.to_def_id())
+        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
+    else {
+        return false;
+    };
+    let trait_path = tcx.def_path_str(trait_id);
+    is_frame_support_path(&trait_path)
+        && trait_path.ends_with("::Hooks")
+        && matches!(
+            tcx.item_name(def_id.to_def_id()).as_str(),
+            "on_initialize" | "on_finalize" | "on_idle" | "on_poll"
+        )
 }
 
 fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
