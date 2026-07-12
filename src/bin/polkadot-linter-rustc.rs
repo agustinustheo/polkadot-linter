@@ -379,6 +379,7 @@ fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
             typeck: tcx.typeck(def_id),
             tainted_bindings,
             tainted_callee_parameters: Vec::new(),
+            function_bindings: HashMap::new(),
         };
         visitor.visit_body(body);
 
@@ -2156,6 +2157,7 @@ struct TaintedLocalCallVisitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     tainted_bindings: HashSet<HirId>,
     tainted_callee_parameters: Vec<(LocalDefId, usize)>,
+    function_bindings: HashMap<HirId, HashSet<LocalDefId>>,
 }
 
 impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
@@ -2163,24 +2165,32 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
             let incoming_taint = self.tainted_bindings.clone();
+            let incoming_function_bindings = self.function_bindings.clone();
 
             self.visit_expr(then_branch);
             let then_taint = self.tainted_bindings.clone();
+            let then_function_bindings = self.function_bindings.clone();
 
             self.tainted_bindings = incoming_taint.clone();
+            self.function_bindings = incoming_function_bindings;
             if let Some(else_branch) = else_branch {
                 self.visit_expr(else_branch);
             }
             self.tainted_bindings.extend(then_taint);
+            self.function_bindings =
+                merge_function_bindings(then_function_bindings, &self.function_bindings);
             return;
         }
 
         if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
             self.visit_expr(scrutinee);
             let incoming_taint = self.tainted_bindings.clone();
+            let incoming_function_bindings = self.function_bindings.clone();
             let mut arm_taint = HashSet::new();
+            let mut arm_function_bindings = HashMap::new();
             for arm in arms {
                 self.tainted_bindings = incoming_taint.clone();
+                self.function_bindings = incoming_function_bindings.clone();
                 let tainted_arm_bindings = tainted_pattern_binding_ids(
                     self.typeck,
                     scrutinee,
@@ -2194,14 +2204,18 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
                     self.tainted_bindings.remove(&binding);
                 }
                 arm_taint.extend(self.tainted_bindings.iter().copied());
+                arm_function_bindings =
+                    merge_function_bindings(arm_function_bindings, &self.function_bindings);
             }
             self.tainted_bindings = arm_taint;
+            self.function_bindings = arm_function_bindings;
             return;
         }
 
         match expr.kind {
             ExprKind::Assign(target, value, _) => {
                 if let Some(binding) = local_binding_id(self.typeck, target) {
+                    self.assign_function_binding(binding, value);
                     if expr_references_tainted_binding(self.typeck, value, &self.tainted_bindings) {
                         self.tainted_bindings.insert(binding);
                     } else {
@@ -2210,15 +2224,9 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
                 }
             }
             ExprKind::Call(callee, args) => {
-                let local_def_id = match callee.kind {
-                    ExprKind::Path(qpath) => self
-                        .typeck
-                        .qpath_res(&qpath, callee.hir_id)
-                        .opt_def_id()
-                        .and_then(|def_id| def_id.as_local()),
-                    _ => None,
-                };
-                self.record_tainted_arguments(local_def_id, args.iter());
+                for local_def_id in self.callees_for_value(callee) {
+                    self.record_tainted_arguments(Some(local_def_id), args.iter());
+                }
             }
             ExprKind::MethodCall(_, receiver, args, _) => {
                 let local_def_id = self
@@ -2237,6 +2245,16 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
     }
 
     fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if let Some(init) = local.init {
+            let callees = self.callees_for_value(init);
+            for binding in pattern_binding_ids(local.pat) {
+                if callees.is_empty() {
+                    self.function_bindings.remove(&binding);
+                } else {
+                    self.function_bindings.insert(binding, callees.clone());
+                }
+            }
+        }
         if local.init.is_some_and(|init| {
             expr_references_tainted_binding(self.typeck, init, &self.tainted_bindings)
         }) {
@@ -2248,6 +2266,24 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
 }
 
 impl TaintedLocalCallVisitor<'_, '_> {
+    fn assign_function_binding(&mut self, binding: HirId, value: &Expr<'_>) {
+        let callees = self.callees_for_value(value);
+        if callees.is_empty() {
+            self.function_bindings.remove(&binding);
+        } else {
+            self.function_bindings.insert(binding, callees);
+        }
+    }
+
+    fn callees_for_value(&self, value: &Expr<'_>) -> HashSet<LocalDefId> {
+        if let Some(callee) = direct_local_callee(self.typeck, value) {
+            return HashSet::from([callee]);
+        }
+        local_binding_id(self.typeck, value)
+            .and_then(|binding| self.function_bindings.get(&binding).cloned())
+            .unwrap_or_default()
+    }
+
     fn record_tainted_arguments<'tcx>(
         &mut self,
         local_def_id: Option<LocalDefId>,

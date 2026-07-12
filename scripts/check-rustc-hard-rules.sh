@@ -129,6 +129,22 @@ impl Encode for EncodedInput {
     HelperPayload { payload: Payload },
 }
 
+#[pallet::event] pub enum AliasedHelperPayloadEvent {
+    AliasedHelperPayload { payload: Payload },
+}
+
+#[pallet::event] pub enum OverwrittenAliasedHelperPayloadEvent {
+    OverwrittenAliasedHelperPayload { payload: Payload },
+}
+
+#[pallet::event] pub enum ConditionalAliasedHelperPayloadEvent {
+    ConditionalAliasedHelperPayload { payload: Payload },
+}
+
+#[pallet::event] pub enum MatchAliasedHelperPayloadEvent {
+    MatchAliasedHelperPayload { payload: Payload },
+}
+
 pub fn emit_event(payload: Payload) {
     let _ = Event::Submitted { payload };
 }
@@ -151,6 +167,59 @@ fn emit_helper_payload_event(payload: Payload) {
 
 pub fn emit_helper_payload_event_from_input(payload: Payload) {
     emit_helper_payload_event(payload);
+}
+
+fn emit_aliased_helper_payload_event(payload: Payload) {
+    let _ = AliasedHelperPayloadEvent::AliasedHelperPayload { payload };
+}
+
+fn emit_overwritten_aliased_helper_payload_event(payload: Payload) {
+    let _ = OverwrittenAliasedHelperPayloadEvent::OverwrittenAliasedHelperPayload { payload };
+}
+
+fn emit_conditional_aliased_helper_payload_event(payload: Payload) {
+    let _ = ConditionalAliasedHelperPayloadEvent::ConditionalAliasedHelperPayload { payload };
+}
+
+fn emit_match_aliased_helper_payload_event(payload: Payload) {
+    let _ = MatchAliasedHelperPayloadEvent::MatchAliasedHelperPayload { payload };
+}
+
+fn discard_aliased_helper_payload_event(_payload: Payload) {}
+
+pub fn emit_helper_payload_event_from_function_value(payload: Payload) {
+    let emit = emit_aliased_helper_payload_event;
+    emit(payload);
+}
+
+#[allow(unused_assignments)]
+pub fn emit_helper_payload_event_from_overwritten_function_value(payload: Payload) {
+    let mut emit: fn(Payload) = emit_overwritten_aliased_helper_payload_event;
+    emit = discard_aliased_helper_payload_event;
+    emit(payload);
+}
+
+pub fn emit_helper_payload_event_from_conditionally_overwritten_function_value(
+    payload: Payload,
+    discard: bool,
+) {
+    let mut emit: fn(Payload) = emit_conditional_aliased_helper_payload_event;
+    if discard {
+        emit = discard_aliased_helper_payload_event;
+    }
+    emit(payload);
+}
+
+pub fn emit_helper_payload_event_from_match_overwritten_function_value(
+    payload: Payload,
+    emit_event: bool,
+) {
+    let mut emit: fn(Payload) = discard_aliased_helper_payload_event;
+    match emit_event {
+        true => emit = emit_match_aliased_helper_payload_event,
+        false => {},
+    }
+    emit(payload);
 }
 
 pub mod unrelated_event {
@@ -629,6 +698,11 @@ pub fn decode_via_private_helper_assignment(data: &[u8]) -> Result<RuntimeCall, 
     let forwarded: &[u8];
     forwarded = data;
     decode_private_assignment(forwarded)
+}
+
+pub fn decode_via_private_helper_function_value(data: &[u8]) -> Result<RuntimeCall, ()> {
+    let decode = decode_private;
+    decode(data)
 }
 
 pub fn decode_via_match_helper(
@@ -1310,6 +1384,8 @@ match_helper_decode_line="$(grep -n 'decoded_from_match_helper = RuntimeCall::de
 rustc_sec003_match_helper_count="$(jq --argjson line "$match_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 match_conditional_helper_decode_line="$(grep -n 'fn decode_private_after_match_conditional' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_match_conditional_helper_count="$(jq --argjson line "$match_conditional_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+function_value_helper_decode_line="$(grep -n 'pub fn decode_via_private_helper_function_value' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_function_value_helper_count="$(jq --argjson line "$function_value_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 structural_recursive_decode_line="$(grep -n 'pub fn decode_structural_recursive' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_structural_recursive_count="$(jq --argjson line "$structural_recursive_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
@@ -1323,7 +1399,11 @@ whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut
 whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 unemitted_event_field_line="$(grep -n 'Unemitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 internal_payload_event_field_line="$(grep -n 'InternalPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
-helper_payload_event_field_line="$(grep -n 'HelperPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
+helper_payload_event_field_line="$(grep -n '^    HelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
+aliased_helper_payload_event_field_line="$(grep -n '^    AliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
+overwritten_aliased_helper_payload_event_field_line="$(grep -n '^    OverwrittenAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
+conditional_aliased_helper_payload_event_field_line="$(grep -n '^    ConditionalAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
+match_aliased_helper_payload_event_field_line="$(grep -n '^    MatchAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
 raw_string_debug_assert_line="$(grep -n 'pub fn raw_string_debug_assert_text' "$FIXTURE" | cut -d: -f1)"
 comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
@@ -1344,6 +1424,10 @@ rustc_sec017_whitespace_event_count="$(jq --argjson line "$whitespace_event_fiel
 rustc_sec017_unemitted_event_count="$(jq --argjson line "$unemitted_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_internal_payload_event_count="$(jq --argjson line "$internal_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_helper_payload_event_count="$(jq --argjson line "$helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_aliased_helper_payload_event_count="$(jq --argjson line "$aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_overwritten_aliased_helper_payload_event_count="$(jq --argjson line "$overwritten_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_conditional_aliased_helper_payload_event_count="$(jq --argjson line "$conditional_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_match_aliased_helper_payload_event_count="$(jq --argjson line "$match_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec002_raw_string_count="$(jq --argjson line "$raw_string_debug_assert_line" '[.[] | select(.rule_id == "SEC002" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1423,7 +1507,7 @@ test "$rustc_sec002_raw_string_count" = "0"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
 test "$syn_sec003_count" = "13"
-test "$rustc_sec003_count" = "14"
+test "$rustc_sec003_count" = "15"
 test "$rustc_sec003_clean_assignment_count" = "0"
 test "$rustc_sec003_conditional_clean_assignment_count" = "1"
 test "$rustc_sec003_branch_selected_input_count" = "1"
@@ -1431,6 +1515,7 @@ test "$rustc_sec003_match_selected_input_count" = "1"
 test "$rustc_sec003_match_conditional_clean_count" = "1"
 test "$rustc_sec003_match_helper_count" = "1"
 test "$rustc_sec003_match_conditional_helper_count" = "1"
+test "$rustc_sec003_function_value_helper_count" = "1"
 test "$rustc_sec003_structural_recursive_count" = "1"
 test "$syn_sec008_count" = "19"
 test "$rustc_sec008_count" = "6"
@@ -1491,11 +1576,15 @@ test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "2"
 test "$rustc_sec013_whitespace_storage_count" = "1"
 test "$syn_sec017_count" = "0"
-test "$rustc_sec017_count" = "3"
+test "$rustc_sec017_count" = "6"
 test "$rustc_sec017_whitespace_event_count" = "1"
 test "$rustc_sec017_unemitted_event_count" = "0"
 test "$rustc_sec017_internal_payload_event_count" = "0"
 test "$rustc_sec017_helper_payload_event_count" = "1"
+test "$rustc_sec017_aliased_helper_payload_event_count" = "1"
+test "$rustc_sec017_overwritten_aliased_helper_payload_event_count" = "0"
+test "$rustc_sec017_conditional_aliased_helper_payload_event_count" = "1"
+test "$rustc_sec017_match_aliased_helper_payload_event_count" = "1"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "6"
 test "$rustc_sec018_privileged_root_count" = "1"
@@ -1507,7 +1596,7 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "63"
+test "$rustc_filtered_count" = "67"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"
