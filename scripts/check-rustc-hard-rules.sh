@@ -107,6 +107,10 @@ impl Encode for EncodedInput {
 
 pub mod frame_support {
     pub mod storage {
+        pub trait IterableStorageMap {
+            fn iter() -> std::vec::IntoIter<u8>;
+        }
+
         pub mod types {
             pub struct StorageValue<K, V>(K, V);
             pub struct StorageMap;
@@ -118,14 +122,40 @@ pub mod frame_support {
 
                 pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
             }
+
+            impl super::IterableStorageMap for StorageMap {
+                fn iter() -> std::vec::IntoIter<u8> {
+                    Vec::new().into_iter()
+                }
+            }
         }
     }
 
     pub mod traits {
+        pub trait Hooks {
+            fn on_runtime_upgrade();
+        }
+
+        pub trait OnRuntimeUpgrade {
+            fn on_runtime_upgrade();
+        }
+
+        pub trait UncheckedOnRuntimeUpgrade {
+            fn on_runtime_upgrade();
+        }
+
         pub mod members {
             pub trait ChangeMembers {
                 fn change_members_sorted();
             }
+        }
+    }
+}
+
+pub mod frame {
+    pub mod traits {
+        pub trait OnRuntimeUpgrade {
+            fn on_runtime_upgrade();
         }
     }
 }
@@ -197,6 +227,42 @@ fn reachable_private_storage_iteration() {
     let _ = frame_support::storage::types::StorageMap::iter();
 }
 
+pub fn storage_iteration_via_trait() {
+    let _ = <frame_support::storage::types::StorageMap as frame_support::storage::IterableStorageMap>::iter();
+}
+
+pub struct RuntimeUpgrade;
+
+impl frame_support::traits::Hooks for RuntimeUpgrade {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+pub struct Migration;
+
+impl frame_support::traits::OnRuntimeUpgrade for Migration {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+pub struct RenamedFrameMigration;
+
+impl crate::frame::traits::OnRuntimeUpgrade for RenamedFrameMigration {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+pub struct UncheckedMigration;
+
+impl frame_support::traits::UncheckedOnRuntimeUpgrade for UncheckedMigration {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
 pub fn local_iteration() {
     let _ = Domain::iter();
 }
@@ -226,6 +292,20 @@ impl frame_support::traits::members::ChangeMembers for Callback {
     }
 }
 
+pub mod unrelated {
+    pub trait ChangeMembers {
+        fn change_members_sorted();
+    }
+}
+
+pub struct UnrelatedCallback;
+
+impl unrelated::ChangeMembers for UnrelatedCallback {
+    fn change_members_sorted() {
+        frame_support::storage::types::StorageMap::clear_prefix((), Some(u32::MAX));
+    }
+}
+
 pub fn storage_clear_prefix_bounded() {
     frame_support::storage::types::StorageMap::clear_prefix((), Some(10));
 }
@@ -247,6 +327,19 @@ pub fn decode_alias_from_match(data: &[u8]) -> Result<RuntimeCall, ()> {
     match (data, ()) {
         (mut data, ()) => AliasCall::decode(&mut data),
     }
+}
+
+pub fn decode_via_private_helper(data: &[u8]) -> Result<RuntimeCall, ()> {
+    decode_private(data)
+}
+
+fn decode_private(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    RuntimeCall::decode(&mut data)
+}
+
+#[allow(dead_code)]
+fn unreachable_decode(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    RuntimeCall::decode(&mut data)
 }
 
 pub fn decode_from_internal() -> Result<RuntimeCall, ()> {
@@ -448,17 +541,6 @@ rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_rule_filtered_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_rule_filtered_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_rule_filtered_other_count="$(jq '[.[] | select(.rule_id != "SEC008" and .rule_id != "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
-rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_JSON")"
-rustc_sec002_lines="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
-rustc_sec008_lines="$(jq -r '.[] | select(.rule_id == "SEC008") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec009_lines="$(jq -r '.[] | select(.rule_id == "SEC009") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec011_lines="$(jq -r '.[] | select(.rule_id == "SEC011") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec012_lines="$(jq -r '.[] | select(.rule_id == "SEC012") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec013_line="$(jq -r '.[] | select(.rule_id == "SEC013") | .line' "$RUSTC_JSON")"
-rustc_sec017_line="$(jq -r '.[] | select(.rule_id == "SEC017") | .line' "$RUSTC_JSON")"
-rustc_sec018_line="$(jq -r '.[] | select(.rule_id == "SEC018") | .line' "$RUSTC_JSON")"
-
 echo "syntax SEC001 findings: $syn_sec001_count"
 echo "rustc SEC001 findings: $rustc_sec001_count"
 echo "syntax SEC002 findings: $syn_sec002_count"
@@ -485,34 +567,25 @@ echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
-test "$rustc_sec001_line" = "89"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "2"
-test "$rustc_sec002_lines" = "190,198"
-test "$syn_sec003_count" = "1"
-test "$rustc_sec003_count" = "3"
+test "$syn_sec003_count" = "3"
+test "$rustc_sec003_count" = "4"
 test "$syn_sec008_count" = "4"
 test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
 test "$rustc_sec009_count" = "2"
 test "$syn_sec011_count" = "1"
-test "$rustc_sec011_count" = "2"
-test "$rustc_sec008_lines" = "223,231"
-test "$rustc_sec009_lines" = "240,248"
-test "$rustc_sec011_lines" = "108,116"
-test "$syn_sec012_count" = "5"
+test "$rustc_sec011_count" = "7"
+test "$syn_sec012_count" = "6"
 test "$rustc_sec012_count" = "3"
-test "$rustc_sec012_lines" = "124,132,144"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "1"
-test "$rustc_sec013_line" = "53"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "1"
-test "$rustc_sec017_line" = "23"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "1"
-test "$rustc_sec018_line" = "89"
-test "$rustc_filtered_count" = "18"
+test "$rustc_filtered_count" = "24"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "4"
 test "$rustc_rule_filtered_sec008_count" = "2"

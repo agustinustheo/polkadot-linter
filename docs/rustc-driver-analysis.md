@@ -40,15 +40,18 @@ The driver currently includes typed checks for:
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported. It
-  limits analysis to public and hook entry points plus direct local callees;
-  indirect calls and path-sensitive control flow remain out of scope.
+  limits analysis to public entry points, resolved FRAME `Hooks`,
+  `OnRuntimeUpgrade`, and `UncheckedOnRuntimeUpgrade` callbacks,
+  `ChangeMembers::change_members_sorted`, and their direct local callees;
+  unrelated public trait implementations are not treated as runtime entry
+  points. Indirect calls and path-sensitive control flow remain out of scope.
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
   reads resolved call return types and decode receiver types, so aliases to
   `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
-  resolution instead of source text matching. It requires direct input evidence
-  through function parameters, local bindings, match-arm bindings, and
-  `using_encoded(|mut bytes| ...)` closure inputs, and filters macro-generated
-  attribute-line spans.
+  resolution instead of source text matching. It propagates input evidence from
+  entry-point parameters through local bindings, match-arm bindings,
+  `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
+  calls, while filtering macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited. It analyzes public and hook
@@ -64,7 +67,12 @@ The driver currently includes typed checks for:
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
   `StorageDoubleMap`, `StorageNMap`, `CountedStorageMap`, and `StorageValue`.
-  It follows public and hook entry points through direct local helper calls.
+  It follows public entry points, resolved FRAME hook and migration callbacks
+  including `Hooks::on_runtime_upgrade`, `OnRuntimeUpgrade`, and
+  `UncheckedOnRuntimeUpgrade`, and direct local helper calls. For storage
+  aliases, it falls back to the resolved associated-method owner path without
+  forcing projection expansion, accepting both the canonical `frame_support`
+  crate path and the SDK's `frame` crate alias.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
@@ -184,7 +192,7 @@ That script builds `polkadot-linter-rustc`, invokes the stable
 `--compiler-backed-rules`, and verifies package-local
 compiler-backed findings are captured from the pinned SDK
 `pallet-multisig` package. The raw smoke artifact is filtered to the
-`substrate/frame/multisig/src/lib.rs` package file and currently contains 10
+`substrate/frame/multisig/src/lib.rs` package file and currently contains 7
 deduplicated public linter diagnostics from the explicitly selected `SEC001`
 and `SEC008` rustc-backed rules. The summary is checked against
 `benchmarks/polkadot-sdk-rustc-multisig-sec001-sec008-baseline.tsv`. This is
@@ -265,7 +273,7 @@ scripts/check-rustc-sdk-sec008.sh .repos/polkadot-sdk .benchmarks
 ```
 
 The stabilized syntax rule emits zero `SEC008` diagnostics for
-`pallet-multisig`, while the compiler-backed route resolves and reports five
+`pallet-multisig`, while the compiler-backed route resolves and reports two
 reachable `.expect()` paths. The output is checked against
 `benchmarks/polkadot-sdk-rustc-multisig-sec008-baseline.tsv`.
 

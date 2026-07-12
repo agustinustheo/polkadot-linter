@@ -4,7 +4,4 @@ SEC001	substrate/frame/multisig/src/lib.rs	488	Public callable accepts an unboun
 SEC001	substrate/frame/multisig/src/lib.rs	530	Public callable accepts an unbounded Vec parameter after type resolution
 SEC001	substrate/frame/multisig/src/lib.rs	578	Public callable accepts an unbounded Vec parameter after type resolution
 SEC008	substrate/frame/multisig/src/lib.rs	141	`.expect()` can panic on a reachable error path
-SEC008	substrate/frame/multisig/src/lib.rs	210	`.expect()` can panic on a reachable error path
-SEC008	substrate/frame/multisig/src/lib.rs	215	`.expect()` can panic on a reachable error path
-SEC008	substrate/frame/multisig/src/lib.rs	225	`.expect()` can panic on a reachable error path
 SEC008	substrate/frame/multisig/src/lib.rs	647	`.expect()` can panic on a reachable error path

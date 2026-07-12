@@ -6,7 +6,14 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use std::{collections::HashSet, env, fs::OpenOptions, io::Write, path::Path, process};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    fs::OpenOptions,
+    io::Write,
+    path::Path,
+    process,
+};
 
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
@@ -64,6 +71,10 @@ impl Callbacks for PolkadotCallbacks {
         let reachable_fallible_entry_point_bodies = self
             .rule_enabled("SEC009")
             .then(|| reachable_local_function_bodies(tcx, true))
+            .unwrap_or_default();
+        let sec003_tainted_bodies = self
+            .rule_enabled("SEC003")
+            .then(|| tainted_reachable_function_bodies(tcx))
             .unwrap_or_default();
         if self.rule_enabled("SEC002") {
             report_reachable_debug_assertions(
@@ -134,17 +145,16 @@ impl Callbacks for PolkadotCallbacks {
                 );
             }
 
-            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC003") {
+            if !matches!(body_owner_kind, BodyOwnerKind::Fn) {
+                continue;
+            }
+            if let Some(tainted_bindings) = sec003_tainted_bodies.get(&def_id) {
                 let mut decode_visitor = Sec003Visitor {
                     source_map: tcx.sess.source_map(),
                     tcx,
                     typeck,
                     diagnostics: &mut self.diagnostics,
-                    tainted_bindings: body
-                        .params
-                        .iter()
-                        .flat_map(|param| pattern_binding_ids(param.pat))
-                        .collect(),
+                    tainted_bindings: tainted_bindings.clone(),
                 };
                 decode_visitor.visit_body(body);
             }
@@ -204,6 +214,76 @@ fn reachable_local_function_bodies(
     }
 
     reachable
+}
+
+fn tainted_reachable_function_bodies<'tcx>(
+    tcx: TyCtxt<'tcx>,
+) -> HashMap<LocalDefId, HashSet<HirId>> {
+    let mut tainted_parameter_indices = tcx
+        .hir_body_owners()
+        .filter(|def_id| {
+            matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
+                && is_reachable_entry_point(tcx, *def_id)
+        })
+        .filter_map(|def_id| {
+            tcx.hir_maybe_body_owned_by(def_id)
+                .map(|body| (def_id, (0..body.params.len()).collect::<HashSet<usize>>()))
+        })
+        .collect::<HashMap<_, _>>();
+    let mut pending = tainted_parameter_indices
+        .keys()
+        .copied()
+        .collect::<Vec<_>>();
+
+    while let Some(def_id) = pending.pop() {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let Some(parameter_indices) = tainted_parameter_indices.get(&def_id) else {
+            continue;
+        };
+        let tainted_bindings = parameter_indices
+            .iter()
+            .filter_map(|index| body.params.get(*index))
+            .flat_map(|param| pattern_binding_ids(param.pat))
+            .collect::<HashSet<_>>();
+        let mut visitor = TaintedLocalCallVisitor {
+            typeck: tcx.typeck(def_id),
+            tainted_bindings: &tainted_bindings,
+            tainted_callee_parameters: Vec::new(),
+        };
+        visitor.visit_body(body);
+
+        for (callee, parameter_index) in visitor.tainted_callee_parameters {
+            let Some(callee_body) = tcx.hir_maybe_body_owned_by(callee) else {
+                continue;
+            };
+            if parameter_index >= callee_body.params.len() {
+                continue;
+            }
+            if tainted_parameter_indices
+                .entry(callee)
+                .or_default()
+                .insert(parameter_index)
+            {
+                pending.push(callee);
+            }
+        }
+    }
+
+    tainted_parameter_indices
+        .into_iter()
+        .filter_map(|(def_id, parameter_indices)| {
+            tcx.hir_maybe_body_owned_by(def_id).map(|body| {
+                let tainted_bindings = parameter_indices
+                    .iter()
+                    .filter_map(|index| body.params.get(*index))
+                    .flat_map(|param| pattern_binding_ids(param.pat))
+                    .collect();
+                (def_id, tainted_bindings)
+            })
+        })
+        .collect()
 }
 
 fn report_reachable_debug_assertions<'tcx>(
@@ -829,6 +909,60 @@ impl LocalCalleeVisitor<'_, '_> {
     }
 }
 
+struct TaintedLocalCallVisitor<'a, 'tcx> {
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    tainted_bindings: &'a HashSet<HirId>,
+    tainted_callee_parameters: Vec<(LocalDefId, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        match expr.kind {
+            ExprKind::Call(callee, args) => {
+                let local_def_id = match callee.kind {
+                    ExprKind::Path(qpath) => self
+                        .typeck
+                        .qpath_res(&qpath, callee.hir_id)
+                        .opt_def_id()
+                        .and_then(|def_id| def_id.as_local()),
+                    _ => None,
+                };
+                self.record_tainted_arguments(local_def_id, args.iter());
+            }
+            ExprKind::MethodCall(_, receiver, args, _) => {
+                let local_def_id = self
+                    .typeck
+                    .type_dependent_def_id(expr.hir_id)
+                    .and_then(|def_id| def_id.as_local());
+                self.record_tainted_arguments(
+                    local_def_id,
+                    std::iter::once(receiver).chain(args.iter()),
+                );
+            }
+            _ => {}
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl TaintedLocalCallVisitor<'_, '_> {
+    fn record_tainted_arguments<'tcx>(
+        &mut self,
+        local_def_id: Option<LocalDefId>,
+        args: impl Iterator<Item = &'tcx Expr<'tcx>>,
+    ) {
+        let Some(local_def_id) = local_def_id else {
+            return;
+        };
+        self.tainted_callee_parameters
+            .extend(args.enumerate().filter_map(|(index, arg)| {
+                expr_references_tainted_binding(self.typeck, arg, self.tainted_bindings)
+                    .then_some((local_def_id, index))
+            }));
+    }
+}
+
 struct Sec009Visitor<'a, 'tcx> {
     source_map: &'a SourceMap,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
@@ -938,24 +1072,31 @@ fn returns_fallible<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> bool {
 }
 
 fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
-    if tcx.local_visibility(def_id).is_public() {
-        return true;
-    }
-
-    let item_name = tcx.item_name(def_id.to_def_id());
-    let name = item_name.as_str();
-    if matches!(
-        name,
-        "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
-    ) {
-        return true;
-    }
-
-    tcx.impl_of_method(def_id.to_def_id())
+    let method_name = tcx.item_name(def_id.to_def_id());
+    let name = method_name.as_str();
+    if let Some(trait_id) = tcx
+        .impl_of_method(def_id.to_def_id())
         .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
-        .is_some_and(|trait_id| {
-            tcx.item_name(trait_id).as_str() == "ChangeMembers" && name == "change_members_sorted"
-        })
+    {
+        let trait_path = tcx.def_path_str(trait_id);
+        return (is_frame_support_path(&trait_path)
+            && trait_path.ends_with("::Hooks")
+            && matches!(
+                name,
+                "on_initialize" | "on_finalize" | "on_idle" | "on_poll" | "on_runtime_upgrade"
+            ))
+            || (is_frame_support_path(&trait_path)
+                && matches!(
+                    trait_path.rsplit("::").next(),
+                    Some("OnRuntimeUpgrade" | "UncheckedOnRuntimeUpgrade")
+                )
+                && name == "on_runtime_upgrade")
+            || (is_frame_support_path(&trait_path)
+                && trait_path.ends_with("::ChangeMembers")
+                && name == "change_members_sorted");
+    }
+
+    tcx.local_visibility(def_id).is_public()
 }
 
 fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
@@ -1173,7 +1314,7 @@ fn is_frame_storage_associated_call<'tcx>(
 ) -> bool {
     associated_call_receiver_type(typeck, callee)
         .is_some_and(|ty| type_is_frame_storage_owner(tcx, ty))
-        || matches!(callee.kind, ExprKind::Path(qpath) if matches!(typeck.qpath_res(&qpath, callee.hir_id), Res::Def(_, def_id) if matches_frame_storage_owner_name(&tcx.def_path_str(def_id))))
+        || matches!(callee.kind, ExprKind::Path(qpath) if matches!(typeck.qpath_res(&qpath, callee.hir_id), Res::Def(_, def_id) if matches_frame_storage_method_owner_path(&tcx.def_path_str(def_id))))
 }
 
 fn associated_call_receiver_type<'tcx>(
@@ -1328,8 +1469,7 @@ fn type_is_frame_storage_owner<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
 }
 
 fn matches_frame_storage_owner_name(name: &str) -> bool {
-    if !(name.contains("frame_support::storage") || name.contains("frame_support::pallet_prelude"))
-    {
+    if !is_frame_support_path(name) {
         return false;
     }
 
@@ -1342,6 +1482,27 @@ fn matches_frame_storage_owner_name(name: &str) -> bool {
     ]
     .iter()
     .any(|owner| name == *owner || name.ends_with(&format!("::{owner}")))
+}
+
+fn matches_frame_storage_method_owner_path(name: &str) -> bool {
+    is_frame_support_path(name)
+        && [
+            "CountedStorageMap",
+            "IterableStorageDoubleMap",
+            "IterableStorageMap",
+            "IterableStorageNMap",
+            "StorageDoubleMap",
+            "StorageList",
+            "StorageMap",
+            "StorageNMap",
+            "StorageValue",
+        ]
+        .iter()
+        .any(|owner| name.contains(&format!("::{owner}::")))
+}
+
+fn is_frame_support_path(name: &str) -> bool {
+    name.contains("frame_support::") || name.starts_with("frame::") || name.contains("::frame::")
 }
 
 fn has_hir_attr(tcx: TyCtxt<'_>, hir_id: rustc_hir::HirId, path: &[&str]) -> bool {
