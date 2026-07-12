@@ -450,6 +450,27 @@ pub fn decode_after_conditional_clean_assignment(
     decoded_after_conditional
 }
 
+pub fn decode_after_branch_selected_input(
+    data: &[u8],
+    select_input: bool,
+) -> Result<RuntimeCall, ()> {
+    let mut selected = if select_input { data } else { &[][..] };
+    let decoded_after_branch_selected_input = RuntimeCall::decode(&mut selected);
+    decoded_after_branch_selected_input
+}
+
+pub fn decode_after_match_selected_input(
+    data: &[u8],
+    select_input: bool,
+) -> Result<RuntimeCall, ()> {
+    let mut selected = match (data, select_input) {
+        (data, true) => data,
+        _ => &[][..],
+    };
+    let decoded_after_match_selected_input = RuntimeCall::decode(&mut selected);
+    decoded_after_match_selected_input
+}
+
 fn decode_private(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     RuntimeCall::decode(&mut data)
 }
@@ -757,6 +778,10 @@ clean_assignment_line="$(grep -n 'pub fn decode_after_clean_assignment' "$FIXTUR
 rustc_sec003_clean_assignment_count="$(jq --argjson line "$clean_assignment_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 conditional_clean_assignment_decode_line="$(grep -n 'decoded_after_conditional = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_conditional_clean_assignment_count="$(jq --argjson line "$conditional_clean_assignment_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
+branch_selected_input_decode_line="$(grep -n 'decoded_after_branch_selected_input = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_branch_selected_input_count="$(jq --argjson line "$branch_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
+match_selected_input_decode_line="$(grep -n 'decoded_after_match_selected_input = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_match_selected_input_count="$(jq --argjson line "$match_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
@@ -809,10 +834,12 @@ test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
-test "$syn_sec003_count" = "8"
-test "$rustc_sec003_count" = "8"
+test "$syn_sec003_count" = "10"
+test "$rustc_sec003_count" = "10"
 test "$rustc_sec003_clean_assignment_count" = "0"
 test "$rustc_sec003_conditional_clean_assignment_count" = "1"
+test "$rustc_sec003_branch_selected_input_count" = "1"
+test "$rustc_sec003_match_selected_input_count" = "1"
 test "$syn_sec008_count" = "10"
 test "$rustc_sec008_count" = "4"
 test "$rustc_sec008_known_ok_count" = "0"
@@ -842,7 +869,7 @@ test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
 test "$rustc_sec018_unknown_config_origin_count" = "1"
 test "$rustc_sec018_comment_only_weight_input_count" = "1"
-test "$rustc_filtered_count" = "38"
+test "$rustc_filtered_count" = "40"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "6"
 test "$rustc_rule_filtered_sec008_count" = "4"

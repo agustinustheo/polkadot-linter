@@ -1747,6 +1747,25 @@ fn expr_references_tainted_binding(
                     .iter()
                     .any(|arg| expr_references_tainted_binding(typeck, arg, tainted_bindings))
         }
+        ExprKind::If(_, then_branch, else_branch) => {
+            expr_references_tainted_binding(typeck, then_branch, tainted_bindings)
+                || else_branch.is_some_and(|else_branch| {
+                    expr_references_tainted_binding(typeck, else_branch, tainted_bindings)
+                })
+        }
+        ExprKind::Match(scrutinee, arms, _) => arms.iter().any(|arm| {
+            let mut arm_tainted_bindings = tainted_bindings.clone();
+            arm_tainted_bindings.extend(tainted_pattern_binding_ids(
+                typeck,
+                scrutinee,
+                arm,
+                tainted_bindings,
+            ));
+            expr_references_tainted_binding(typeck, arm.body, &arm_tainted_bindings)
+        }),
+        ExprKind::Block(block, _) => block
+            .expr
+            .is_some_and(|tail| expr_references_tainted_binding(typeck, tail, tainted_bindings)),
         ExprKind::Tup(values) | ExprKind::Array(values) => values
             .iter()
             .any(|value| expr_references_tainted_binding(typeck, value, tainted_bindings)),
