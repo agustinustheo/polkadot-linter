@@ -269,8 +269,20 @@ The stabilized syntax rule emits zero `SEC008` diagnostics for
 reachable `.expect()` paths. The output is checked against
 `benchmarks/polkadot-sdk-rustc-multisig-sec008-baseline.tsv`.
 
+Run the SDK `SEC012` clear-prefix coverage check with:
+
+```sh
+scripts/check-rustc-sdk-sec012.sh .repos/polkadot-sdk .benchmarks
+```
+
+The syntax path emits no package-local `SEC012` result for `pallet-oracle`,
+while the compiler-backed route resolves `RawValues::<T, I>::clear_prefix` and
+reports the unbounded deletion limit at line 440. The output is checked against
+`benchmarks/polkadot-sdk-rustc-oracle-sec012-baseline.tsv`.
+
 The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
 the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
 SDK precision baseline, and the contracts `SEC018` macro-recovery baseline
 and session `SEC013` storage-value and root-offences `SEC017` event baselines
-and multisig `SEC008` panic baseline after the default stable build.
+and multisig `SEC008` panic and oracle `SEC012` clear-prefix baselines after
+the default stable build.
