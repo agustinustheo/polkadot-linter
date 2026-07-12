@@ -40,9 +40,12 @@ The driver currently includes typed checks for:
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported. It
-  limits analysis to public entry points, resolved FRAME `Hooks`,
+  follows nested macro call-site provenance when the immediate expansion frame
+  is a different macro such as `assert!`.
+  It limits analysis to public entry points, resolved FRAME `Hooks`,
   `OnRuntimeUpgrade`, and `UncheckedOnRuntimeUpgrade` callbacks,
-  `ChangeMembers::change_members_sorted`, and their direct local callees;
+  `ChangeMembers::change_members_sorted`, XCM `OnResponse::on_response`, and
+  their direct local callees;
   unrelated public trait implementations are not treated as runtime entry
   points. Indirect calls and path-sensitive control flow remain out of scope.
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
