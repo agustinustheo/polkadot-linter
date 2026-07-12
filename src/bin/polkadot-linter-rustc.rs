@@ -487,6 +487,7 @@ fn report_reachable_panic_calls<'tcx>(
             typeck: tcx.typeck(*def_id),
             diagnostics,
             reported_lines: &mut reported_lines,
+            known_unwrappable_bindings: HashSet::new(),
         };
         panic_visitor.visit_body(body);
     }
@@ -1087,16 +1088,33 @@ struct Sec008Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
+    known_unwrappable_bindings: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Assign(target, value, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                if expression_constructs_known_unwrappable(self.tcx, self.typeck, value) {
+                    self.known_unwrappable_bindings.insert(binding);
+                } else {
+                    self.known_unwrappable_bindings.remove(&binding);
+                }
+            }
+        }
+
         if let ExprKind::MethodCall(segment, receiver, _, _) = expr.kind {
             let method = segment.ident.name.as_str();
             if matches!(method, "unwrap" | "expect")
                 && !receiver_is_result_with_uninhabited_error(
                     self.tcx,
                     self.typeck.expr_ty(receiver),
+                )
+                && !expression_is_known_unwrappable(
+                    self.tcx,
+                    self.typeck,
+                    receiver,
+                    &self.known_unwrappable_bindings,
                 )
             {
                 let (file, line, column) = span_location(self.source_map, expr.span);
@@ -1114,6 +1132,17 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
         }
 
         intravisit::walk_expr(self, expr);
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(|init| {
+            expression_constructs_known_unwrappable(self.tcx, self.typeck, init)
+        }) {
+            self.known_unwrappable_bindings
+                .extend(pattern_binding_ids(local.pat));
+        }
+
+        intravisit::walk_local(self, local);
     }
 }
 
@@ -1474,6 +1503,37 @@ fn local_binding_id(
         Res::Local(hir_id) => Some(hir_id),
         _ => None,
     }
+}
+
+fn expression_is_known_unwrappable(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    known_bindings: &HashSet<HirId>,
+) -> bool {
+    local_binding_id(typeck, expr).is_some_and(|binding| known_bindings.contains(&binding))
+        || expression_constructs_known_unwrappable(tcx, typeck, expr)
+}
+
+fn expression_constructs_known_unwrappable(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    let ExprKind::Call(callee, _) = expr.kind else {
+        return false;
+    };
+    let Some(constructor) = qpath_call_name(callee) else {
+        return false;
+    };
+    let TyKind::Adt(adt, _) = typeck.expr_ty(expr).kind() else {
+        return false;
+    };
+    let type_path = tcx.def_path_str(adt.did());
+    matches!(constructor.as_str(), "Some" | "Ok")
+        && ((constructor == "Some" && type_path.ends_with("::Option"))
+            || (constructor == "Ok"
+                && (type_path.ends_with("::Result") || type_path.contains("result::Result"))))
 }
 
 fn pattern_binding_ids(pattern: &Pat<'_>) -> Vec<HirId> {

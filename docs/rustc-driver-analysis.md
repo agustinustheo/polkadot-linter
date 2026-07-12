@@ -63,9 +63,11 @@ The driver currently includes typed checks for:
   calls, while filtering macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
-  where the error path is statically uninhabited. It analyzes public and hook
-  entry points and direct calls to local helpers rather than private helper-only
-  bodies. Indirect calls and path-sensitive control flow remain out of scope.
+  where the error path is statically uninhabited. It also tracks local values
+  constructed as `Ok`/`Some` and clears that proof if the local is overwritten.
+  It analyzes public and hook entry points and direct calls to local helpers
+  rather than private helper-only bodies. Indirect calls and path-sensitive
+  control flow remain out of scope.
 - `SEC009`: raw arithmetic in fallible functions. The rustc-backed
   implementation reads HIR and type-checking results, then reports binary `+`,
   `-`, `*`, `/`, and `%` only when both operands resolve to integer types inside
