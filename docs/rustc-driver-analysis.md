@@ -64,7 +64,9 @@ The driver currently includes typed checks for:
   `OpaqueExtrinsic` that cannot be structurally expanded in a generic pallet.
   It propagates input evidence from
   entry-point parameters through local bindings, local aliases and assignments
-  passed to direct local helpers (with unconditional internal-buffer overwrites
+  passed to direct local helpers and locally aliased function values. Function
+  aliases merge across `if` and `match` paths, while unconditional overwrites
+  clear the prior callee evidence. Internal-buffer overwrites
   clearing taint and conditional assignments or branch-value expressions merged
   conservatively). Match arms are analyzed from the same incoming state and
   unioned, including when an input reaches a direct local helper,
