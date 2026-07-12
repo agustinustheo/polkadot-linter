@@ -116,13 +116,16 @@ The driver currently includes typed checks for:
   are reported while bounded wrappers and unbounded keys are skipped.
 - `SEC017`: unbounded event payloads. The rustc-backed implementation visits
   source-linked FRAME event enums and reads resolved field types, so aliases to
-  `Vec<T>` are reported while bounded wrappers such as `BoundedVec` and
-  ordinary enums are skipped. FRAME consumes `#[pallet::event]`, so the event
-  marker is recovered from the enum's compiler source span and constrained to
-  the analyzed enum rather than a preceding item.
+  `Vec<T>` are candidates while bounded wrappers such as `BoundedVec` and
+  ordinary enums are skipped. It then resolves reachable event constructors and
+  requires the field value to derive from an unbounded entry-point parameter,
+  propagated through direct local calls; unconstructed event declarations
+  therefore do not report. FRAME `generate_deposit` expansions can remove the
+  callable body needed for that evidence; the driver then uses a narrow
+  source-linked metadata fallback while retaining rustc-resolved field types.
 - `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
-  implementation pairs resolved function parameter types with the nearest
-  source `#[pallet::weight(...)]` annotation. FRAME consumes this custom
+  implementation pairs resolved FRAME dispatchable parameter types with the
+  nearest source `#[pallet::weight(...)]` annotation. FRAME consumes this custom
   annotation during macro expansion, so source-span recovery is required while
   rustc remains the authority for the dispatchable and its input types. Aliased
   `Vec<T>` inputs are reported when the parsed weight expression does not
@@ -180,8 +183,10 @@ driver:
   type is another alias to `Vec`, while the rustc-driver path resolves the value
   alias and reports it while skipping a bounded storage alias
 - for `SEC017`, the syntax path misses an event payload behind a `Payload`
-  alias, while the rustc-driver path resolves the alias and reports it while
-  skipping a `BoundedVec` event payload
+  alias, while the rustc-driver path resolves the alias and reports it only
+  after a reachable constructor receives that unbounded input, while skipping
+  an unconstructed event and a `BoundedVec` event payload; the pinned FRAME
+  deposit-event macro case uses the documented metadata fallback
 - for `SEC018`, the syntax path misses a weight annotation whose unaccounted
   parameter is hidden behind a `Payload` alias, while the rustc-driver path
   resolves the alias and reports it while skipping bounded inputs. The fixture

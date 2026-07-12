@@ -74,6 +74,11 @@ struct ParsedItemAttributes {
     event: bool,
 }
 
+struct EventFieldCandidate {
+    span: Span,
+    macro_consumed_event_marker: bool,
+}
+
 impl Callbacks for PolkadotCallbacks {
     fn after_crate_root_parsing(
         &mut self,
@@ -109,20 +114,31 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
-        if self.rule_enabled("SEC017") {
-            report_vec_event_fields(
-                tcx,
-                tcx.sess.source_map(),
-                &self.parsed_item_attributes,
-                &mut self.diagnostics,
-            );
-        }
+        let sec017_tainted_bodies = self
+            .rule_enabled("SEC017")
+            .then(|| {
+                unbounded_tainted_reachable_function_bodies(
+                    tcx,
+                    tcx.sess.source_map(),
+                    &self.parsed_weight_attributes,
+                )
+            })
+            .unwrap_or_default();
         let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
             || self.rule_enabled("SEC008")
             || self.rule_enabled("SEC011")
             || self.rule_enabled("SEC012"))
         .then(|| reachable_local_function_bodies(tcx, false))
         .unwrap_or_default();
+        if self.rule_enabled("SEC017") {
+            report_vec_event_fields(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_item_attributes,
+                &sec017_tainted_bodies,
+                &mut self.diagnostics,
+            );
+        }
         let reachable_fallible_entry_point_bodies = self
             .rule_enabled("SEC009")
             .then(|| reachable_local_function_bodies(tcx, true))
@@ -291,15 +307,54 @@ fn reachable_local_function_bodies(
 fn tainted_reachable_function_bodies<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> HashMap<LocalDefId, HashSet<HirId>> {
+    tainted_reachable_function_bodies_with_input_filter(tcx, false, None)
+}
+
+fn unbounded_tainted_reachable_function_bodies<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+) -> HashMap<LocalDefId, HashSet<HirId>> {
+    tainted_reachable_function_bodies_with_input_filter(
+        tcx,
+        true,
+        Some((source_map, parsed_weight_attributes)),
+    )
+}
+
+fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    unbounded_inputs_only: bool,
+    parsed_dispatchables: Option<(&SourceMap, &[ParsedWeightAttribute])>,
+) -> HashMap<LocalDefId, HashSet<HirId>> {
     let mut tainted_parameter_indices = tcx
         .hir_body_owners()
         .filter(|def_id| {
             matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
-                && is_reachable_entry_point(tcx, *def_id)
+                && (is_reachable_entry_point(tcx, *def_id)
+                    || (unbounded_inputs_only
+                        && parsed_dispatchables.is_some_and(|(source_map, attributes)| {
+                            is_frame_dispatchable(tcx, *def_id, source_map, attributes)
+                        })))
         })
         .filter_map(|def_id| {
-            tcx.hir_maybe_body_owned_by(def_id)
-                .map(|body| (def_id, (0..body.params.len()).collect::<HashSet<usize>>()))
+            tcx.hir_maybe_body_owned_by(def_id).map(|body| {
+                let typeck = tcx.typeck(def_id);
+                let parameter_indices: HashSet<usize> = body
+                    .params
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, param)| {
+                        (!unbounded_inputs_only
+                            || type_contains_unbounded_event_vec(
+                                tcx,
+                                typeck.node_type(param.pat.hir_id),
+                            ))
+                        .then_some(index)
+                    })
+                    .collect();
+                (def_id, parameter_indices)
+            })
         })
         .collect::<HashMap<_, _>>();
     let mut pending = tainted_parameter_indices
@@ -806,20 +861,25 @@ fn report_vec_event_fields<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
     parsed_item_attributes: &[ParsedItemAttributes],
+    tainted_bodies: &HashMap<LocalDefId, HashSet<HirId>>,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
+    let mut candidates = Vec::new();
+    let mut fields_by_variant = HashMap::new();
+
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
         let ItemKind::Enum(_, _, enum_def) = item.kind else {
             continue;
         };
-        if !is_frame_event(
+        let source_linked_event_marker = is_frame_event(
             tcx,
             item.owner_id.def_id,
             item.hir_id(),
             source_map,
             parsed_item_attributes,
-        ) {
+        );
+        if !source_linked_event_marker {
             continue;
         }
 
@@ -827,18 +887,124 @@ fn report_vec_event_fields<'tcx>(
             for field in variant.data.fields() {
                 let field_ty = tcx.type_of(field.def_id).instantiate_identity();
                 if type_contains_unbounded_event_vec(tcx, field_ty) {
-                    let (file, line, column) = span_location(source_map, field.span);
-                    diagnostics.push(RustcDiagnostic {
-                        rule_id: "SEC017",
-                        rule_name: "vec-in-events",
-                        file,
-                        line,
-                        column,
-                        message: "Event field resolves to an unbounded Vec payload".to_string(),
+                    let index = candidates.len();
+                    candidates.push(EventFieldCandidate {
+                        span: field.span,
+                        macro_consumed_event_marker: source_linked_event_marker
+                            && source_has_generate_deposit_attribute(source_map, field.span),
                     });
+                    fields_by_variant
+                        .entry(tcx.parent(field.def_id.to_def_id()))
+                        .or_insert_with(HashMap::new)
+                        .insert(field.ident.name, index);
                 }
             }
         }
+    }
+
+    if candidates.is_empty() {
+        return;
+    }
+
+    let mut emitted_field_indices = HashSet::new();
+    for (def_id, unbounded_bindings) in tainted_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let typeck = tcx.typeck(*def_id);
+        let mut visitor = Sec017Visitor {
+            typeck,
+            fields_by_variant: &fields_by_variant,
+            unbounded_bindings: unbounded_bindings.clone(),
+            emitted_field_indices: &mut emitted_field_indices,
+        };
+        visitor.visit_body(body);
+    }
+
+    for (index, candidate) in candidates.iter().enumerate() {
+        if !candidate.macro_consumed_event_marker && !emitted_field_indices.contains(&index) {
+            continue;
+        }
+        let (file, line, column) = span_location(source_map, candidate.span);
+        diagnostics.push(RustcDiagnostic {
+            rule_id: "SEC017",
+            rule_name: "vec-in-events",
+            file,
+            line,
+            column,
+            message: "Event field resolves to an unbounded Vec payload".to_string(),
+        });
+    }
+}
+
+fn source_has_generate_deposit_attribute(source_map: &SourceMap, span: Span) -> bool {
+    let location = source_map.lookup_char_pos(span.lo());
+    let Ok(source) = std::fs::read_to_string(location.file.name.prefer_local().to_string()) else {
+        return false;
+    };
+    let lines = source.lines().collect::<Vec<_>>();
+    let end = location.line.saturating_sub(1).min(lines.len());
+    let start = end.saturating_sub(8);
+    lines[start..end]
+        .iter()
+        .any(|line| line.contains("#[pallet::generate_deposit"))
+}
+
+struct Sec017Visitor<'a, 'tcx> {
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    fields_by_variant: &'a HashMap<DefId, HashMap<Symbol, usize>>,
+    unbounded_bindings: HashSet<HirId>,
+    emitted_field_indices: &'a mut HashSet<usize>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec017Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Assign(target, value, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                if expr_references_tainted_binding(self.typeck, value, &self.unbounded_bindings) {
+                    self.unbounded_bindings.insert(binding);
+                } else {
+                    self.unbounded_bindings.remove(&binding);
+                }
+            }
+        }
+
+        if let ExprKind::Struct(qpath, fields, _) = expr.kind {
+            let variant = match self.typeck.qpath_res(&qpath, expr.hir_id) {
+                Res::Def(_, def_id) => def_id,
+                _ => return intravisit::walk_expr(self, expr),
+            };
+            if let Some(event_fields) = self.fields_by_variant.get(&variant) {
+                for field in fields {
+                    if let Some(index) = event_fields.get(&field.ident.name) {
+                        if expr_references_tainted_binding(
+                            self.typeck,
+                            field.expr,
+                            &self.unbounded_bindings,
+                        ) {
+                            self.emitted_field_indices.insert(*index);
+                        }
+                    }
+                }
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        let bindings = pattern_binding_ids(local.pat);
+        if local.init.is_some_and(|init| {
+            expr_references_tainted_binding(self.typeck, init, &self.unbounded_bindings)
+        }) {
+            self.unbounded_bindings.extend(bindings);
+        } else {
+            for binding in bindings {
+                self.unbounded_bindings.remove(&binding);
+            }
+        }
+
+        intravisit::walk_local(self, local);
     }
 }
 
@@ -1097,6 +1263,9 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
     if !tcx.local_visibility(def_id).is_public() {
         return;
     }
+    if !is_frame_dispatchable(tcx, def_id, source_map, parsed_weight_attributes) {
+        return;
+    }
 
     let Some(weight_attributes) =
         pallet_weight_attributes(tcx, def_id, source_map, parsed_weight_attributes)
@@ -1339,6 +1508,17 @@ fn is_frame_dispatchable(
             && attribute.file == definition_file
             && attribute.line == definition_line
     }) {
+        return true;
+    }
+    let matching_captured_dispatchables = parsed_weight_attributes
+        .iter()
+        .filter(|attribute| {
+            attribute.has_call_index
+                && attribute.function_name == function_name.as_str()
+                && attribute.file == definition_file
+        })
+        .count();
+    if matching_captured_dispatchables == 1 {
         return true;
     }
 

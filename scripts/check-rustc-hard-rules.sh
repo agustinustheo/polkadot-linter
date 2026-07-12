@@ -117,6 +117,42 @@ impl Encode for EncodedInput {
     WhitespaceSubmitted { payload: Payload },
 }
 
+#[pallet::event] pub enum UnemittedEvent {
+    Unemitted { payload: Payload },
+}
+
+#[pallet::event] pub enum InternalPayloadEvent {
+    InternalPayload { payload: Payload },
+}
+
+#[pallet::event] pub enum HelperPayloadEvent {
+    HelperPayload { payload: Payload },
+}
+
+pub fn emit_event(payload: Payload) {
+    let _ = Event::Submitted { payload };
+}
+
+pub fn emit_whitespace_event(payload: Payload) {
+    let _ = WhitespaceEvent::WhitespaceSubmitted { payload };
+}
+
+fn emit_internal_payload_event(payload: Payload) {
+    let _ = InternalPayloadEvent::InternalPayload { payload };
+}
+
+pub fn emit_internal_payload_event_from_static_value() {
+    emit_internal_payload_event(Vec::new());
+}
+
+fn emit_helper_payload_event(payload: Payload) {
+    let _ = HelperPayloadEvent::HelperPayload { payload };
+}
+
+pub fn emit_helper_payload_event_from_input(payload: Payload) {
+    emit_helper_payload_event(payload);
+}
+
 pub mod unrelated_event {
     pub enum Event {
         Raw(crate::Payload),
@@ -262,8 +298,14 @@ pub fn submit_alias(payload: Payload) {
     helper_vec(Vec::new());
 }
 
+#[pallet :: call_index(8)]
 #[pallet :: weight(WeightInfo::submit_with_whitespace())]
 pub fn whitespace_weight_attribute(payload: Payload) {
+    let _ = payload;
+}
+
+#[pallet::weight(WeightInfo::helper())]
+pub fn weighted_non_dispatchable_helper(payload: Payload) {
     let _ = payload;
 }
 
@@ -1005,11 +1047,15 @@ bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f
 unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
+unemitted_event_field_line="$(grep -n 'Unemitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
+internal_payload_event_field_line="$(grep -n 'InternalPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
+helper_payload_event_field_line="$(grep -n 'HelperPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 raw_string_debug_assert_line="$(grep -n 'pub fn raw_string_debug_assert_text' "$FIXTURE" | cut -d: -f1)"
 comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
 unweighted_after_weighted_line="$(grep -n 'pub fn unweighted_after_weighted' "$FIXTURE" | cut -d: -f1)"
 whitespace_weight_attribute_line="$(grep -n 'pub fn whitespace_weight_attribute' "$FIXTURE" | cut -d: -f1)"
+weighted_non_dispatchable_helper_line="$(grep -n 'pub fn weighted_non_dispatchable_helper' "$FIXTURE" | cut -d: -f1)"
 whitespace_dispatchable_attribute_line="$(grep -n 'pub fn whitespace_dispatchable_attribute' "$FIXTURE" | cut -d: -f1)"
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1019,6 +1065,9 @@ rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dis
 rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_whitespace_storage_count="$(jq --argjson line "$whitespace_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_whitespace_event_count="$(jq --argjson line "$whitespace_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_unemitted_event_count="$(jq --argjson line "$unemitted_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_internal_payload_event_count="$(jq --argjson line "$internal_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_helper_payload_event_count="$(jq --argjson line "$helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec002_raw_string_count="$(jq --argjson line "$raw_string_debug_assert_line" '[.[] | select(.rule_id == "SEC002" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1027,6 +1076,7 @@ rustc_sec018_comment_only_weight_input_count="$(jq --argjson line "$comment_only
 rustc_sec018_weighted_tuple_count="$(jq --argjson line "$weighted_tuple_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_unweighted_after_weighted_count="$(jq --argjson line "$unweighted_after_weighted_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_whitespace_weight_attribute_count="$(jq --argjson line "$whitespace_weight_attribute_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_non_dispatchable_helper_count="$(jq --argjson line "$weighted_non_dispatchable_helper_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 unrelated_event_field_line="$(grep -n 'Raw(crate::Payload)' "$FIXTURE" | cut -d: -f1)"
 rustc_sec017_unrelated_event_count="$(jq --argjson line "$unrelated_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 bounded_storage_iteration_line="$(grep -n 'let bounded_storage_iteration =' "$FIXTURE" | cut -d: -f1)"
@@ -1070,7 +1120,7 @@ echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
-test "$rustc_sec001_count" = "3"
+test "$rustc_sec001_count" = "4"
 test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
@@ -1128,8 +1178,11 @@ test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "2"
 test "$rustc_sec013_whitespace_storage_count" = "1"
 test "$syn_sec017_count" = "0"
-test "$rustc_sec017_count" = "2"
+test "$rustc_sec017_count" = "3"
 test "$rustc_sec017_whitespace_event_count" = "1"
+test "$rustc_sec017_unemitted_event_count" = "0"
+test "$rustc_sec017_internal_payload_event_count" = "0"
+test "$rustc_sec017_helper_payload_event_count" = "1"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "6"
 test "$rustc_sec018_privileged_root_count" = "1"
@@ -1139,8 +1192,9 @@ test "$rustc_sec018_comment_only_weight_input_count" = "1"
 test "$rustc_sec018_weighted_tuple_count" = "0"
 test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
+test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "48"
+test "$rustc_filtered_count" = "50"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "7"
 test "$rustc_rule_filtered_sec008_count" = "4"
