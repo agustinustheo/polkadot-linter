@@ -42,6 +42,13 @@ impl Callbacks for PolkadotCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         tcx: TyCtxt<'tcx>,
     ) -> Compilation {
+        if !crate_matches_source_filters(tcx, &output_file_filters()) {
+            return if self.continue_compilation {
+                Compilation::Continue
+            } else {
+                Compilation::Stop
+            };
+        }
         if self.rule_enabled("SEC013") {
             report_unbounded_storage_aliases(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
@@ -149,6 +156,17 @@ impl Callbacks for PolkadotCallbacks {
             Compilation::Stop
         }
     }
+}
+
+fn crate_matches_source_filters(tcx: TyCtxt<'_>, filters: &[String]) -> bool {
+    if filters.is_empty() {
+        return true;
+    }
+
+    let source_map = tcx.sess.source_map();
+    let location = source_map.lookup_char_pos(tcx.hir_root_module().spans.inner_span.lo());
+    let crate_source = location.file.name.prefer_local().to_string();
+    filters.iter().any(|filter| crate_source.contains(filter))
 }
 
 fn reachable_local_function_bodies(
@@ -1173,11 +1191,8 @@ fn expand_alias_type<'tcx>(
     kind: AliasTyKind,
     alias_ty: rustc_middle::ty::AliasTy<'tcx>,
 ) -> Option<Ty<'tcx>> {
-    matches!(
-        kind,
-        AliasTyKind::Free | AliasTyKind::Opaque | AliasTyKind::Projection
-    )
-    .then(|| tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args))
+    matches!(kind, AliasTyKind::Free | AliasTyKind::Opaque)
+        .then(|| tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args))
 }
 
 fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
