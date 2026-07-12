@@ -100,7 +100,7 @@ impl Encode for EncodedInput {
     }
 }
 
-pub enum Event {
+#[pallet::event] pub enum Event {
     Submitted { payload: Payload },
     Bounded { payload: BoundedPayload },
 }
@@ -158,7 +158,7 @@ impl MigrationState {
     }
 }
 
-#[pallet::weight(WeightInfo::submit_missing())]
+#[pallet::call_index(0)] #[pallet::weight(WeightInfo::submit_missing())]
 pub fn submit_alias(payload: Payload) {
     let _ = payload;
     helper_vec(Vec::new());
@@ -284,6 +284,10 @@ pub fn overloaded(a: Field, b: Field) -> Result<Field, ()> {
 
 pub fn infallible(a: u32, b: u32) -> u32 {
     a + b
+}
+
+pub fn public_helper(payload: Payload) {
+    let _ = payload;
 }
 RS
 

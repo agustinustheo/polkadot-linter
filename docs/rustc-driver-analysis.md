@@ -32,9 +32,11 @@ cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-ru
 The driver currently includes typed checks for:
 
 - `SEC001`: unbounded public inputs. The rustc-backed implementation reads
-  resolved function parameter types and reports public callables whose input
-  resolves to `Vec<T>`, including type aliases that are invisible to the
-  syntax-only rule.
+  resolved function parameter types and reports only FRAME dispatchables whose
+  input resolves to `Vec<T>`, including type aliases that are invisible to the
+  syntax-only rule. FRAME consumes `#[pallet::call_index]`, so dispatchable
+  identity is recovered from the source span associated with the rustc-resolved
+  function; public helper methods are excluded.
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported.
@@ -61,16 +63,24 @@ The driver currently includes typed checks for:
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
   collection.
 - `SEC013`: unbounded storage aliases. The rustc-backed implementation reads
-  `#[pallet::storage]` type aliases through HIR attributes and resolved alias
-  types, so storage values whose payload is hidden behind a `Vec<T>` alias are
-  reported while bounded wrappers are skipped.
+  resolved storage alias types and examines the storage value generic rather
+  than collection-like key generics. FRAME consumes `#[pallet::storage]`, so
+  source-span recovery identifies the storage declaration while rustc provides
+  the resolved owner and value type. Payloads hidden behind a `Vec<T>` alias
+  are reported while bounded wrappers and unbounded keys are skipped.
 - `SEC017`: unbounded event payloads. The rustc-backed implementation visits
-  event-like enums and reads resolved field types, so aliases to `Vec<T>` are
-  reported while bounded wrappers such as `BoundedVec` are skipped.
+  source-linked FRAME event enums and reads resolved field types, so aliases to
+  `Vec<T>` are reported while bounded wrappers such as `BoundedVec` and
+  ordinary enums are skipped. FRAME consumes `#[pallet::event]`, so the event
+  marker is recovered from the enum's compiler source span.
 - `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
-  implementation reads `#[pallet::weight(...)]` attributes plus resolved
-  function parameter types, so aliased `Vec<T>` inputs are reported when the
-  weight expression does not reference the parameter length or encoded size.
+  implementation pairs resolved function parameter types with the nearest
+  source `#[pallet::weight(...)]` annotation. FRAME consumes this custom
+  annotation during macro expansion, so source-span recovery is required while
+  rustc remains the authority for the dispatchable and its input types. Aliased
+  `Vec<T>` inputs are reported when the weight expression does not reference
+  the parameter length or encoded size; deprecated compatibility dispatchables
+  are excluded.
 
 This removes syntax-level false negatives for aliased unbounded inputs and
 aliased recursive decode targets, storage payloads, and event payloads, plus
@@ -204,6 +214,44 @@ finding per affected source line. The rustc-backed summary is checked against
 `benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`, and the public
 CLI run relies on default compiler-backed routing rather than `--no-syntax`.
 
+Run the SDK `SEC018` macro-recovery check with:
+
+```sh
+scripts/check-rustc-sdk-sec018.sh .repos/polkadot-sdk .benchmarks
+```
+
+That script checks `pallet-contracts` through the public CLI with automatic
+manifest discovery. Both the syntax baseline and rustc route report the
+audited `contracts::call` input at line 944, but the compiler-backed result
+uses the resolved `Vec<u8>` parameter and source span attached to the
+macro-expanded dispatchable. It is checked against
+`benchmarks/polkadot-sdk-rustc-contracts-sec018-baseline.tsv`.
+
+Run the SDK `SEC013` storage-value precision check with:
+
+```sh
+scripts/check-rustc-sdk-sec013.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-session` package provides three unbounded stored `Vec`
+values. The syntax path reports an additional false positive because
+`KeyOwner` has a `Vec<u8>` key; the compiler-backed rule resolves the
+`StorageMap` value generic and emits only the three stored values. The output
+is checked against `benchmarks/polkadot-sdk-rustc-session-sec013-baseline.tsv`.
+
+Run the SDK `SEC017` event coverage check with:
+
+```sh
+scripts/check-rustc-sdk-sec017.sh .repos/polkadot-sdk .benchmarks
+```
+
+The syntax path finds no `SEC017` result in `pallet-root-offences`, while the
+compiler-backed rule resolves the FRAME event payload and reports
+`OffenceCreated::offenders` at line 116. The output is checked against
+`benchmarks/polkadot-sdk-rustc-root-offences-sec017-baseline.tsv`.
+
 The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
 the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
-SDK precision baseline after the default stable build.
+SDK precision baseline, and the contracts `SEC018` macro-recovery baseline
+and session `SEC013` storage-value and root-offences `SEC017` event baselines
+after the default stable build.
