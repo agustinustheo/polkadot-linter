@@ -2268,6 +2268,8 @@ fn has_privileged_origin_guard<'tcx>(
         tcx,
         typeck,
         has_privileged_guard: false,
+        inside_try_desugar: false,
+        conditional_depth: 0,
     };
     visitor.visit_body(body);
     visitor.has_privileged_guard
@@ -2277,24 +2279,43 @@ struct PrivilegedOriginVisitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     has_privileged_guard: bool,
+    inside_try_desugar: bool,
+    conditional_depth: usize,
 }
 
 impl<'tcx> Visitor<'tcx> for PrivilegedOriginVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::Call(callee, _) = expr.kind {
-            let def_id = match callee.kind {
-                ExprKind::Path(qpath) => self.typeck.qpath_res(&qpath, callee.hir_id).opt_def_id(),
-                _ => None,
-            };
-            if let Some(def_id) = def_id {
-                let path = self.tcx.def_path_str(def_id);
-                self.has_privileged_guard |= is_frame_system_root_check(&path)
-                    || (is_frame_ensure_origin_check(&path)
-                        && callee_uses_named_privileged_origin(self.tcx, self.typeck, callee));
+        let was_inside_try_desugar = self.inside_try_desugar;
+        let was_conditional_depth = self.conditional_depth;
+        self.inside_try_desugar |= matches!(
+            expr.kind,
+            ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_))
+        );
+        if matches!(expr.kind, ExprKind::If(..) | ExprKind::Loop(..))
+            || matches!(expr.kind, ExprKind::Match(_, _, source) if !matches!(source, rustc_hir::MatchSource::TryDesugar(_)))
+        {
+            self.conditional_depth += 1;
+        }
+        if self.inside_try_desugar && self.conditional_depth == 0 {
+            if let ExprKind::Call(callee, _) = expr.kind {
+                let def_id = match callee.kind {
+                    ExprKind::Path(qpath) => {
+                        self.typeck.qpath_res(&qpath, callee.hir_id).opt_def_id()
+                    }
+                    _ => None,
+                };
+                if let Some(def_id) = def_id {
+                    let path = self.tcx.def_path_str(def_id);
+                    self.has_privileged_guard |= is_frame_system_root_check(&path)
+                        || (is_frame_ensure_origin_check(&path)
+                            && callee_uses_named_privileged_origin(self.tcx, self.typeck, callee));
+                }
             }
         }
 
         intravisit::walk_expr(self, expr);
+        self.inside_try_desugar = was_inside_try_desugar;
+        self.conditional_depth = was_conditional_depth;
     }
 }
 

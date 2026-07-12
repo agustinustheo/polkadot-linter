@@ -646,21 +646,32 @@ pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
 }
 
 #[pallet::call_index(2)] #[pallet::weight(WeightInfo::privileged_root())]
-pub fn privileged_root_vec(origin: Origin, payload: Payload) {
-    let _ = frame_system::ensure_root(origin);
+pub fn privileged_root_vec(origin: Origin, payload: Payload) -> Result<(), ()> {
+    frame_system::ensure_root(origin)?;
     let _ = payload;
+    Ok(())
 }
 
 #[pallet::call_index(3)] #[pallet::weight(WeightInfo::privileged_config())]
-pub fn privileged_config_vec<T: Config>(origin: Origin, payload: Payload) {
-    let _ = T::AdminOrigin::ensure_origin(origin);
+pub fn privileged_config_vec<T: Config>(origin: Origin, payload: Payload) -> Result<(), ()> {
+    T::AdminOrigin::ensure_origin(origin)?;
     let _ = payload;
+    Ok(())
 }
 
 #[pallet::call_index(5)] #[pallet::weight(WeightInfo::unknown_origin())]
 pub fn unknown_config_origin_vec<T: Config>(origin: Origin, payload: Payload) {
     let _ = T::AnyOrigin::ensure_origin(origin);
     let _ = payload;
+}
+
+#[pallet::call_index(10)] #[pallet::weight(WeightInfo::unknown_origin())]
+pub fn conditionally_privileged_vec(origin: Origin, payload: Payload, enforce: bool) -> Result<(), ()> {
+    if enforce {
+        frame_system::ensure_root(origin)?;
+    }
+    let _ = payload;
+    Ok(())
 }
 
 #[pallet::call_index(4)]
@@ -1779,6 +1790,7 @@ rustc_sec003_structural_recursive_count="$(jq --argjson line "$structural_recurs
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
+conditionally_privileged_line="$(grep -n 'pub fn conditionally_privileged_vec' "$FIXTURE" | cut -d: -f1)"
 bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
 literal_bound_input_line="$(grep -n 'pub fn literal_bound_input_vec' "$FIXTURE" | cut -d: -f1)"
 fixed_bound_weight_line="$(grep -n 'pub fn fixed_bound_weight' "$FIXTURE" | cut -d: -f1)"
@@ -1808,6 +1820,7 @@ whitespace_dispatchable_attribute_line="$(grep -n 'pub fn whitespace_dispatchabl
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_conditionally_privileged_count="$(jq --argjson line "$conditionally_privileged_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_literal_bound_input_count="$(jq --argjson line "$literal_bound_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_fixed_bound_weight_count="$(jq --argjson line "$fixed_bound_weight_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1833,6 +1846,7 @@ rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" 
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_comment_only_weight_input_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_ignored_root_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_weighted_tuple_count="$(jq --argjson line "$weighted_tuple_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_unweighted_after_weighted_count="$(jq --argjson line "$unweighted_after_weighted_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_whitespace_weight_attribute_count="$(jq --argjson line "$whitespace_weight_attribute_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1914,10 +1928,11 @@ echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
-test "$rustc_sec001_count" = "6"
+test "$rustc_sec001_count" = "8"
 test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
+test "$rustc_sec001_conditionally_privileged_count" = "1"
 test "$rustc_sec001_bounded_input_count" = "0"
 test "$rustc_sec001_literal_bound_input_count" = "0"
 test "$rustc_sec018_fixed_bound_weight_count" = "0"
@@ -2043,17 +2058,18 @@ test "$rustc_sec017_weight_accounted_payload_event_count" = "0"
 test "$rustc_sec017_weight_accounted_helper_payload_event_count" = "0"
 test "$rustc_sec017_mixed_weight_helper_payload_event_count" = "1"
 test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "6"
+test "$rustc_sec018_count" = "7"
 test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
 test "$rustc_sec018_unknown_config_origin_count" = "1"
 test "$rustc_sec018_comment_only_weight_input_count" = "1"
+test "$rustc_sec001_ignored_root_count" = "1"
 test "$rustc_sec018_weighted_tuple_count" = "0"
 test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "79"
+test "$rustc_filtered_count" = "82"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"
