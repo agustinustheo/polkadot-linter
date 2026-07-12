@@ -156,6 +156,8 @@ driver:
 
 - for `SEC001`, the syntax path misses an aliased `Vec` dispatchable parameter,
   while the rustc-driver path resolves the alias and reports it
+  and identifies `#[pallet::call_index]` from rustc's pre-expansion AST rather
+  than requiring a source-prefix match
 - for `SEC002`, the syntax path reports both cfg-disabled and active
   `debug_assert!` calls, while the rustc-driver path reports only the expanded
   active assertion
@@ -165,7 +167,9 @@ driver:
   and a truly fallible `expect`, while the rustc-driver path reports only the
   reachable fallible path
 - for `SEC009`, the syntax path reports both integer arithmetic and overloaded
-  `Add`, while the rustc-driver path reports only integer arithmetic
+  `Add`, while the rustc-driver path reports only integer arithmetic. It also
+  proves subtraction and division safe in a conjunctive branch when one
+  conjunct establishes the required bound or nonzero divisor.
 - for `SEC011`, the syntax path reports an ordinary `Domain::iter()` call in a
   dispatchable-shaped body, while the rustc-driver path resolves owner types and
   reports only `StorageMap::iter()`
@@ -180,7 +184,10 @@ driver:
   skipping a `BoundedVec` event payload
 - for `SEC018`, the syntax path misses a weight annotation whose unaccounted
   parameter is hidden behind a `Payload` alias, while the rustc-driver path
-  resolves the alias and reports it while skipping bounded inputs
+  resolves the alias and reports it while skipping bounded inputs. The fixture
+  also uses `#[pallet :: weight(...)]`: its path is captured from rustc's
+  pre-expansion AST, so it is detected even though the source-text fallback's
+  `#[pallet::weight` prefix cannot match it.
 
 The stable `polkadot-linter` CLI now treats the migrated SEC rules as
 compiler-backed by default when scan paths resolve to one Cargo project. It
@@ -278,8 +285,10 @@ scripts/check-rustc-sdk-sec018.sh .repos/polkadot-sdk .benchmarks
 That script checks `pallet-contracts` through the public CLI with automatic
 manifest discovery. Both the syntax baseline and rustc route report the
 audited `contracts::call` input at line 944, but the compiler-backed result
-uses the resolved `Vec<u8>` parameter and source span attached to the
-macro-expanded dispatchable. It is checked against
+uses the resolved `Vec<u8>` parameter and pairs it with the
+`#[pallet::weight]` attribute captured before FRAME macro expansion. Source
+recovery remains a compatibility fallback for declarations not exposed by the
+crate-root parsing callback. It is checked against
 `benchmarks/polkadot-sdk-rustc-contracts-sec018-baseline.tsv`.
 
 Run the SDK `SEC013` storage-value precision check with:

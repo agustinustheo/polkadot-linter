@@ -113,6 +113,10 @@ impl Encode for EncodedInput {
     Bounded { payload: BoundedPayload },
 }
 
+#[pallet :: event] pub enum WhitespaceEvent {
+    WhitespaceSubmitted { payload: Payload },
+}
+
 pub mod unrelated_event {
     pub enum Event {
         Raw(crate::Payload),
@@ -210,6 +214,9 @@ pub type AliasedStorage = frame_support::storage::types::StorageValue<(), Payloa
 #[pallet::storage]
 pub type BoundedStorage = frame_support::storage::types::StorageValue<(), BoundedPayload>;
 
+#[pallet :: storage]
+pub type WhitespaceStorage = frame_support::storage::types::StorageValue<(), Payload>;
+
 pub type UnrelatedStorage = frame_support::storage::types::StorageValue<(), Payload>;
 
 pub struct Domain;
@@ -253,6 +260,17 @@ impl RecursivePayload {
 pub fn submit_alias(payload: Payload) {
     let _ = payload;
     helper_vec(Vec::new());
+}
+
+#[pallet :: weight(WeightInfo::submit_with_whitespace())]
+pub fn whitespace_weight_attribute(payload: Payload) {
+    let _ = payload;
+}
+
+#[pallet :: call_index(7)]
+#[pallet :: weight(WeightInfo::submit_with_whitespace(payload.len() as u32))]
+pub fn whitespace_dispatchable_attribute(payload: Payload) {
+    let _ = payload;
 }
 
 #[pallet::call_index(6)] #[pallet::weight(WeightInfo::submit_bounded(payload.len() as u32))]
@@ -744,6 +762,13 @@ pub fn guarded_subtraction(a: u32, b: u32) -> Result<u32, ()> {
     Err(())
 }
 
+pub fn conjunction_guarded_subtraction(a: u32, b: u32, enabled: bool) -> Result<u32, ()> {
+    if a >= b && enabled {
+        return Ok(a - b);
+    }
+    Err(())
+}
+
 pub fn guarded_subtraction_with_ensure(a: u32, b: u32) -> Result<u32, ()> {
     ensure!(a >= b, ());
     Ok(a - b)
@@ -762,6 +787,13 @@ pub fn raw_division(a: u32, b: u32) -> Result<u32, ()> {
 
 pub fn guarded_division(a: u32, b: u32) -> Result<u32, ()> {
     if b != 0 {
+        return Ok(a / b);
+    }
+    Err(())
+}
+
+pub fn conjunction_guarded_division(a: u32, b: u32, enabled: bool) -> Result<u32, ()> {
+    if b != 0 && enabled {
         return Ok(a / b);
     }
     Err(())
@@ -908,8 +940,10 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
-guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | cut -d: -f1)"
+guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
 rustc_sec009_guarded_subtraction_count="$(jq --argjson line "$guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+conjunction_guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
+rustc_sec009_conjunction_guarded_subtraction_count="$(jq --argjson line "$conjunction_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 ensure_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
 rustc_sec009_ensure_guarded_subtraction_count="$(jq --argjson line "$ensure_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 early_return_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
@@ -918,6 +952,8 @@ raw_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | head -n1 | cut -d: -f1)"
 rustc_sec009_raw_division_count="$(jq --argjson line "$raw_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
 rustc_sec009_guarded_division_count="$(jq --argjson line "$guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+conjunction_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
+rustc_sec009_conjunction_guarded_division_count="$(jq --argjson line "$conjunction_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 ensure_guarded_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec009_ensure_guarded_division_count="$(jq --argjson line "$ensure_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 positive_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
@@ -967,15 +1003,22 @@ privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cu
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
 bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
 unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
+whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
+whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 raw_string_debug_assert_line="$(grep -n 'pub fn raw_string_debug_assert_text' "$FIXTURE" | cut -d: -f1)"
 comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
 unweighted_after_weighted_line="$(grep -n 'pub fn unweighted_after_weighted' "$FIXTURE" | cut -d: -f1)"
+whitespace_weight_attribute_line="$(grep -n 'pub fn whitespace_weight_attribute' "$FIXTURE" | cut -d: -f1)"
+whitespace_dispatchable_attribute_line="$(grep -n 'pub fn whitespace_dispatchable_attribute' "$FIXTURE" | cut -d: -f1)"
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dispatchable_attribute_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec013_whitespace_storage_count="$(jq --argjson line "$whitespace_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_whitespace_event_count="$(jq --argjson line "$whitespace_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec002_raw_string_count="$(jq --argjson line "$raw_string_debug_assert_line" '[.[] | select(.rule_id == "SEC002" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -983,6 +1026,7 @@ rustc_sec018_unknown_config_origin_count="$(jq --argjson line "$unknown_config_o
 rustc_sec018_comment_only_weight_input_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_weighted_tuple_count="$(jq --argjson line "$weighted_tuple_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_unweighted_after_weighted_count="$(jq --argjson line "$unweighted_after_weighted_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_whitespace_weight_attribute_count="$(jq --argjson line "$whitespace_weight_attribute_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 unrelated_event_field_line="$(grep -n 'Raw(crate::Payload)' "$FIXTURE" | cut -d: -f1)"
 rustc_sec017_unrelated_event_count="$(jq --argjson line "$unrelated_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 bounded_storage_iteration_line="$(grep -n 'let bounded_storage_iteration =' "$FIXTURE" | cut -d: -f1)"
@@ -1026,11 +1070,12 @@ echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
-test "$rustc_sec001_count" = "2"
+test "$rustc_sec001_count" = "3"
 test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
 test "$rustc_sec001_bounded_input_count" = "0"
+test "$rustc_sec001_whitespace_dispatchable_count" = "1"
 test "$rustc_sec013_unrelated_storage_count" = "0"
 test "$rustc_sec002_raw_string_count" = "0"
 test "$syn_sec002_count" = "4"
@@ -1057,13 +1102,15 @@ test "$rustc_sec008_ok_let_expect_count" = "0"
 test "$rustc_sec008_some_let_else_unwrap_count" = "0"
 test "$rustc_sec008_ok_let_else_expect_count" = "0"
 test "$rustc_sec008_guarded_overwrite_unwrap_count" = "1"
-test "$syn_sec009_count" = "5"
+test "$syn_sec009_count" = "6"
 test "$rustc_sec009_count" = "3"
 test "$rustc_sec009_guarded_subtraction_count" = "0"
+test "$rustc_sec009_conjunction_guarded_subtraction_count" = "0"
 test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
 test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
 test "$rustc_sec009_raw_division_count" = "1"
 test "$rustc_sec009_guarded_division_count" = "0"
+test "$rustc_sec009_conjunction_guarded_division_count" = "0"
 test "$rustc_sec009_ensure_guarded_division_count" = "0"
 test "$rustc_sec009_positive_guarded_division_count" = "0"
 test "$rustc_sec009_nonzero_division_count" = "0"
@@ -1078,19 +1125,22 @@ test "$rustc_sec012_count" = "4"
 test "$rustc_sec012_local_unbounded_count" = "1"
 test "$rustc_sec012_overwritten_bounded_count" = "0"
 test "$syn_sec013_count" = "0"
-test "$rustc_sec013_count" = "1"
+test "$rustc_sec013_count" = "2"
+test "$rustc_sec013_whitespace_storage_count" = "1"
 test "$syn_sec017_count" = "0"
-test "$rustc_sec017_count" = "1"
+test "$rustc_sec017_count" = "2"
+test "$rustc_sec017_whitespace_event_count" = "1"
 test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "5"
+test "$rustc_sec018_count" = "6"
 test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
 test "$rustc_sec018_unknown_config_origin_count" = "1"
 test "$rustc_sec018_comment_only_weight_input_count" = "1"
 test "$rustc_sec018_weighted_tuple_count" = "0"
 test "$rustc_sec018_unweighted_after_weighted_count" = "0"
+test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "44"
+test "$rustc_filtered_count" = "48"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "7"
 test "$rustc_rule_filtered_sec008_count" = "4"
