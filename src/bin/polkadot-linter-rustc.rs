@@ -131,6 +131,12 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("SEC006") {
+            report_unchecked_repatriate_reserved(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
+        if self.rule_enabled("SEC007") {
+            report_discarded_results(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
         let sec017_tainted_bodies = self
             .rule_enabled("SEC017")
             .then(|| {
@@ -326,14 +332,20 @@ fn reachable_local_function_bodies(
 fn tainted_reachable_function_bodies<'tcx>(
     tcx: TyCtxt<'tcx>,
 ) -> HashMap<LocalDefId, HashSet<HirId>> {
-    tainted_reachable_function_bodies_with_input_filter(tcx, false, None)
+    tainted_reachable_function_bodies_with_input_filter(tcx, false, None).unbounded_bindings
+}
+
+#[derive(Default)]
+struct TaintedBodyEvidence {
+    unbounded_bindings: HashMap<LocalDefId, HashSet<HirId>>,
+    weight_accounted_bindings: HashMap<LocalDefId, HashSet<HirId>>,
 }
 
 fn unbounded_tainted_reachable_function_bodies<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
     parsed_weight_attributes: &[ParsedWeightAttribute],
-) -> HashMap<LocalDefId, HashSet<HirId>> {
+) -> TaintedBodyEvidence {
     tainted_reachable_function_bodies_with_input_filter(
         tcx,
         true,
@@ -345,7 +357,7 @@ fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
     tcx: TyCtxt<'tcx>,
     unbounded_inputs_only: bool,
     parsed_dispatchables: Option<(&SourceMap, &[ParsedWeightAttribute])>,
-) -> HashMap<LocalDefId, HashSet<HirId>> {
+) -> TaintedBodyEvidence {
     let mut tainted_parameter_indices = tcx
         .hir_body_owners()
         .filter(|def_id| {
@@ -380,6 +392,25 @@ fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
         .keys()
         .copied()
         .collect::<Vec<_>>();
+    let mut unaccounted_parameter_indices = tainted_parameter_indices
+        .iter()
+        .map(|(def_id, parameter_indices)| {
+            let accounted_indices = parsed_dispatchables
+                .map(|(source_map, attributes)| {
+                    weight_accounted_dispatchable_parameter_indices(
+                        tcx, *def_id, source_map, attributes,
+                    )
+                })
+                .unwrap_or_default();
+            (
+                *def_id,
+                parameter_indices
+                    .difference(&accounted_indices)
+                    .copied()
+                    .collect::<HashSet<_>>(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
 
     while let Some(def_id) = pending.pop() {
         let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
@@ -393,10 +424,22 @@ fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
             .filter_map(|index| body.params.get(*index))
             .flat_map(|param| pattern_binding_ids(param.pat))
             .collect::<HashSet<_>>();
+        let weight_accounted_bindings = parameter_indices
+            .iter()
+            .filter(|index| {
+                !unaccounted_parameter_indices
+                    .get(&def_id)
+                    .is_some_and(|unaccounted| unaccounted.contains(index))
+            })
+            .filter_map(|index| body.params.get(*index))
+            .flat_map(|param| pattern_binding_ids(param.pat))
+            .collect::<HashSet<_>>();
         let mut visitor = TaintedLocalCallVisitor {
             typeck: tcx.typeck(def_id),
             tainted_bindings,
+            weight_accounted_bindings,
             tainted_callee_parameters: Vec::new(),
+            unaccounted_callee_parameters: Vec::new(),
             function_bindings: HashMap::new(),
         };
         visitor.visit_body(body);
@@ -416,21 +459,49 @@ fn tainted_reachable_function_bodies_with_input_filter<'tcx>(
                 pending.push(callee);
             }
         }
+        for (callee, parameter_index) in visitor.unaccounted_callee_parameters {
+            if unaccounted_parameter_indices
+                .entry(callee)
+                .or_default()
+                .insert(parameter_index)
+            {
+                pending.push(callee);
+            }
+        }
     }
 
-    tainted_parameter_indices
-        .into_iter()
-        .filter_map(|(def_id, parameter_indices)| {
-            tcx.hir_maybe_body_owned_by(def_id).map(|body| {
-                let tainted_bindings = parameter_indices
-                    .iter()
-                    .filter_map(|index| body.params.get(*index))
-                    .flat_map(|param| pattern_binding_ids(param.pat))
-                    .collect();
-                (def_id, tainted_bindings)
-            })
-        })
-        .collect()
+    let mut unbounded_bindings = HashMap::new();
+    let mut weight_accounted_bindings = HashMap::new();
+    for (def_id, parameter_indices) in tainted_parameter_indices {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let unaccounted_indices = unaccounted_parameter_indices
+            .get(&def_id)
+            .cloned()
+            .unwrap_or_default();
+        unbounded_bindings.insert(
+            def_id,
+            parameter_indices
+                .iter()
+                .filter_map(|index| body.params.get(*index))
+                .flat_map(|param| pattern_binding_ids(param.pat))
+                .collect(),
+        );
+        weight_accounted_bindings.insert(
+            def_id,
+            parameter_indices
+                .iter()
+                .filter(|index| !unaccounted_indices.contains(index))
+                .filter_map(|index| body.params.get(*index))
+                .flat_map(|param| pattern_binding_ids(param.pat))
+                .collect(),
+        );
+    }
+    TaintedBodyEvidence {
+        unbounded_bindings,
+        weight_accounted_bindings,
+    }
 }
 
 fn report_reachable_debug_assertions<'tcx>(
@@ -884,6 +955,199 @@ fn is_frame_storage_layer_call<'tcx>(
     }))
 }
 
+fn report_unchecked_repatriate_reserved<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in tcx.hir_body_owners() {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec006Visitor {
+            tcx,
+            typeck: tcx.typeck(def_id),
+            unchecked_results: HashMap::new(),
+            diagnostics,
+        };
+        visitor.visit_body(body);
+        for span in visitor.unchecked_results.into_values() {
+            let (file, line, column) = span_location(source_map, span);
+            visitor.diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC006",
+                rule_name: "unchecked-repatriate-reserved",
+                file,
+                line,
+                column,
+                message: "Resolved repatriate_reserved remaining balance is never checked"
+                    .to_string(),
+            });
+        }
+    }
+}
+
+fn report_discarded_results<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec007Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+struct Sec006Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    unchecked_results: HashMap<HirId, Span>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec006Visitor<'_, 'tcx> {
+    fn visit_stmt(&mut self, stmt: &'tcx rustc_hir::Stmt<'tcx>) {
+        if matches!(stmt.kind, StmtKind::Semi(expr) | StmtKind::Expr(expr) if is_repatriate_reserved_call(self.tcx, self.typeck, expr))
+        {
+            let (file, line, column) = span_location(self.tcx.sess.source_map(), stmt.span);
+            self.diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC006",
+                rule_name: "unchecked-repatriate-reserved",
+                file,
+                line,
+                column,
+                message: "Resolved repatriate_reserved return value is discarded".to_string(),
+            });
+        }
+        intravisit::walk_stmt(self, stmt);
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local
+            .init
+            .is_some_and(|init| is_repatriate_reserved_call(self.tcx, self.typeck, init))
+        {
+            let bindings = pattern_binding_ids(local.pat);
+            if bindings.is_empty() {
+                let (file, line, column) = span_location(self.tcx.sess.source_map(), local.span);
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC006",
+                    rule_name: "unchecked-repatriate-reserved",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved repatriate_reserved return value is discarded".to_string(),
+                });
+            } else {
+                self.unchecked_results
+                    .extend(bindings.into_iter().map(|binding| (binding, local.span)));
+            }
+        }
+        intravisit::walk_local(self, local);
+    }
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
+            if matches!(
+                segment.ident.name.as_str(),
+                "is_zero" | "saturating_sub" | "defensive_saturating_sub" | "checked_sub"
+            ) {
+                self.mark_checked(receiver);
+                for arg in args {
+                    self.mark_checked(arg);
+                }
+            }
+        }
+        if let ExprKind::Binary(_, lhs, rhs) = expr.kind {
+            self.mark_checked(lhs);
+            self.mark_checked(rhs);
+        }
+        if matches!(expr.kind, ExprKind::Closure(_)) {
+            return;
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl Sec006Visitor<'_, '_> {
+    fn mark_checked(&mut self, expr: &Expr<'_>) {
+        if let Some(binding) = local_binding_id(self.typeck, expr) {
+            self.unchecked_results.remove(&binding);
+        }
+    }
+}
+
+struct Sec007Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec007Visitor<'_, 'tcx> {
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if matches!(local.pat.kind, PatKind::Wild)
+            && local.init.is_some_and(|init| {
+                result_error_type(self.tcx, self.typeck.expr_ty(init))
+                    .is_some_and(|error_ty| !type_is_unit(self.tcx, error_ty))
+            })
+        {
+            let (file, line, column) = span_location(self.source_map, local.span);
+            if self.reported_lines.insert((file.clone(), line)) {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC007",
+                    rule_name: "let-underscore-result",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved Result value is discarded without handling its error"
+                        .to_string(),
+                });
+            }
+        }
+        intravisit::walk_local(self, local);
+    }
+}
+
+fn is_repatriate_reserved_call(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    let expr = strip_drop_temps(expr);
+    let callee = match expr.kind {
+        ExprKind::Call(callee, _) => callee,
+        ExprKind::Match(scrutinee, _, rustc_hir::MatchSource::TryDesugar(_)) => {
+            return is_repatriate_reserved_call(tcx, typeck, scrutinee);
+        }
+        _ => return false,
+    };
+    let ExprKind::Path(qpath) = callee.kind else {
+        return false;
+    };
+    let def_id = typeck
+        .type_dependent_def_id(callee.hir_id)
+        .or_else(|| typeck.qpath_res(&qpath, callee.hir_id).opt_def_id());
+    def_id.is_some_and(|def_id| {
+        let path = tcx.def_path_str(def_id);
+        is_frame_support_path(&path) && path.ends_with("::repatriate_reserved")
+    })
+}
+
 impl PolkadotCallbacks {
     fn rule_enabled(&self, rule_id: &str) -> bool {
         self.enabled_rules.is_empty()
@@ -1015,7 +1279,7 @@ fn report_vec_event_fields<'tcx>(
     source_map: &SourceMap,
     parsed_item_attributes: &[ParsedItemAttributes],
     parsed_weight_attributes: &[ParsedWeightAttribute],
-    tainted_bodies: &HashMap<LocalDefId, HashSet<HirId>>,
+    tainted_bodies: &TaintedBodyEvidence,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     let mut candidates = Vec::new();
@@ -1061,7 +1325,7 @@ fn report_vec_event_fields<'tcx>(
     }
 
     let mut emitted_field_indices = HashSet::new();
-    for (def_id, unbounded_bindings) in tainted_bodies {
+    for (def_id, unbounded_bindings) in &tainted_bodies.unbounded_bindings {
         let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
             continue;
         };
@@ -1070,12 +1334,18 @@ fn report_vec_event_fields<'tcx>(
             typeck,
             fields_by_variant: &fields_by_variant,
             unbounded_bindings: unbounded_bindings.clone(),
-            weight_accounted_bindings: weight_accounted_dispatchable_bindings(
-                tcx,
-                *def_id,
-                source_map,
-                parsed_weight_attributes,
-            ),
+            weight_accounted_bindings: tainted_bodies
+                .weight_accounted_bindings
+                .get(def_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    weight_accounted_dispatchable_bindings(
+                        tcx,
+                        *def_id,
+                        source_map,
+                        parsed_weight_attributes,
+                    )
+                }),
             emitted_field_indices: &mut emitted_field_indices,
         };
         visitor.visit_body(body);
@@ -1121,6 +1391,31 @@ fn weight_accounted_dispatchable_bindings(
             })
         })
         .flatten()
+        .collect()
+}
+
+fn weight_accounted_dispatchable_parameter_indices(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+) -> HashSet<usize> {
+    if !is_frame_dispatchable(tcx, def_id, source_map, parsed_weight_attributes) {
+        return HashSet::new();
+    }
+    let Some(weight_attributes) =
+        pallet_weight_attributes(tcx, def_id, source_map, parsed_weight_attributes)
+    else {
+        return HashSet::new();
+    };
+    tcx.hir_maybe_body_owned_by(def_id)
+        .into_iter()
+        .flat_map(|body| {
+            body.params.iter().enumerate().filter_map(|(index, param)| {
+                let name = body_param_name(param)?;
+                weight_accounts_for_param(&weight_attributes.expression, &name).then_some(index)
+            })
+        })
         .collect()
 }
 
@@ -2375,7 +2670,9 @@ fn direct_local_callee(
 struct TaintedLocalCallVisitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     tainted_bindings: HashSet<HirId>,
+    weight_accounted_bindings: HashSet<HirId>,
     tainted_callee_parameters: Vec<(LocalDefId, usize)>,
+    unaccounted_callee_parameters: Vec<(LocalDefId, usize)>,
     function_bindings: HashMap<HirId, HashSet<LocalDefId>>,
 }
 
@@ -2440,6 +2737,15 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
                     } else {
                         self.tainted_bindings.remove(&binding);
                     }
+                    if expr_references_tainted_binding(
+                        self.typeck,
+                        value,
+                        &self.weight_accounted_bindings,
+                    ) {
+                        self.weight_accounted_bindings.insert(binding);
+                    } else {
+                        self.weight_accounted_bindings.remove(&binding);
+                    }
                 }
             }
             ExprKind::Call(callee, args) => {
@@ -2479,6 +2785,12 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
         }) {
             self.tainted_bindings.extend(pattern_binding_ids(local.pat));
         }
+        if local.init.is_some_and(|init| {
+            expr_references_tainted_binding(self.typeck, init, &self.weight_accounted_bindings)
+        }) {
+            self.weight_accounted_bindings
+                .extend(pattern_binding_ids(local.pat));
+        }
 
         intravisit::walk_local(self, local);
     }
@@ -2511,10 +2823,21 @@ impl TaintedLocalCallVisitor<'_, '_> {
         let Some(local_def_id) = local_def_id else {
             return;
         };
+        let args = args.collect::<Vec<_>>();
         self.tainted_callee_parameters
-            .extend(args.enumerate().filter_map(|(index, arg)| {
+            .extend(args.iter().enumerate().filter_map(|(index, arg)| {
                 expr_references_tainted_binding(self.typeck, arg, &self.tainted_bindings)
                     .then_some((local_def_id, index))
+            }));
+        self.unaccounted_callee_parameters
+            .extend(args.iter().enumerate().filter_map(|(index, arg)| {
+                (expr_references_tainted_binding(self.typeck, arg, &self.tainted_bindings)
+                    && !expr_references_tainted_binding(
+                        self.typeck,
+                        arg,
+                        &self.weight_accounted_bindings,
+                    ))
+                .then_some((local_def_id, index))
             }));
     }
 }
@@ -3336,6 +3659,31 @@ fn type_is_option_or_result(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
         || type_path.ends_with("::Result")
         || type_path.contains("option::Option")
         || type_path.contains("result::Result")
+}
+
+fn result_error_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(adt, args) = ty.kind() else {
+        return None;
+    };
+    let type_path = tcx.def_path_str(adt.did());
+    if !(type_path.ends_with("::Result") || type_path.contains("result::Result")) {
+        return None;
+    }
+    args.iter()
+        .filter_map(|arg| match arg.kind() {
+            GenericArgKind::Type(arg_ty) => Some(arg_ty),
+            _ => None,
+        })
+        .nth(1)
+}
+
+fn type_is_unit<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Tuple(values) => values.is_empty(),
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_unit(tcx, expanded)),
+        _ => false,
+    }
 }
 
 fn pattern_binding_ids(pattern: &Pat<'_>) -> Vec<HirId> {
