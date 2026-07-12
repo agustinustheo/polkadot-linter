@@ -539,6 +539,7 @@ fn report_reachable_storage_iteration<'tcx>(
             tcx,
             typeck: tcx.typeck(*def_id),
             diagnostics,
+            statically_bounded_bindings: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -673,13 +674,7 @@ fn report_vec_event_fields<'tcx>(
         let ItemKind::Enum(_, _, enum_def) = item.kind else {
             continue;
         };
-        if !is_frame_event(
-            tcx,
-            item.owner_id.def_id,
-            item.hir_id(),
-            item.span,
-            source_map,
-        ) {
+        if !is_frame_event(tcx, item.owner_id.def_id, item.hir_id(), source_map) {
             continue;
         }
 
@@ -706,24 +701,20 @@ fn is_frame_event(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
     hir_id: rustc_hir::HirId,
-    span: Span,
     source_map: &SourceMap,
 ) -> bool {
     if has_hir_attr(tcx, hir_id, &["pallet", "event"]) {
         return true;
     }
 
-    let location = source_map.lookup_char_pos(span.source_callsite().lo());
-    let source_path = location.file.name.prefer_local().to_string();
-    let Ok(source) = std::fs::read_to_string(source_path) else {
+    let Some(prefix) = source_prefix_before_definition(tcx, def_id, source_map) else {
         return false;
     };
-    let lines = source.lines().collect::<Vec<_>>();
-    let definition_line = location.line.saturating_sub(1).min(lines.len());
-    let start_line = definition_line.saturating_sub(64);
-    let context = lines[start_line..=definition_line].join("\n");
+    let Some(event_start) = prefix.rfind("#[pallet::event]") else {
+        return false;
+    };
 
-    context.contains("#[pallet::event]")
+    attribute_block_belongs_to_definition(&prefix[event_start..])
         && tcx.def_path_str(def_id.to_def_id()).ends_with("::Event")
 }
 
@@ -983,6 +974,9 @@ fn pallet_weight_attributes(
     let prefix = source_prefix_before_definition(tcx, def_id, source_map)?;
     let start = prefix.rfind("#[pallet::weight")?;
     let attribute_block = &prefix[start..];
+    if !attribute_block_belongs_to_definition(attribute_block) {
+        return None;
+    }
     let attribute = balanced_attribute(attribute_block)?;
 
     let attributes = syn::Attribute::parse_outer.parse_str(attribute).ok()?;
@@ -993,6 +987,23 @@ fn pallet_weight_attributes(
         expression: weight_attribute.parse_args().ok()?,
         deprecated: attribute_block.contains("#[deprecated"),
     })
+}
+
+fn attribute_block_belongs_to_definition(attribute_block: &str) -> bool {
+    !attribute_block
+        .lines()
+        .skip(1)
+        .map(str::trim_start)
+        .any(starts_rust_item)
+}
+
+fn starts_rust_item(line: &str) -> bool {
+    let line = line.strip_prefix("pub ").unwrap_or(line);
+    [
+        "fn ", "impl ", "struct ", "enum ", "trait ", "type ", "mod ",
+    ]
+    .iter()
+    .any(|item| line.starts_with(item))
 }
 
 fn syn_path_matches(path: &syn::Path, expected: &[&str]) -> bool {
@@ -1011,7 +1022,8 @@ fn is_frame_dispatchable(tcx: TyCtxt<'_>, def_id: LocalDefId, source_map: &Sourc
     };
     let attribute_block = &prefix[call_index_start..];
 
-    attribute_block.contains("#[pallet::weight") && !attribute_block.contains("\npub fn ")
+    attribute_block.contains("#[pallet::weight")
+        && attribute_block_belongs_to_definition(attribute_block)
 }
 
 fn source_prefix_before_definition(
@@ -1260,6 +1272,26 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
             return;
         }
 
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            let known_binding = local_binding_id(self.typeck, scrutinee)
+                .filter(|_| type_is_option_or_result(self.tcx, self.typeck.expr_ty(scrutinee)));
+            for arm in arms {
+                if let Some(binding) =
+                    known_binding.filter(|_| pattern_is_unwrappable_success(arm.pat))
+                {
+                    let newly_known = self.known_unwrappable_bindings.insert(binding);
+                    self.visit_arm(arm);
+                    if newly_known {
+                        self.known_unwrappable_bindings.remove(&binding);
+                    }
+                } else {
+                    self.visit_arm(arm);
+                }
+            }
+            return;
+        }
+
         if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
                 if expression_constructs_known_unwrappable(self.tcx, self.typeck, value) {
@@ -1310,6 +1342,21 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
         }
 
         intravisit::walk_local(self, local);
+    }
+}
+
+fn pattern_is_unwrappable_success(pattern: &Pat<'_>) -> bool {
+    match pattern.kind {
+        PatKind::TupleStruct(qpath, _, _) => {
+            matches!(
+                qpath_last_segment(qpath).map(|segment| segment.ident.name.as_str()),
+                Some("Some" | "Ok")
+            )
+        }
+        PatKind::Or(patterns) => patterns
+            .iter()
+            .all(|pattern| pattern_is_unwrappable_success(pattern)),
+        _ => false,
     }
 }
 
@@ -1615,15 +1662,15 @@ fn nonzero_guard_binding(
     let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
         return None;
     };
-    if operator.node != BinOpKind::Ne {
-        return None;
+    match operator.node {
+        BinOpKind::Ne if zero_integer_literal(rhs) => local_binding_id(typeck, lhs),
+        BinOpKind::Ne if zero_integer_literal(lhs) => local_binding_id(typeck, rhs),
+        BinOpKind::Gt if zero_integer_literal(rhs) => local_binding_id(typeck, lhs),
+        BinOpKind::Lt if zero_integer_literal(lhs) => local_binding_id(typeck, rhs),
+        BinOpKind::Ge if positive_integer_literal(rhs) => local_binding_id(typeck, lhs),
+        BinOpKind::Le if positive_integer_literal(lhs) => local_binding_id(typeck, rhs),
+        _ => None,
     }
-    if zero_integer_literal(rhs) {
-        return local_binding_id(typeck, lhs);
-    }
-    zero_integer_literal(lhs)
-        .then(|| local_binding_id(typeck, rhs))
-        .flatten()
 }
 
 fn non_underflow_guard_pair(
@@ -1776,6 +1823,13 @@ fn zero_integer_literal(expr: &Expr<'_>) -> bool {
     )
 }
 
+fn positive_integer_literal(expr: &Expr<'_>) -> bool {
+    matches!(
+        strip_drop_temps(expr).kind,
+        ExprKind::Lit(literal) if matches!(literal.node, rustc_ast::LitKind::Int(value, _) if value.get() > 0)
+    )
+}
+
 fn span_line_starts_with_attribute(source_map: &SourceMap, span: Span) -> bool {
     let location = source_map.lookup_char_pos(span.lo());
     location
@@ -1789,14 +1843,34 @@ struct Sec011Visitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
+    statically_bounded_bindings: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(is_literal_iteration_limit) {
+            self.statically_bounded_bindings
+                .extend(pattern_binding_ids(local.pat));
+        }
+
+        intravisit::walk_local(self, local);
+    }
+
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Assign(target, _, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                self.statically_bounded_bindings.remove(&binding);
+            }
+        }
+
         if let ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
             if segment.ident.name.as_str() == "take"
                 && args.len() == 1
-                && is_literal_iteration_limit(&args[0])
+                && is_statically_bounded_iteration_limit(
+                    self.typeck,
+                    &args[0],
+                    &self.statically_bounded_bindings,
+                )
                 && is_frame_storage_iteration_call(self.tcx, self.typeck, receiver)
             {
                 self.visit_expr(&args[0]);
@@ -1818,6 +1892,16 @@ impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn is_statically_bounded_iteration_limit(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    statically_bounded_bindings: &HashSet<HirId>,
+) -> bool {
+    is_literal_iteration_limit(expr)
+        || local_binding_id(typeck, expr)
+            .is_some_and(|binding| statically_bounded_bindings.contains(&binding))
 }
 
 fn is_frame_storage_iteration_call<'tcx>(

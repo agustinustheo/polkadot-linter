@@ -70,7 +70,8 @@ The driver currently includes typed checks for:
   where the error path is statically uninhabited. It also tracks local values
   constructed as `Ok`/`Some`, proven present by a terminating
   `is_none`/`is_err` guard (including expanded `ensure!(value.is_some(), ...)`),
-  or used in an `is_some`/`is_ok` success branch. It clears local-construction
+  used in an `is_some`/`is_ok` success branch, or used in a matching
+  `Some`/`Ok` arm. It clears local-construction
   proof if the local is overwritten. It analyzes
   public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
@@ -81,8 +82,8 @@ The driver currently includes typed checks for:
   a function reachable from a public or hook `Result` entry point, including
   direct local helper calls. It recognizes non-underflow subtraction inside a
   resolved `if a >= b` or `if b <= a` branch and after an early-return guard
-  such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero
-  divisor guards for `/` and `%`. Indirect calls and broader path-sensitive
+  such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero or
+  positive divisor guards for `/` and `%`. Indirect calls and broader path-sensitive
   control flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
@@ -94,8 +95,8 @@ The driver currently includes typed checks for:
   aliases, it falls back to the resolved associated-method owner path without
   forcing projection expansion, accepting the canonical `frame_support` crate
   path, the SDK's `frame` crate alias, and its `polkadot_sdk_frame` facade
-  path. A direct `.take(<integer literal>)` cap is recognized as bounded; a
-  dynamic cap remains reportable.
+  path. A direct `.take(<integer literal>)` cap or an unmodified local literal
+  cap is recognized as bounded; a dynamic cap remains reportable.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
@@ -111,7 +112,8 @@ The driver currently includes typed checks for:
   source-linked FRAME event enums and reads resolved field types, so aliases to
   `Vec<T>` are reported while bounded wrappers such as `BoundedVec` and
   ordinary enums are skipped. FRAME consumes `#[pallet::event]`, so the event
-  marker is recovered from the enum's compiler source span.
+  marker is recovered from the enum's compiler source span and constrained to
+  the analyzed enum rather than a preceding item.
 - `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
   implementation pairs resolved function parameter types with the nearest
   source `#[pallet::weight(...)]` annotation. FRAME consumes this custom
@@ -120,8 +122,9 @@ The driver currently includes typed checks for:
   `Vec<T>` inputs are reported when the parsed weight expression does not
   reference the parameter length or encoded size. Field projections and
   accessor chains rooted in the parameter count as accounting evidence, while
-  comments and string literals cannot satisfy this check. Deprecated
-  compatibility dispatchables are excluded.
+  comments and string literals cannot satisfy this check. Recovered weight
+  attributes are constrained to the analyzed item rather than a preceding
+  function. Deprecated compatibility dispatchables are excluded.
 
 This removes syntax-level false negatives for aliased unbounded inputs and
 aliased recursive decode targets, storage payloads, and event payloads, plus
