@@ -84,11 +84,17 @@ cat > "$FIXTURE" <<'RS'
 
 use std::ops::Add;
 use std::convert::Infallible;
+use crate::frame_support::traits::EnsureOrigin;
 
 pub type Payload = Vec<u8>;
 pub struct BoundedVec<T, const N: usize>(T);
 pub type BoundedPayload = BoundedVec<u8, 32>;
 pub struct EncodedInput;
+pub struct Origin;
+
+pub trait Config {
+    type AdminOrigin: frame_support::traits::EnsureOrigin;
+}
 
 pub trait Encode {
     fn using_encoded<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R;
@@ -132,6 +138,12 @@ pub mod frame_support {
     }
 
     pub mod traits {
+        use super::super::Origin;
+
+        pub trait EnsureOrigin {
+            fn ensure_origin(_origin: Origin) -> Result<(), ()>;
+        }
+
         pub trait Hooks {
             fn on_runtime_upgrade();
         }
@@ -152,10 +164,26 @@ pub mod frame_support {
     }
 }
 
+pub mod frame_system {
+    use super::Origin;
+
+    pub fn ensure_root(_origin: Origin) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
 pub mod frame {
     pub mod traits {
         pub trait OnRuntimeUpgrade {
             fn on_runtime_upgrade();
+        }
+    }
+}
+
+pub mod xcm_executor {
+    pub mod traits {
+        pub trait OnResponse {
+            fn on_response(data: &[u8]);
         }
     }
 }
@@ -203,6 +231,18 @@ pub fn submit_alias(payload: Payload) {
 }
 
 pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
+    let _ = payload;
+}
+
+#[pallet::call_index(2)] #[pallet::weight(WeightInfo::privileged_root())]
+pub fn privileged_root_vec(origin: Origin, payload: Payload) {
+    let _ = frame_system::ensure_root(origin);
+    let _ = payload;
+}
+
+#[pallet::call_index(3)] #[pallet::weight(WeightInfo::privileged_config())]
+pub fn privileged_config_vec<T: Config>(origin: Origin, payload: Payload) {
+    let _ = T::AdminOrigin::ensure_origin(origin);
     let _ = payload;
 }
 
@@ -329,6 +369,14 @@ pub fn decode_alias_from_match(data: &[u8]) -> Result<RuntimeCall, ()> {
     }
 }
 
+pub struct ResponseHandler;
+
+impl crate::xcm_executor::traits::OnResponse for ResponseHandler {
+    fn on_response(mut data: &[u8]) {
+        let _ = RuntimeCall::decode(&mut data);
+    }
+}
+
 pub fn decode_via_private_helper(data: &[u8]) -> Result<RuntimeCall, ()> {
     decode_private(data)
 }
@@ -360,8 +408,21 @@ pub fn disabled_debug_assert(value: u32) {
     debug_assert!(value > 0, "disabled debug assertion should not be linted");
 }
 
+macro_rules! nested_debug_assert {
+    ($value:expr) => {
+        debug_assert!($value, "nested debug assertion should be linted");
+    };
+}
+
 pub fn active_debug_assert(value: u32) {
+    let note = "debug_assert! in a string is not an assertion";
+    let _ = note;
+    // debug_assert! in a comment is not an assertion.
     debug_assert!(value > 0, "active debug assertion should be linted");
+}
+
+pub fn nested_debug_assert(value: u32) {
+    nested_debug_assert!(value > 0);
 }
 
 pub fn debug_assert_via_private_helper(value: u32) {
@@ -535,6 +596,12 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
+privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
+privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
+rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
@@ -567,10 +634,12 @@ echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
+test "$rustc_sec001_privileged_root_count" = "0"
+test "$rustc_sec001_privileged_config_count" = "0"
 test "$syn_sec002_count" = "4"
-test "$rustc_sec002_count" = "2"
-test "$syn_sec003_count" = "3"
-test "$rustc_sec003_count" = "4"
+test "$rustc_sec002_count" = "3"
+test "$syn_sec003_count" = "4"
+test "$rustc_sec003_count" = "5"
 test "$syn_sec008_count" = "4"
 test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
@@ -584,8 +653,10 @@ test "$rustc_sec013_count" = "1"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "1"
 test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "1"
-test "$rustc_filtered_count" = "24"
+test "$rustc_sec018_count" = "3"
+test "$rustc_sec018_privileged_root_count" = "1"
+test "$rustc_sec018_privileged_config_count" = "1"
+test "$rustc_filtered_count" = "28"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "4"
 test "$rustc_rule_filtered_sec008_count" = "2"

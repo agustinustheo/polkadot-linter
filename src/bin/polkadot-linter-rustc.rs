@@ -292,17 +292,181 @@ fn report_reachable_debug_assertions<'tcx>(
     reachable_bodies: &[LocalDefId],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
-    let mut debug_assert_visitor = Sec002Visitor {
-        source_map,
-        diagnostics,
-        reported_lines: HashSet::new(),
-    };
+    let mut reported_lines = HashSet::new();
 
     for def_id in reachable_bodies {
         if let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) {
+            let mut debug_assert_visitor = Sec002Visitor {
+                source_map,
+                diagnostics,
+                reported_lines: &mut reported_lines,
+            };
             debug_assert_visitor.visit_body(body);
+            report_source_debug_assertions(
+                tcx,
+                *def_id,
+                source_map,
+                diagnostics,
+                &mut reported_lines,
+            );
         }
     }
+}
+
+fn report_source_debug_assertions(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+    reported_lines: &mut HashSet<(String, usize)>,
+) {
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let location = source_map.lookup_char_pos(definition_span.lo());
+    let source_path = location.file.name.prefer_local().to_string();
+    let Ok(source) = std::fs::read_to_string(&source_path) else {
+        return;
+    };
+    let function_name = tcx.item_name(def_id.to_def_id()).as_str().to_string();
+    let Some((function_start, start_line)) =
+        source_function_start(&source, location.line, &function_name)
+    else {
+        return;
+    };
+
+    for (line, column) in source_debug_assert_locations(&source[function_start..], start_line) {
+        if reported_lines.insert((source_path.clone(), line)) {
+            diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC002",
+                rule_name: "debug-assert-in-production",
+                file: source_path.clone(),
+                line,
+                column,
+                message: "`debug_assert!` expands into a debug-only panic path".to_string(),
+            });
+        }
+    }
+}
+
+fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize, usize)> {
+    #[derive(Clone, Copy)]
+    enum ScanState {
+        Code,
+        LineComment,
+        BlockComment,
+        String { escaped: bool },
+        Character { escaped: bool },
+    }
+
+    let mut state = ScanState::Code;
+    let mut locations = Vec::new();
+    let mut brace_depth = 0usize;
+    let mut entered_body = false;
+    let mut line = start_line;
+    let mut column = 1usize;
+    let mut chars = source.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        let next = chars.peek().copied();
+        match state {
+            ScanState::Code => {
+                if ch == '/' && next == Some('/') {
+                    chars.next();
+                    column += 1;
+                    state = ScanState::LineComment;
+                } else if ch == '/' && next == Some('*') {
+                    chars.next();
+                    column += 1;
+                    state = ScanState::BlockComment;
+                } else if ch == '"' {
+                    state = ScanState::String { escaped: false };
+                } else if ch == '\'' {
+                    state = ScanState::Character { escaped: false };
+                } else if ch == '{' {
+                    entered_body = true;
+                    brace_depth += 1;
+                } else if ch == '}' && entered_body {
+                    brace_depth = brace_depth.saturating_sub(1);
+                    if brace_depth == 0 {
+                        break;
+                    }
+                } else if entered_body && ch == 'd' {
+                    let mut candidate = String::from(ch);
+                    for _ in 0..12 {
+                        let Some(next_ch) = chars.peek().copied() else {
+                            break;
+                        };
+                        candidate.push(next_ch);
+                        if candidate == "debug_assert!" {
+                            locations.push((line, column));
+                            break;
+                        }
+                        if !"debug_assert!".starts_with(&candidate) {
+                            break;
+                        }
+                        chars.next();
+                        column += 1;
+                    }
+                }
+            }
+            ScanState::LineComment => {
+                if ch == '\n' {
+                    state = ScanState::Code;
+                }
+            }
+            ScanState::BlockComment => {
+                if ch == '*' && next == Some('/') {
+                    chars.next();
+                    column += 1;
+                    state = ScanState::Code;
+                }
+            }
+            ScanState::String { escaped } => {
+                if escaped {
+                    state = ScanState::String { escaped: false };
+                } else if ch == '\\' {
+                    state = ScanState::String { escaped: true };
+                } else if ch == '"' {
+                    state = ScanState::Code;
+                }
+            }
+            ScanState::Character { escaped } => {
+                if escaped {
+                    state = ScanState::Character { escaped: false };
+                } else if ch == '\\' {
+                    state = ScanState::Character { escaped: true };
+                } else if ch == '\'' {
+                    state = ScanState::Code;
+                }
+            }
+        }
+
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+
+    locations
+}
+
+fn source_function_start(
+    source: &str,
+    definition_line: usize,
+    function_name: &str,
+) -> Option<(usize, usize)> {
+    let mut offset = 0;
+    for (index, line) in source.split_inclusive('\n').enumerate() {
+        let line_number = index + 1;
+        if line_number >= definition_line && line.contains(&format!("fn {function_name}")) {
+            return Some((offset, line_number));
+        }
+        offset += line.len();
+    }
+    None
 }
 
 fn report_reachable_panic_calls<'tcx>(
@@ -564,6 +728,9 @@ fn report_unbounded_public_vec_inputs<'tcx>(
     {
         return;
     }
+    if has_privileged_origin_guard(tcx, tcx.typeck(def_id), body) {
+        return;
+    }
 
     let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
     for (idx, ty) in sig.inputs().iter().enumerate() {
@@ -584,6 +751,73 @@ fn report_unbounded_public_vec_inputs<'tcx>(
                 .to_string(),
         });
     }
+}
+
+fn has_privileged_origin_guard<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &'tcx rustc_middle::ty::TypeckResults<'tcx>,
+    body: &'tcx rustc_hir::Body<'tcx>,
+) -> bool {
+    let mut visitor = PrivilegedOriginVisitor {
+        tcx,
+        typeck,
+        has_privileged_guard: false,
+    };
+    visitor.visit_body(body);
+    visitor.has_privileged_guard
+}
+
+struct PrivilegedOriginVisitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    has_privileged_guard: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for PrivilegedOriginVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, _) = expr.kind {
+            let def_id = match callee.kind {
+                ExprKind::Path(qpath) => self.typeck.qpath_res(&qpath, callee.hir_id).opt_def_id(),
+                _ => None,
+            };
+            if let Some(def_id) = def_id {
+                let path = self.tcx.def_path_str(def_id);
+                self.has_privileged_guard |= is_frame_system_root_check(&path)
+                    || (is_frame_ensure_origin_check(&path)
+                        && callee_uses_named_privileged_origin(self.tcx.sess.source_map(), callee));
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn is_frame_system_root_check(path: &str) -> bool {
+    path.ends_with("::frame_system::ensure_root") || path.contains("frame_system::ensure_root")
+}
+
+fn is_frame_ensure_origin_check(path: &str) -> bool {
+    is_frame_support_path(path)
+        && matches!(
+            path.rsplit("::").next(),
+            Some("ensure_origin" | "ensure_origin_or_root")
+        )
+}
+
+fn callee_uses_named_privileged_origin(source_map: &SourceMap, callee: &Expr<'_>) -> bool {
+    let Ok(snippet) = source_map.span_to_snippet(callee.span) else {
+        return false;
+    };
+    [
+        "AdminOrigin",
+        "ForceOrigin",
+        "FounderSetOrigin",
+        "GovernanceOrigin",
+        "RelayChainOrigin",
+        "RootOrigin",
+    ]
+    .iter()
+    .any(|origin| snippet.contains(origin))
 }
 
 fn report_missing_weight_for_unbounded_inputs<'tcx>(
@@ -723,12 +957,12 @@ fn balanced_attribute(source: &str) -> Option<&str> {
 struct Sec002Visitor<'a> {
     source_map: &'a SourceMap,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
-    reported_lines: HashSet<(String, usize)>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec002Visitor<'_> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let Some(call_site) = macro_call_site(expr.span, "debug_assert") {
+        if let Some(call_site) = debug_assert_call_site(self.source_map, expr.span) {
             let (file, line, column) = span_location(self.source_map, call_site);
             if self.reported_lines.insert((file.clone(), line)) {
                 self.diagnostics.push(RustcDiagnostic {
@@ -1093,7 +1327,10 @@ fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
                 && name == "on_runtime_upgrade")
             || (is_frame_support_path(&trait_path)
                 && trait_path.ends_with("::ChangeMembers")
-                && name == "change_members_sorted");
+                && name == "change_members_sorted")
+            || (trait_path.contains("xcm_executor::traits")
+                && trait_path.ends_with("::OnResponse")
+                && name == "on_response");
     }
 
     tcx.local_visibility(def_id).is_public()
@@ -1109,17 +1346,20 @@ fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
     }
 }
 
-fn macro_call_site(span: Span, macro_name: &str) -> Option<Span> {
+fn debug_assert_call_site(source_map: &SourceMap, span: Span) -> Option<Span> {
     let mut call_site = span;
     for _ in 0..32 {
         if call_site.ctxt().is_root() {
             return None;
         }
         let expn_data = call_site.ctxt().outer_expn_data();
-        if let ExpnKind::Macro(_, name) = expn_data.kind {
-            if name.as_str() == macro_name {
-                return Some(expn_data.call_site.source_callsite());
-            }
+        let source_call_site = expn_data.call_site.source_callsite();
+        if matches!(expn_data.kind, ExpnKind::Macro(_, name) if name.as_str() == "debug_assert")
+            || source_map
+                .span_to_snippet(source_call_site)
+                .is_ok_and(|snippet| snippet.contains("debug_assert!"))
+        {
+            return Some(source_call_site);
         }
         call_site = expn_data.call_site;
     }
