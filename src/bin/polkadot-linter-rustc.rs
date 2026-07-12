@@ -750,6 +750,9 @@ fn report_unbounded_public_vec_inputs<'tcx>(
         let Some(param) = body.params.get(idx) else {
             continue;
         };
+        if has_initial_terminating_vec_length_bound(tcx.typeck(def_id), body, param) {
+            continue;
+        }
         let (file, line, column) = span_location(source_map, param.span);
         diagnostics.push(RustcDiagnostic {
             rule_id: "SEC001",
@@ -761,6 +764,84 @@ fn report_unbounded_public_vec_inputs<'tcx>(
                 .to_string(),
         });
     }
+}
+
+fn has_initial_terminating_vec_length_bound(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    body: &rustc_hir::Body<'_>,
+    param: &rustc_hir::Param<'_>,
+) -> bool {
+    let Some(binding) = pattern_binding_ids(param.pat).into_iter().next() else {
+        return false;
+    };
+    let ExprKind::Block(block, _) = body.value.kind else {
+        return false;
+    };
+    let Some(StmtKind::Expr(first) | StmtKind::Semi(first)) =
+        block.stmts.first().map(|stmt| stmt.kind)
+    else {
+        return false;
+    };
+    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(first).kind else {
+        return false;
+    };
+    expression_exits_current_function(then_branch)
+        && condition_rejects_oversized_vec(typeck, condition, binding)
+}
+
+fn condition_rejects_oversized_vec(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+    binding: HirId,
+) -> bool {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
+        return vec_length_is_within_bound(typeck, inner, binding);
+    }
+    vec_length_exceeds_bound(typeck, condition, binding)
+}
+
+fn vec_length_is_within_bound(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+    binding: HirId,
+) -> bool {
+    let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
+        return false;
+    };
+    (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
+        && expr_is_vec_length_of_binding(typeck, lhs, binding)
+        && integer_literal(rhs))
+        || (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
+            && expr_is_vec_length_of_binding(typeck, rhs, binding)
+            && integer_literal(lhs))
+}
+
+fn vec_length_exceeds_bound(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+    binding: HirId,
+) -> bool {
+    let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
+        return false;
+    };
+    (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
+        && expr_is_vec_length_of_binding(typeck, lhs, binding)
+        && integer_literal(rhs))
+        || (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
+            && expr_is_vec_length_of_binding(typeck, rhs, binding)
+            && integer_literal(lhs))
+}
+
+fn expr_is_vec_length_of_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    binding: HirId,
+) -> bool {
+    let ExprKind::MethodCall(segment, receiver, _, _) = strip_drop_temps(expr).kind else {
+        return false;
+    };
+    segment.ident.name.as_str() == "len" && local_binding_id(typeck, receiver) == Some(binding)
 }
 
 fn has_privileged_origin_guard<'tcx>(
@@ -1158,6 +1239,27 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            if let Some(binding) = unwrappable_then_guard_binding(self.tcx, self.typeck, condition)
+            {
+                let newly_known = self.known_unwrappable_bindings.insert(binding);
+                self.visit_expr(then_branch);
+                if newly_known {
+                    self.known_unwrappable_bindings.remove(&binding);
+                }
+                if let Some(else_branch) = else_branch {
+                    self.visit_expr(else_branch);
+                }
+            } else {
+                self.visit_expr(then_branch);
+                if let Some(else_branch) = else_branch {
+                    self.visit_expr(else_branch);
+                }
+            }
+            return;
+        }
+
         if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
                 if expression_constructs_known_unwrappable(self.tcx, self.typeck, value) {
@@ -1209,6 +1311,30 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
 
         intravisit::walk_local(self, local);
     }
+}
+
+fn unwrappable_then_guard_binding(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let condition = strip_drop_temps(condition);
+    let (negated, condition) = match condition.kind {
+        ExprKind::Unary(rustc_hir::UnOp::Not, inner) => (true, strip_drop_temps(inner)),
+        _ => (false, condition),
+    };
+    let ExprKind::MethodCall(segment, receiver, _, _) = condition.kind else {
+        return None;
+    };
+    let receiver_ty = typeck.expr_ty(receiver);
+    let method = segment.ident.name.as_str();
+    let guard_accepts_success = (method == "is_some" && !negated)
+        || (method == "is_none" && negated)
+        || (method == "is_ok" && !negated)
+        || (method == "is_err" && negated);
+    (guard_accepts_success && type_is_option_or_result(tcx, receiver_ty))
+        .then(|| local_binding_id(typeck, receiver))
+        .flatten()
 }
 
 fn exiting_unwrappable_guard_binding(
@@ -1302,6 +1428,25 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
                 self.visit_expr(else_branch);
             }
             self.tainted_bindings.extend(then_taint);
+            return;
+        }
+
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            for arm in arms {
+                let tainted_arm_bindings = tainted_pattern_binding_ids(
+                    self.typeck,
+                    scrutinee,
+                    arm,
+                    &self.tainted_bindings,
+                );
+                self.tainted_bindings
+                    .extend(tainted_arm_bindings.iter().copied());
+                self.visit_arm(arm);
+                for binding in tainted_arm_bindings {
+                    self.tainted_bindings.remove(&binding);
+                }
+            }
             return;
         }
 
@@ -1615,6 +1760,13 @@ fn divisor_is_proven_nonzero(
     nonzero_bindings: &HashSet<HirId>,
 ) -> bool {
     local_binding_id(typeck, divisor).is_some_and(|binding| nonzero_bindings.contains(&binding))
+}
+
+fn integer_literal(expr: &Expr<'_>) -> bool {
+    matches!(
+        strip_drop_temps(expr).kind,
+        ExprKind::Lit(literal) if matches!(literal.node, rustc_ast::LitKind::Int(..))
+    )
 }
 
 fn zero_integer_literal(expr: &Expr<'_>) -> bool {

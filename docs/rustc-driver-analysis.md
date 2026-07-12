@@ -38,7 +38,8 @@ The driver currently includes typed checks for:
   identity is recovered from the source span associated with the rustc-resolved
   function; public helper methods are excluded. `EnsureOrigin` guards are
   evaluated from their resolved receiver projections, preserving arbitrary
-  configured origins while recognizing the named privileged FRAME origins.
+  configured origins while recognizing the named privileged FRAME origins. An
+  initial terminating literal length guard is recognized as a local input bound.
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported. It
@@ -61,15 +62,16 @@ The driver currently includes typed checks for:
   entry-point parameters through local bindings, local aliases and assignments
   passed to direct local helpers (with unconditional internal-buffer overwrites
   clearing taint and conditional assignments or branch-value expressions merged
-  conservatively), including match-arm bindings,
+  conservatively), including match-arm bindings passed through local helpers,
   `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
   calls, while filtering macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited. It also tracks local values
-  constructed as `Ok`/`Some`, or proven present by a terminating
+  constructed as `Ok`/`Some`, proven present by a terminating
   `is_none`/`is_err` guard (including expanded `ensure!(value.is_some(), ...)`),
-  and clears local-construction proof if the local is overwritten. It analyzes
+  or used in an `is_some`/`is_ok` success branch. It clears local-construction
+  proof if the local is overwritten. It analyzes
   public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
   control flow remain out of scope.
