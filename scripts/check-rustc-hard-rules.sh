@@ -145,8 +145,24 @@ impl Encode for EncodedInput {
     MatchAliasedHelperPayload { payload: Payload },
 }
 
+#[pallet::event] pub enum WeightAccountedPayloadEvent {
+    WeightAccountedPayload { payload: Payload },
+}
+
 pub fn emit_event(payload: Payload) {
     let _ = Event::Submitted { payload };
+}
+
+#[pallet::call_index(29)]
+#[pallet::weight(WeightInfo::emit_weight_accounted(payload.len() as u32))]
+pub fn emit_weight_accounted_event(payload: Payload) {
+    if payload.len() > 32 {
+        return;
+    }
+    let emitted_payload = payload;
+    let _ = WeightAccountedPayloadEvent::WeightAccountedPayload {
+        payload: emitted_payload,
+    };
 }
 
 pub fn emit_whitespace_event(payload: Payload) {
@@ -230,6 +246,13 @@ pub mod unrelated_event {
 
 pub mod frame_support {
     pub mod storage {
+        pub fn with_storage_layer<T, E, F>(f: F) -> Result<T, E>
+        where
+            F: FnOnce() -> Result<T, E>,
+        {
+            f()
+        }
+
         pub trait IterableStorageMap {
             fn iter() -> std::vec::IntoIter<u8>;
         }
@@ -244,6 +267,10 @@ pub mod frame_support {
                 }
 
                 pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
+
+                pub fn put() {}
+
+                pub fn kill() {}
             }
 
             impl super::IterableStorageMap for StorageMap {
@@ -262,7 +289,8 @@ pub mod frame_support {
         }
 
         pub trait Hooks {
-            fn on_runtime_upgrade();
+            fn on_runtime_upgrade() {}
+            fn on_initialize() {}
         }
 
         pub trait OnRuntimeUpgrade {
@@ -533,6 +561,67 @@ pub struct RuntimeUpgrade;
 impl frame_support::traits::Hooks for RuntimeUpgrade {
     fn on_runtime_upgrade() {
         let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+fn hook_fallible_operation() -> Result<(), ()> {
+    Err(())
+}
+
+pub struct UnprotectedTransactionalHook;
+
+impl frame_support::traits::Hooks for UnprotectedTransactionalHook {
+    fn on_initialize() {
+        let _: Result<(), ()> = (|| {
+            frame_support::storage::types::StorageMap::put();
+            hook_fallible_operation()?;
+            frame_support::storage::types::StorageMap::kill();
+            Ok(())
+        })();
+    }
+}
+
+pub struct LayeredTransactionalHook;
+
+impl frame_support::traits::Hooks for LayeredTransactionalHook {
+    fn on_initialize() {
+        let _: Result<(), ()> = frame_support::storage::with_storage_layer(|| {
+            frame_support::storage::types::StorageMap::put();
+            hook_fallible_operation()?;
+            frame_support::storage::types::StorageMap::kill();
+            Ok(())
+        });
+    }
+}
+
+pub struct AttributeTransactionalHook;
+
+impl frame_support::traits::Hooks for AttributeTransactionalHook {
+    #[pallet::transactional]
+    fn on_initialize() {
+        let _: Result<(), ()> = (|| {
+            frame_support::storage::types::StorageMap::put();
+            hook_fallible_operation()?;
+            frame_support::storage::types::StorageMap::kill();
+            Ok(())
+        })();
+    }
+}
+
+pub trait LocalHooks {
+    fn on_initialize();
+}
+
+pub struct LocalHook;
+
+impl LocalHooks for LocalHook {
+    fn on_initialize() {
+        let _: Result<(), ()> = (|| {
+            frame_support::storage::types::StorageMap::put();
+            hook_fallible_operation()?;
+            frame_support::storage::types::StorageMap::kill();
+            Ok(())
+        })();
     }
 }
 
@@ -1222,6 +1311,7 @@ SEC002 = true
 SEC003 = true
 SEC008 = true
 SEC009 = true
+SEC010 = true
 SEC011 = true
 SEC012 = true
 SEC013 = true
@@ -1238,7 +1328,7 @@ RUSTC_RULE_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-rule-filtered.json"
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
   "$WORK_DIR" \
-  --rules SEC001,SEC002,SEC003,SEC008,SEC009,SEC011,SEC012,SEC013,SEC017,SEC018 \
+  --rules SEC001,SEC002,SEC003,SEC008,SEC009,SEC010,SEC011,SEC012,SEC013,SEC017,SEC018 \
   -f json > "$SYN_JSON"
 
 cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
@@ -1285,6 +1375,7 @@ syn_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$SYN_JSO
 syn_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$SYN_JSON")"
 syn_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$SYN_JSON")"
 syn_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$SYN_JSON")"
+syn_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$SYN_JSON")"
 syn_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$SYN_JSON")"
 syn_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$SYN_JSON")"
 syn_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYN_JSON")"
@@ -1295,6 +1386,7 @@ rustc_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$RUSTC
 rustc_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$RUSTC_JSON")"
 rustc_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_JSON")"
 rustc_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_JSON")"
+rustc_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$RUSTC_JSON")"
 rustc_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC_JSON")"
 rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_JSON")"
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
@@ -1404,6 +1496,7 @@ aliased_helper_payload_event_field_line="$(grep -n '^    AliasedHelperPayload { 
 overwritten_aliased_helper_payload_event_field_line="$(grep -n '^    OverwrittenAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
 conditional_aliased_helper_payload_event_field_line="$(grep -n '^    ConditionalAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
 match_aliased_helper_payload_event_field_line="$(grep -n '^    MatchAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
+weight_accounted_payload_event_field_line="$(grep -n '^    WeightAccountedPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
 raw_string_debug_assert_line="$(grep -n 'pub fn raw_string_debug_assert_text' "$FIXTURE" | cut -d: -f1)"
 comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
@@ -1428,6 +1521,7 @@ rustc_sec017_aliased_helper_payload_event_count="$(jq --argjson line "$aliased_h
 rustc_sec017_overwritten_aliased_helper_payload_event_count="$(jq --argjson line "$overwritten_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_conditional_aliased_helper_payload_event_count="$(jq --argjson line "$conditional_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_match_aliased_helper_payload_event_count="$(jq --argjson line "$match_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec017_weight_accounted_payload_event_count="$(jq --argjson line "$weight_accounted_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec002_raw_string_count="$(jq --argjson line "$raw_string_debug_assert_line" '[.[] | select(.rule_id == "SEC002" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1463,6 +1557,14 @@ match_overwritten_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_pre
 rustc_sec012_match_overwritten_bounded_count="$(jq --argjson line "$match_overwritten_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 match_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_match_bounded' "$FIXTURE" | cut -d: -f1)"
 rustc_sec012_match_bounded_count="$(jq --argjson line "$match_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
+unprotected_transactional_hook_line="$(grep -n 'pub struct UnprotectedTransactionalHook' "$FIXTURE" | cut -d: -f1)"
+layered_transactional_hook_line="$(grep -n 'pub struct LayeredTransactionalHook' "$FIXTURE" | cut -d: -f1)"
+attribute_transactional_hook_line="$(grep -n 'pub struct AttributeTransactionalHook' "$FIXTURE" | cut -d: -f1)"
+local_transactional_hook_line="$(grep -n 'pub struct LocalHook' "$FIXTURE" | cut -d: -f1)"
+rustc_sec010_unprotected_count="$(jq --argjson line "$unprotected_transactional_hook_line" '[.[] | select(.rule_id == "SEC010" and .line >= $line and .line <= ($line + 12))] | length' "$RUSTC_JSON")"
+rustc_sec010_layered_count="$(jq --argjson line "$layered_transactional_hook_line" '[.[] | select(.rule_id == "SEC010" and .line >= $line and .line <= ($line + 12))] | length' "$RUSTC_JSON")"
+rustc_sec010_attribute_count="$(jq --argjson line "$attribute_transactional_hook_line" '[.[] | select(.rule_id == "SEC010" and .line >= $line and .line <= ($line + 13))] | length' "$RUSTC_JSON")"
+rustc_sec010_local_hook_count="$(jq --argjson line "$local_transactional_hook_line" '[.[] | select(.rule_id == "SEC010" and .line >= $line and .line <= ($line + 12))] | length' "$RUSTC_JSON")"
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
@@ -1479,6 +1581,8 @@ echo "syntax SEC008 findings: $syn_sec008_count"
 echo "rustc SEC008 findings: $rustc_sec008_count"
 echo "syntax SEC009 findings: $syn_sec009_count"
 echo "rustc SEC009 findings: $rustc_sec009_count"
+echo "syntax SEC010 findings: $syn_sec010_count"
+echo "rustc SEC010 findings: $rustc_sec010_count"
 echo "syntax SEC011 findings: $syn_sec011_count"
 echo "rustc SEC011 findings: $rustc_sec011_count"
 echo "syntax SEC012 findings: $syn_sec012_count"
@@ -1556,6 +1660,12 @@ test "$rustc_sec009_match_nonzero_division_count" = "0"
 test "$rustc_sec009_match_zero_division_count" = "1"
 test "$rustc_sec009_nonzero_division_count" = "0"
 test "$rustc_sec009_nonzero_remainder_count" = "0"
+test "$syn_sec010_count" = "3"
+test "$rustc_sec010_count" = "1"
+test "$rustc_sec010_unprotected_count" = "1"
+test "$rustc_sec010_layered_count" = "0"
+test "$rustc_sec010_attribute_count" = "0"
+test "$rustc_sec010_local_hook_count" = "0"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "11"
 test "$rustc_sec011_bounded_iteration_count" = "0"
@@ -1585,6 +1695,7 @@ test "$rustc_sec017_aliased_helper_payload_event_count" = "1"
 test "$rustc_sec017_overwritten_aliased_helper_payload_event_count" = "0"
 test "$rustc_sec017_conditional_aliased_helper_payload_event_count" = "1"
 test "$rustc_sec017_match_aliased_helper_payload_event_count" = "1"
+test "$rustc_sec017_weight_accounted_payload_event_count" = "0"
 test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "6"
 test "$rustc_sec018_privileged_root_count" = "1"
@@ -1596,7 +1707,7 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "67"
+test "$rustc_filtered_count" = "68"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"

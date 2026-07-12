@@ -100,6 +100,14 @@ The driver currently includes typed checks for:
   literal within that arm, and proofs in the safe `else` branch after a failed
   underflow or zero check. Indirect calls and broader path-sensitive control
   flow remain out of scope.
+- `SEC010`: missing transactional storage layers in lifecycle hooks. The
+  compiler-backed implementation recognizes resolved FRAME `Hooks`
+  implementations, counts only resolved FRAME storage write methods, and reads
+  `?` from rustc's `TryDesugar` HIR marker. It excludes closures passed to a
+  resolved `frame_support::storage::with_storage_layer` call and honors
+  `#[transactional]` metadata captured before macro expansion. Arbitrary
+  fallible helper calls, dynamic dispatch, and interprocedural transactional
+  coverage remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
@@ -134,7 +142,10 @@ The driver currently includes typed checks for:
   ordinary enums are skipped. It then resolves reachable event constructors and
   requires the field value to derive from an unbounded entry-point parameter,
   propagated through direct local calls; unconstructed event declarations
-  therefore do not report. FRAME `generate_deposit` expansions can remove the
+  therefore do not report. A direct FRAME dispatchable emission is also
+  suppressed when its captured `#[pallet::weight]` expression accounts for
+  that exact input parameter; helper-mediated provenance remains reportable
+  until weight evidence can be propagated across calls. FRAME `generate_deposit` expansions can remove the
   callable body needed for that evidence; the driver then uses a narrow
   source-linked metadata fallback while retaining rustc-resolved field types.
 - `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
@@ -187,6 +198,10 @@ driver:
   `Add`, while the rustc-driver path reports only integer arithmetic. It also
   proves subtraction and division safe in a conjunctive branch when one
   conjunct establishes the required bound or nonzero divisor.
+- for `SEC010`, the syntax path reports three write-like lifecycle methods,
+  while the rustc-driver reports only an unprotected resolved FRAME hook. A
+  `with_storage_layer` closure, a captured transactional attribute, and an
+  unrelated trait method named `on_initialize` are excluded.
 - for `SEC011`, the syntax path reports an ordinary `Domain::iter()` call in a
   dispatchable-shaped body, while the rustc-driver path resolves owner types and
   reports only `StorageMap::iter()`
@@ -235,7 +250,7 @@ Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
 back into the public diagnostic format. When `--compiler-backed-rules` is not
 specified, the CLI expands the requested rule filters to the migrated
 compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`,
-`SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
+`SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
 passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
 JSONL file named by `POLKADOT_LINTER_RUSTC_JSONL`. Diagnostics are sorted and
@@ -294,6 +309,17 @@ macro-generated attribute spans, and deduplicating nested arithmetic to one
 finding per affected source line. The rustc-backed summary is checked against
 `benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`, and the public
 CLI run relies on default compiler-backed routing rather than `--no-syntax`.
+
+Run the SDK `SEC010` transactional-hook check with:
+
+```sh
+scripts/check-rustc-sdk-sec010.sh .repos/polkadot-sdk .benchmarks
+```
+
+That script checks pinned `pallet-people`, whose lifecycle work uses
+`with_storage_layer`. It maintains a resolved zero baseline, ensuring the
+compiler-backed implementation does not reintroduce token-based warnings for
+protected hook work.
 
 Run the SDK `SEC018` macro-recovery check with:
 

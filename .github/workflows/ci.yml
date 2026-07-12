@@ -76,6 +76,9 @@ jobs:
       - name: Check rustc-backed SDK SEC009 baseline
         run: scripts/check-rustc-sdk-sec009.sh .repos/polkadot-sdk .benchmarks
 
+      - name: Check rustc-backed SDK SEC010 baseline
+        run: scripts/check-rustc-sdk-sec010.sh .repos/polkadot-sdk .benchmarks
+
       - name: Check rustc-backed SDK SEC011 baseline
         run: scripts/check-rustc-sdk-sec011.sh .repos/polkadot-sdk .benchmarks
 

@@ -10,8 +10,8 @@ use polkadot_linter::{
 };
 
 const COMPILER_BACKED_SECURITY_RULES: &[&str] = &[
-    "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC011", "SEC012", "SEC013", "SEC017",
-    "SEC018",
+    "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012", "SEC013",
+    "SEC017", "SEC018",
 ];
 
 #[derive(Parser, Debug)]
@@ -412,8 +412,8 @@ mod tests {
         assert_eq!(
             selected_compiler_backed_rules(None, &[]),
             strings(&[
-                "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC011", "SEC012", "SEC013",
-                "SEC017", "SEC018",
+                "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012",
+                "SEC013", "SEC017", "SEC018",
             ])
         );
     }
@@ -425,8 +425,8 @@ mod tests {
         assert_eq!(
             selected_compiler_backed_rules(Some(&cli_rules), &[]),
             strings(&[
-                "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC011", "SEC012", "SEC013",
-                "SEC017", "SEC018",
+                "SEC001", "SEC002", "SEC003", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012",
+                "SEC013", "SEC017", "SEC018",
             ])
         );
     }
