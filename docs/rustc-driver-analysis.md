@@ -290,7 +290,8 @@ reports the unbounded deletion limit at line 440. The output is checked against
 
 The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
 the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
-SDK precision baseline, and the contracts `SEC018` macro-recovery baseline
+SDK precision baseline, the multisig `SEC011` migration coverage baseline, and
+the contracts `SEC018` macro-recovery baseline
 and session `SEC013` storage-value and root-offences `SEC017` event baselines
 and multisig `SEC008` panic and oracle `SEC012` clear-prefix baselines after
 the default stable build.
