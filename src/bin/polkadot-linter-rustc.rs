@@ -1,5 +1,6 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
@@ -517,6 +518,7 @@ fn report_reachable_raw_arithmetic<'tcx>(
             diagnostics,
             reported_lines: &mut reported_lines,
             non_underflow_pairs: HashSet::new(),
+            nonzero_bindings: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -1374,17 +1376,24 @@ struct Sec009Visitor<'a, 'tcx> {
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
     non_underflow_pairs: HashSet<(HirId, HirId)>,
+    nonzero_bindings: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
     fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
-        let mut exit_guards = Vec::new();
+        let mut exiting_underflow_guards = Vec::new();
+        let mut exiting_nonzero_guards = Vec::new();
 
         for statement in block.stmts {
             self.visit_stmt(statement);
             if let Some(pair) = exiting_non_underflow_guard_pair(self.typeck, statement) {
                 if self.non_underflow_pairs.insert(pair) {
-                    exit_guards.push(pair);
+                    exiting_underflow_guards.push(pair);
+                }
+            }
+            if let Some(binding) = exiting_nonzero_guard_binding(self.typeck, statement) {
+                if self.nonzero_bindings.insert(binding) {
+                    exiting_nonzero_guards.push(binding);
                 }
             }
         }
@@ -1392,18 +1401,33 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
             self.visit_expr(expr);
         }
 
-        for pair in exit_guards {
+        for pair in exiting_underflow_guards {
             self.non_underflow_pairs.remove(&pair);
+        }
+        for binding in exiting_nonzero_guards {
+            self.nonzero_bindings.remove(&binding);
         }
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
-            if let Some(pair) = non_underflow_guard_pair(self.typeck, condition) {
-                self.non_underflow_pairs.insert(pair);
+            let underflow_guard = non_underflow_guard_pair(self.typeck, condition);
+            let nonzero_guard = nonzero_guard_binding(self.typeck, condition);
+            if underflow_guard.is_some() || nonzero_guard.is_some() {
+                if let Some(pair) = underflow_guard {
+                    self.non_underflow_pairs.insert(pair);
+                }
+                if let Some(binding) = nonzero_guard {
+                    self.nonzero_bindings.insert(binding);
+                }
                 self.visit_expr(then_branch);
-                self.non_underflow_pairs.remove(&pair);
+                if let Some(pair) = underflow_guard {
+                    self.non_underflow_pairs.remove(&pair);
+                }
+                if let Some(binding) = nonzero_guard {
+                    self.nonzero_bindings.remove(&binding);
+                }
                 if let Some(else_branch) = else_branch {
                     self.visit_expr(else_branch);
                 }
@@ -1419,6 +1443,8 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
                 && is_integral(self.typeck.expr_ty(rhs))
                 && !(matches!(op.node, BinOpKind::Sub)
                     && subtraction_is_guarded(self.typeck, lhs, rhs, &self.non_underflow_pairs))
+                && !(matches!(op.node, BinOpKind::Div | BinOpKind::Rem)
+                    && divisor_is_proven_nonzero(self.typeck, rhs, &self.nonzero_bindings))
                 && self.reported_lines.insert((file.clone(), line))
             {
                 self.diagnostics.push(RustcDiagnostic {
@@ -1435,6 +1461,24 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn nonzero_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    if operator.node != BinOpKind::Ne {
+        return None;
+    }
+    if zero_integer_literal(rhs) {
+        return local_binding_id(typeck, lhs);
+    }
+    zero_integer_literal(lhs)
+        .then(|| local_binding_id(typeck, rhs))
+        .flatten()
 }
 
 fn non_underflow_guard_pair(
@@ -1469,6 +1513,21 @@ fn exiting_non_underflow_guard_pair(
     failed_non_underflow_guard_pair(typeck, condition)
 }
 
+fn exiting_nonzero_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    statement: &rustc_hir::Stmt<'_>,
+) -> Option<HirId> {
+    let (StmtKind::Expr(expr) | StmtKind::Semi(expr)) = statement.kind else {
+        return None;
+    };
+    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(expr).kind else {
+        return None;
+    };
+    expression_exits_current_function(then_branch)
+        .then(|| failed_nonzero_guard_binding(typeck, condition))
+        .flatten()
+}
+
 fn failed_non_underflow_guard_pair(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
@@ -1488,6 +1547,29 @@ fn failed_non_underflow_guard_pair(
         BinOpKind::Gt => Some((rhs_binding, lhs_binding)),
         _ => None,
     }
+}
+
+fn failed_nonzero_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
+        return nonzero_guard_binding(typeck, inner);
+    }
+
+    let ExprKind::Binary(operator, lhs, rhs) = condition.kind else {
+        return None;
+    };
+    if operator.node != BinOpKind::Eq {
+        return None;
+    }
+    if zero_integer_literal(rhs) {
+        return local_binding_id(typeck, lhs);
+    }
+    zero_integer_literal(lhs)
+        .then(|| local_binding_id(typeck, rhs))
+        .flatten()
 }
 
 fn expression_exits_current_function(expr: &Expr<'_>) -> bool {
@@ -1525,6 +1607,21 @@ fn subtraction_is_guarded(
         return false;
     };
     non_underflow_pairs.contains(&(lhs_binding, rhs_binding))
+}
+
+fn divisor_is_proven_nonzero(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    divisor: &Expr<'_>,
+    nonzero_bindings: &HashSet<HirId>,
+) -> bool {
+    local_binding_id(typeck, divisor).is_some_and(|binding| nonzero_bindings.contains(&binding))
+}
+
+fn zero_integer_literal(expr: &Expr<'_>) -> bool {
+    matches!(
+        strip_drop_temps(expr).kind,
+        ExprKind::Lit(literal) if matches!(literal.node, rustc_ast::LitKind::Int(value, _) if value.get() == 0)
+    )
 }
 
 fn span_line_starts_with_attribute(source_map: &SourceMap, span: Span) -> bool {
@@ -2219,6 +2316,10 @@ fn syn_expr_root_ident(expr: &SynExpr) -> Option<String> {
         SynExpr::Reference(reference) => syn_expr_root_ident(&reference.expr),
         SynExpr::Paren(paren) => syn_expr_root_ident(&paren.expr),
         SynExpr::Group(group) => syn_expr_root_ident(&group.expr),
+        SynExpr::Field(field) => syn_expr_root_ident(&field.base),
+        SynExpr::MethodCall(method_call) => syn_expr_root_ident(&method_call.receiver),
+        SynExpr::Cast(cast) => syn_expr_root_ident(&cast.expr),
+        SynExpr::Index(index) => syn_expr_root_ident(&index.expr),
         _ => None,
     }
 }

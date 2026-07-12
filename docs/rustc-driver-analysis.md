@@ -79,8 +79,9 @@ The driver currently includes typed checks for:
   a function reachable from a public or hook `Result` entry point, including
   direct local helper calls. It recognizes non-underflow subtraction inside a
   resolved `if a >= b` or `if b <= a` branch and after an early-return guard
-  such as FRAME's expanded `ensure!(a >= b, ...)`. Indirect calls and broader
-  path-sensitive control flow remain out of scope.
+  such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero
+  divisor guards for `/` and `%`. Indirect calls and broader path-sensitive
+  control flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
@@ -115,9 +116,10 @@ The driver currently includes typed checks for:
   annotation during macro expansion, so source-span recovery is required while
   rustc remains the authority for the dispatchable and its input types. Aliased
   `Vec<T>` inputs are reported when the parsed weight expression does not
-  reference the parameter length or encoded size; comments and string literals
-  cannot satisfy this check. Deprecated compatibility dispatchables are
-  excluded.
+  reference the parameter length or encoded size. Field projections and
+  accessor chains rooted in the parameter count as accounting evidence, while
+  comments and string literals cannot satisfy this check. Deprecated
+  compatibility dispatchables are excluded.
 
 This removes syntax-level false negatives for aliased unbounded inputs and
 aliased recursive decode targets, storage payloads, and event payloads, plus
