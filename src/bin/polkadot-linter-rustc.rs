@@ -60,6 +60,8 @@ struct ParsedWeightAttribute {
     function_name: String,
     file: String,
     line: usize,
+    attribute_start_line: usize,
+    attribute_end_line: usize,
     attribute_source: String,
     deprecated: bool,
     has_call_index: bool,
@@ -73,6 +75,7 @@ struct ParsedItemAttributes {
     storage: bool,
     unbounded: bool,
     event: bool,
+    internal_numeric_layout: bool,
 }
 
 #[derive(Clone)]
@@ -123,11 +126,42 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("SEC014") {
+            report_identity_hashers_on_common_keys(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_item_attributes,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC004") {
+            report_raw_weight_arithmetic(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_weight_attributes,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC005") {
+            report_expensive_weight_calculation(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_weight_attributes,
+                &mut self.diagnostics,
+            );
+        }
         if self.rule_enabled("SEC010") {
             report_missing_transactional_hooks(
                 tcx,
                 tcx.sess.source_map(),
                 &self.parsed_transactional_attributes,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC016") {
+            report_missing_storage_version_checks(
+                tcx,
+                tcx.sess.source_map(),
                 &mut self.diagnostics,
             );
         }
@@ -150,7 +184,8 @@ impl Callbacks for PolkadotCallbacks {
         let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
             || self.rule_enabled("SEC008")
             || self.rule_enabled("SEC011")
-            || self.rule_enabled("SEC012"))
+            || self.rule_enabled("SEC012")
+            || self.rule_enabled("SEC015"))
         .then(|| reachable_local_function_bodies(tcx, false))
         .unwrap_or_default();
         if self.rule_enabled("SEC017") {
@@ -205,6 +240,14 @@ impl Callbacks for PolkadotCallbacks {
         }
         if self.rule_enabled("SEC012") {
             report_reachable_clear_prefix(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC015") {
+            report_reachable_dispatch_bypass_filters(
                 tcx,
                 tcx.sess.source_map(),
                 &reachable_entry_point_bodies,
@@ -755,6 +798,30 @@ fn report_reachable_panic_calls<'tcx>(
     }
 }
 
+fn report_reachable_dispatch_bypass_filters<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in reachable_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let mut visitor = Sec015Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(*def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+            root_guard_depth: 0,
+        };
+        visitor.visit_body(body);
+    }
+}
+
 fn report_reachable_raw_arithmetic<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
@@ -868,6 +935,43 @@ fn report_missing_transactional_hooks<'tcx>(
     }
 }
 
+fn report_missing_storage_version_checks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn)
+            || !is_frame_runtime_upgrade(tcx, def_id)
+        {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec016Visitor {
+            tcx,
+            typeck: tcx.typeck(def_id),
+            has_resolved_storage_version_check: false,
+            has_resolved_storage_write: false,
+        };
+        visitor.visit_body(body);
+        if !visitor.has_resolved_storage_write || visitor.has_resolved_storage_version_check {
+            continue;
+        }
+        let (file, line, column) = span_location(source_map, tcx.def_span(def_id));
+        diagnostics.push(RustcDiagnostic {
+            rule_id: "SEC016",
+            rule_name: "missing-storage-version-check-in-runtime-upgrade",
+            file,
+            line,
+            column,
+            message: "Resolved FRAME runtime upgrade writes storage without a StorageVersion check"
+                .to_string(),
+        });
+    }
+}
+
 fn has_transactional_hook_attribute(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
@@ -894,6 +998,30 @@ struct Sec010Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     storage_writes: usize,
     has_fallible_path_after_write: bool,
+}
+
+struct Sec016Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    has_resolved_storage_version_check: bool,
+    has_resolved_storage_write: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec016Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if is_resolved_storage_version_check(self.tcx, self.typeck, expr) {
+            self.has_resolved_storage_version_check = true;
+        }
+        if let ExprKind::Call(callee, _) = expr.kind {
+            if is_frame_migration_storage_write_call(self.tcx, self.typeck, callee) {
+                self.has_resolved_storage_write = true;
+            }
+        }
+        if matches!(expr.kind, ExprKind::Closure(_)) {
+            return;
+        }
+        intravisit::walk_expr(self, expr);
+    }
 }
 
 impl<'tcx> Visitor<'tcx> for Sec010Visitor<'_, 'tcx> {
@@ -942,6 +1070,64 @@ fn is_frame_storage_write_call<'tcx>(
             "put" | "insert" | "mutate" | "remove" | "kill" | "set"
         )
     }) && is_frame_storage_associated_call(tcx, typeck, callee)
+}
+
+fn is_frame_migration_storage_write_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    let is_write_name = associated_call_name(callee).is_some_and(|name| {
+        matches!(
+            name.as_str(),
+            "put"
+                | "insert"
+                | "mutate"
+                | "mutate_extant"
+                | "remove"
+                | "kill"
+                | "set"
+                | "append"
+                | "take"
+                | "clear_prefix"
+                | "translate"
+        )
+    });
+    if !is_write_name {
+        return false;
+    }
+
+    is_frame_storage_associated_call(tcx, typeck, callee)
+        || typeck
+            .type_dependent_def_id(callee.hir_id)
+            .is_some_and(|def_id| {
+                matches_frame_storage_method_owner_path(&tcx.def_path_str(def_id))
+            })
+}
+
+fn is_resolved_storage_version_check(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    let def_id = match expr.kind {
+        ExprKind::MethodCall(_, _, _, _) => typeck.type_dependent_def_id(expr.hir_id),
+        ExprKind::Call(callee, _) => {
+            let ExprKind::Path(qpath) = callee.kind else {
+                return false;
+            };
+            typeck.qpath_res(&qpath, callee.hir_id).opt_def_id()
+        }
+        _ => return false,
+    };
+    def_id.is_some_and(|def_id| {
+        let path = tcx.def_path_str(def_id);
+        is_frame_support_path(&path)
+            && (path.contains("::StorageVersion::")
+                || path.ends_with("::on_chain_storage_version")
+                || path.ends_with("::in_code_storage_version")
+                || path.ends_with("::current_storage_version"))
+    })
 }
 
 fn is_frame_storage_layer_call<'tcx>(
@@ -1157,6 +1343,229 @@ impl PolkadotCallbacks {
     }
 }
 
+fn report_raw_weight_arithmetic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let ranges = parsed_weight_attributes
+        .iter()
+        .map(|attribute| WeightAttributeRange {
+            file: &attribute.file,
+            start_line: attribute.attribute_start_line,
+            end_line: attribute.attribute_end_line,
+        })
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return;
+    }
+
+    let mut reported_lines = HashSet::new();
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec004Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            ranges: &ranges,
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+struct WeightAttributeRange<'a> {
+    file: &'a str,
+    start_line: usize,
+    end_line: usize,
+}
+
+struct Sec004Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    ranges: &'a [WeightAttributeRange<'a>],
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec004Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if matches!(expr.kind, ExprKind::Binary(op, _, _) if matches!(op.node, BinOpKind::Add | BinOpKind::Mul))
+            && self.is_weight_attribute_span(expr.span)
+            && self.is_raw_numeric_or_weight_binary(expr)
+        {
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            if self.reported_lines.insert((file.clone(), line)) {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC004",
+                    rule_name: "unsafe-weight-arithmetic",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved non-saturating arithmetic inside #[pallet::weight(...)]"
+                        .to_string(),
+                });
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl Sec004Visitor<'_, '_> {
+    fn is_weight_attribute_span(&self, span: Span) -> bool {
+        let location = self.source_map.lookup_char_pos(span.source_callsite().lo());
+        let file = location.file.name.prefer_local().to_string();
+        self.ranges.iter().any(|range| {
+            range.file == file && (range.start_line..=range.end_line).contains(&location.line)
+        })
+    }
+
+    fn is_raw_numeric_or_weight_binary(&self, expr: &Expr<'_>) -> bool {
+        let ty = self.typeck.expr_ty(expr);
+        matches!(ty.kind(), TyKind::Int(_) | TyKind::Uint(_)) || type_is_weight(self.tcx, ty)
+    }
+}
+
+fn report_expensive_weight_calculation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let ranges = parsed_weight_attributes
+        .iter()
+        .map(|attribute| WeightAttributeRange {
+            file: &attribute.file,
+            start_line: attribute.attribute_start_line,
+            end_line: attribute.attribute_end_line,
+        })
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return;
+    }
+
+    let mut reported_lines = HashSet::new();
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sec005Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            ranges: &ranges,
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+struct Sec005Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    ranges: &'a [WeightAttributeRange<'a>],
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec005Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        let expensive = match expr.kind {
+            ExprKind::Call(callee, _) => {
+                is_frame_storage_read_call(self.tcx, self.typeck, callee)
+                    || is_resolved_weight_expense(self.tcx, self.typeck, callee)
+            }
+            ExprKind::MethodCall(_, _, _, _) => {
+                is_resolved_weight_expense(self.tcx, self.typeck, expr)
+            }
+            _ => false,
+        };
+        if expensive && self.is_weight_attribute_span(expr.span) {
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            if self.reported_lines.insert((file.clone(), line)) {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC005",
+                    rule_name: "expensive-weight-calculation",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved expensive operation inside #[pallet::weight(...)]"
+                        .to_string(),
+                });
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl Sec005Visitor<'_, '_> {
+    fn is_weight_attribute_span(&self, span: Span) -> bool {
+        let location = self.source_map.lookup_char_pos(span.source_callsite().lo());
+        let file = location.file.name.prefer_local().to_string();
+        self.ranges.iter().any(|range| {
+            range.file == file && (range.start_line..=range.end_line).contains(&location.line)
+        })
+    }
+}
+
+fn is_frame_storage_read_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    associated_call_name(callee).is_some_and(|name| name == "get")
+        && is_frame_storage_associated_call(tcx, typeck, callee)
+}
+
+fn is_resolved_weight_expense(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    if let ExprKind::MethodCall(segment, receiver, _, _) = expr.kind {
+        return matches!(
+            segment.ident.name.as_str(),
+            "get_dispatch_info" | "encode" | "using_encoded" | "decode"
+        ) && !matches!(typeck.expr_ty(receiver).kind(), TyKind::Error(_));
+    }
+    let def_id = typeck
+        .type_dependent_def_id(expr.hir_id)
+        .or_else(|| match expr.kind {
+            ExprKind::MethodCall(segment, _, _, _) => typeck.type_dependent_def_id(segment.hir_id),
+            _ => None,
+        })
+        .or_else(|| {
+            let ExprKind::Path(qpath) = expr.kind else {
+                return None;
+            };
+            typeck.qpath_res(&qpath, expr.hir_id).opt_def_id()
+        });
+    let Some(def_id) = def_id else {
+        return false;
+    };
+    let path = tcx.def_path_str(def_id);
+    matches!(
+        path.as_str(),
+        path if path.ends_with("::GetDispatchInfo::get_dispatch_info")
+            || path.ends_with("::parity_scale_codec::Encode::encode")
+            || path.ends_with("::parity_scale_codec::Encode::using_encoded")
+            || path.ends_with("::parity_scale_codec::Decode::decode")
+    )
+}
+
 fn report_unbounded_storage_aliases<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
@@ -1198,6 +1607,152 @@ fn report_unbounded_storage_aliases<'tcx>(
                 message: "Storage alias resolves to an unbounded collection value".to_string(),
             });
         }
+    }
+}
+
+fn report_identity_hashers_on_common_keys<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for item_id in tcx.hir_free_items() {
+        let item = tcx.hir_item(item_id);
+        if !matches!(item.kind, ItemKind::TyAlias(..))
+            || !is_frame_storage_alias(
+                tcx,
+                item.owner_id.def_id,
+                item.hir_id(),
+                source_map,
+                parsed_item_attributes,
+            )
+        {
+            continue;
+        }
+
+        let alias_ty = tcx.type_of(item.owner_id.def_id).instantiate_identity();
+        let Some((storage_kind, type_args)) = storage_alias_type_arguments(tcx, alias_ty) else {
+            continue;
+        };
+        let has_internal_numeric_layout = parsed_item_attributes_match(
+            tcx,
+            item.owner_id.def_id,
+            source_map,
+            parsed_item_attributes,
+            |attributes| attributes.internal_numeric_layout,
+        );
+        if !storage_uses_identity_on_common_key(
+            tcx,
+            storage_kind,
+            &type_args,
+            has_internal_numeric_layout,
+        ) {
+            continue;
+        }
+
+        let (file, line, column) = span_location(source_map, item.span);
+        diagnostics.push(RustcDiagnostic {
+            rule_id: "SEC014",
+            rule_name: "identity-hasher-on-common-keys",
+            file,
+            line,
+            column,
+            message: "Resolved storage map uses Identity hasher on a common key type".to_string(),
+        });
+    }
+}
+
+fn storage_alias_type_arguments<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<(&'static str, Vec<Ty<'tcx>>)> {
+    match ty.kind() {
+        TyKind::Adt(adt, args) => {
+            let owner = storage_owner_name(&tcx.def_path_str(adt.did()))?;
+            let type_args = args
+                .iter()
+                .filter_map(|arg| match arg.kind() {
+                    GenericArgKind::Type(arg_ty) => Some(arg_ty),
+                    _ => None,
+                })
+                .collect();
+            Some((owner, type_args))
+        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .and_then(|expanded| storage_alias_type_arguments(tcx, expanded)),
+        _ => None,
+    }
+}
+
+fn storage_uses_identity_on_common_key<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    storage_kind: &str,
+    type_args: &[Ty<'tcx>],
+    has_internal_numeric_layout: bool,
+) -> bool {
+    match storage_kind {
+        "StorageMap" | "CountedStorageMap" => {
+            identity_common_key_pair(tcx, type_args, 1, 2, has_internal_numeric_layout)
+        }
+        "StorageDoubleMap" => {
+            identity_common_key_pair(tcx, type_args, 1, 2, has_internal_numeric_layout)
+                || identity_common_key_pair(tcx, type_args, 3, 4, has_internal_numeric_layout)
+        }
+        _ => false,
+    }
+}
+
+fn identity_common_key_pair<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    type_args: &[Ty<'tcx>],
+    hasher_index: usize,
+    key_index: usize,
+    has_internal_numeric_layout: bool,
+) -> bool {
+    let Some(hasher_ty) = type_args.get(hasher_index).copied() else {
+        return false;
+    };
+    let Some(key_ty) = type_args.get(key_index).copied() else {
+        return false;
+    };
+    type_is_identity_hasher(tcx, hasher_ty)
+        && type_is_common_identity_key(tcx, key_ty)
+        && !(has_internal_numeric_layout && type_is_builtin_numeric_key(key_ty))
+}
+
+fn type_is_identity_hasher<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, _) => {
+            let path = tcx.def_path_str(adt.did());
+            is_frame_support_path(&path) && path.ends_with("::Identity")
+        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_identity_hasher(tcx, expanded)),
+        _ => false,
+    }
+}
+
+fn type_is_common_identity_key<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    type_is_builtin_numeric_key(ty)
+        || matches!(ty.kind(), TyKind::Alias(_, alias_ty) if {
+            let path = tcx.def_path_str(alias_ty.def_id);
+            path.ends_with("::Balance") || path.ends_with("::BlockNumber")
+        })
+}
+
+fn type_is_builtin_numeric_key(ty: Ty<'_>) -> bool {
+    matches!(
+        ty.kind(),
+        TyKind::Uint(rustc_middle::ty::UintTy::U32 | rustc_middle::ty::UintTy::U64)
+    )
+}
+
+fn type_is_weight<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, _) => tcx.def_path_str(adt.did()).ends_with("::Weight"),
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_weight(tcx, expanded)),
+        _ => false,
     }
 }
 
@@ -1930,10 +2485,14 @@ impl ParsedWeightAttributeVisitor<'_> {
             return;
         };
         let location = self.source_map.lookup_char_pos(span.lo());
+        let attribute_start = self.source_map.lookup_char_pos(weight_attribute.span.lo());
+        let attribute_end = self.source_map.lookup_char_pos(weight_attribute.span.hi());
         self.parsed_attributes.push(ParsedWeightAttribute {
             function_name: function_name.to_string(),
             file: location.file.name.prefer_local().to_string(),
             line: location.line,
+            attribute_start_line: attribute_start.line,
+            attribute_end_line: attribute_end.line,
             attribute_source,
             deprecated: attributes.iter().any(|attribute| {
                 matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["deprecated"]))
@@ -1962,6 +2521,16 @@ impl ParsedWeightAttributeVisitor<'_> {
         if !(storage || unbounded || event) {
             return;
         }
+        let internal_numeric_layout = item
+            .attrs
+            .iter()
+            .filter_map(|attribute| self.source_map.span_to_snippet(attribute.span).ok())
+            .map(|source| source.to_ascii_lowercase())
+            .any(|source| {
+                ["ring buffer", "index", "indices", "segment", "position"]
+                    .iter()
+                    .any(|marker| source.contains(marker))
+            });
         let location = self.source_map.lookup_char_pos(item.span.lo());
         self.parsed_item_attributes.push(ParsedItemAttributes {
             item_name: item_name.to_string(),
@@ -1970,6 +2539,7 @@ impl ParsedWeightAttributeVisitor<'_> {
             storage,
             unbounded,
             event,
+            internal_numeric_layout,
         });
     }
 }
@@ -2273,6 +2843,90 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
 
         intravisit::walk_local(self, local);
     }
+}
+
+struct Sec015Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+    root_guard_depth: usize,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec015Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            if is_resolved_root_is_ok(self.tcx, self.typeck, condition) {
+                self.root_guard_depth += 1;
+                self.visit_expr(then_branch);
+                self.root_guard_depth -= 1;
+            } else {
+                self.visit_expr(then_branch);
+            }
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            return;
+        }
+
+        if matches!(expr.kind, ExprKind::MethodCall(_, _, _, _) if is_resolved_dispatch_bypass_filter(self.tcx, self.typeck, expr))
+            && self.root_guard_depth == 0
+        {
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            if self.reported_lines.insert((file.clone(), line)) {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC015",
+                    rule_name: "dispatch-bypass-filter-in-production",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved dispatch_bypass_filter call lacks a root guard".to_string(),
+                });
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn is_resolved_dispatch_bypass_filter(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    typeck
+        .type_dependent_def_id(expr.hir_id)
+        .is_some_and(|def_id| {
+            let path = tcx.def_path_str(def_id);
+            is_frame_support_path(&path) && path.ends_with("::dispatch_bypass_filter")
+        })
+}
+
+fn is_resolved_root_is_ok(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    let expr = strip_drop_temps(expr);
+    let ExprKind::MethodCall(segment, receiver, _, _) = expr.kind else {
+        return false;
+    };
+    if segment.ident.name.as_str() != "is_ok" {
+        return false;
+    }
+    let receiver = strip_drop_temps(receiver);
+    let ExprKind::Call(callee, _) = receiver.kind else {
+        return false;
+    };
+    let ExprKind::Path(qpath) = callee.kind else {
+        return false;
+    };
+    typeck
+        .qpath_res(&qpath, callee.hir_id)
+        .opt_def_id()
+        .is_some_and(|def_id| is_frame_system_root_check(&tcx.def_path_str(def_id)))
 }
 
 struct Sec008Visitor<'a, 'tcx> {
@@ -3479,6 +4133,23 @@ fn is_frame_lifecycle_hook(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
             tcx.item_name(def_id.to_def_id()).as_str(),
             "on_initialize" | "on_finalize" | "on_idle" | "on_poll"
         )
+}
+
+fn is_frame_runtime_upgrade(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+    if tcx.item_name(def_id.to_def_id()).as_str() != "on_runtime_upgrade" {
+        return false;
+    }
+    let Some(trait_id) = tcx
+        .impl_of_method(def_id.to_def_id())
+        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
+    else {
+        return false;
+    };
+    let trait_path = tcx.def_path_str(trait_id);
+    is_frame_support_path(&trait_path)
+        && (trait_path.ends_with("::Hooks")
+            || (trait_path.ends_with("::OnRuntimeUpgrade")
+                && !trait_path.ends_with("::UncheckedOnRuntimeUpgrade")))
 }
 
 fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {

@@ -84,6 +84,7 @@ cat > "$FIXTURE" <<'RS'
 
 use std::ops::Add;
 use std::convert::Infallible;
+use crate::frame_support::dispatch::Dispatchable;
 use crate::frame_support::traits::EnsureOrigin;
 
 pub type Payload = Vec<u8>;
@@ -348,6 +349,15 @@ pub mod unrelated_event {
 }
 
 pub mod frame_support {
+    pub struct Identity;
+    pub struct Blake2_128Concat;
+
+    pub mod dispatch {
+        pub trait Dispatchable {
+            fn dispatch_bypass_filter(&self);
+        }
+    }
+
     pub mod storage {
         pub fn with_storage_layer<T, E, F>(f: F) -> Result<T, E>
         where
@@ -362,7 +372,15 @@ pub mod frame_support {
 
         pub mod types {
             pub struct StorageValue<K, V>(K, V);
-            pub struct StorageMap;
+            pub struct StorageMap<P = (), H = (), K = (), V = ()>(P, H, K, V);
+            pub struct StorageDoubleMap<P = (), H1 = (), K1 = (), H2 = (), K2 = (), V = ()>(
+                P,
+                H1,
+                K1,
+                H2,
+                K2,
+                V,
+            );
 
             impl StorageMap {
                 pub fn iter() -> std::vec::IntoIter<u8> {
@@ -372,6 +390,10 @@ pub mod frame_support {
                 pub fn clear_prefix<K>(_key: K, _limit: Option<u32>) {}
 
                 pub fn put() {}
+
+                pub fn insert() {}
+
+                pub fn remove() {}
 
                 pub fn kill() {}
             }
@@ -396,6 +418,14 @@ pub mod frame_support {
         }
 
         pub struct Currency;
+
+        pub struct StorageVersion;
+
+        impl StorageVersion {
+            pub fn get() -> u16 {
+                0
+            }
+        }
 
         impl Currency {
             pub fn repatriate_reserved() -> Result<Balance, ()> {
@@ -471,6 +501,35 @@ pub type WhitespaceStorage = frame_support::storage::types::StorageValue<(), Pay
 
 pub type UnrelatedStorage = frame_support::storage::types::StorageValue<(), Payload>;
 
+pub type AliasIndex = u32;
+
+#[pallet::storage]
+pub type AliasIdentityKey = frame_support::storage::types::StorageMap<
+    (),
+    frame_support::Identity,
+    AliasIndex,
+    (),
+>;
+
+/// Ring buffer holding imported block positions.
+#[pallet::storage]
+pub type DocumentedIdentityIndex = frame_support::storage::types::StorageMap<
+    (),
+    frame_support::Identity,
+    u32,
+    (),
+>;
+
+#[pallet::storage]
+pub type DoubleIdentityKey = frame_support::storage::types::StorageDoubleMap<
+    (),
+    frame_support::Blake2_128Concat,
+    u32,
+    frame_support::Identity,
+    u64,
+    (),
+>;
+
 pub struct Domain;
 
 impl Domain {
@@ -494,6 +553,32 @@ impl RuntimeCall {
     pub fn decode_with_depth_limit(_limit: usize, _input: &mut &[u8]) -> Result<Self, ()> {
         Ok(RuntimeCall)
     }
+}
+
+impl frame_support::dispatch::Dispatchable for RuntimeCall {
+    fn dispatch_bypass_filter(&self) {}
+}
+
+pub mod unrelated_dispatch {
+    pub struct Call;
+
+    impl Call {
+        pub fn dispatch_bypass_filter(&self) {}
+    }
+}
+
+pub fn unguarded_dispatch_bypass(call: RuntimeCall) {
+    call.dispatch_bypass_filter();
+}
+
+pub fn root_guarded_dispatch_bypass(origin: Origin, call: RuntimeCall) {
+    if frame_system::ensure_root(origin).is_ok() {
+        call.dispatch_bypass_filter();
+    }
+}
+
+pub fn unrelated_dispatch_bypass(call: unrelated_dispatch::Call) {
+    call.dispatch_bypass_filter();
 }
 
 impl MigrationState {
@@ -773,6 +858,53 @@ pub struct UncheckedMigration;
 impl frame_support::traits::UncheckedOnRuntimeUpgrade for UncheckedMigration {
     fn on_runtime_upgrade() {
         let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+pub struct UnguardedStorageMigration;
+
+impl frame_support::traits::OnRuntimeUpgrade for UnguardedStorageMigration {
+    fn on_runtime_upgrade() {
+        frame_support::storage::types::StorageMap::put();
+    }
+}
+
+pub struct VersionGuardedStorageMigration;
+
+impl frame_support::traits::OnRuntimeUpgrade for VersionGuardedStorageMigration {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::traits::StorageVersion::get();
+        frame_support::storage::types::StorageMap::put();
+    }
+}
+
+pub struct HookStorageMigration;
+
+impl frame_support::traits::Hooks for HookStorageMigration {
+    fn on_runtime_upgrade() {
+        frame_support::storage::types::StorageMap::put();
+    }
+}
+
+pub struct UncheckedStorageMigration;
+
+impl frame_support::traits::UncheckedOnRuntimeUpgrade for UncheckedStorageMigration {
+    fn on_runtime_upgrade() {
+        frame_support::storage::types::StorageMap::put();
+    }
+}
+
+pub mod unrelated_migration {
+    pub trait OnRuntimeUpgrade {
+        fn on_runtime_upgrade();
+    }
+}
+
+pub struct UnrelatedStorageMigration;
+
+impl unrelated_migration::OnRuntimeUpgrade for UnrelatedStorageMigration {
+    fn on_runtime_upgrade() {
+        frame_support::storage::types::StorageMap::put();
     }
 }
 
@@ -1436,6 +1568,9 @@ SEC010 = true
 SEC011 = true
 SEC012 = true
 SEC013 = true
+SEC014 = true
+SEC015 = true
+SEC016 = true
 SEC017 = true
 SEC018 = true
 TOML
@@ -1449,7 +1584,7 @@ RUSTC_RULE_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-rule-filtered.json"
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
   "$WORK_DIR" \
-  --rules SEC001,SEC002,SEC003,SEC006,SEC007,SEC008,SEC009,SEC010,SEC011,SEC012,SEC013,SEC017,SEC018 \
+  --rules SEC001,SEC002,SEC003,SEC006,SEC007,SEC008,SEC009,SEC010,SEC011,SEC012,SEC013,SEC014,SEC015,SEC016,SEC017,SEC018 \
   -f json > "$SYN_JSON"
 
 cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
@@ -1502,6 +1637,9 @@ syn_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$SYN_JSO
 syn_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$SYN_JSON")"
 syn_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$SYN_JSON")"
 syn_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYN_JSON")"
+syn_sec014_count="$(jq '[.[] | select(.rule_id == "SEC014")] | length' "$SYN_JSON")"
+syn_sec015_count="$(jq '[.[] | select(.rule_id == "SEC015")] | length' "$SYN_JSON")"
+syn_sec016_count="$(jq '[.[] | select(.rule_id == "SEC016")] | length' "$SYN_JSON")"
 syn_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$SYN_JSON")"
 syn_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$SYN_JSON")"
 rustc_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$RUSTC_JSON")"
@@ -1515,6 +1653,9 @@ rustc_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$RUSTC
 rustc_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC_JSON")"
 rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_JSON")"
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
+rustc_sec014_count="$(jq '[.[] | select(.rule_id == "SEC014")] | length' "$RUSTC_JSON")"
+rustc_sec015_count="$(jq '[.[] | select(.rule_id == "SEC015")] | length' "$RUSTC_JSON")"
+rustc_sec016_count="$(jq '[.[] | select(.rule_id == "SEC016")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
 guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
@@ -1617,6 +1758,22 @@ discarded_non_result_line="$(grep -n 'pub fn discarded_non_result' "$FIXTURE" | 
 rustc_sec007_fallible_count="$(jq --argjson line "$discarded_fallible_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec007_unit_error_count="$(jq --argjson line "$discarded_unit_error_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec007_non_result_count="$(jq --argjson line "$discarded_non_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+unguarded_dispatch_bypass_line="$(grep -n 'pub fn unguarded_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
+root_guarded_dispatch_bypass_line="$(grep -n 'pub fn root_guarded_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
+unrelated_dispatch_bypass_line="$(grep -n 'pub fn unrelated_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
+rustc_sec015_unguarded_count="$(jq --argjson line "$unguarded_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+rustc_sec015_root_guarded_count="$(jq --argjson line "$root_guarded_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
+rustc_sec015_unrelated_count="$(jq --argjson line "$unrelated_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+unguarded_storage_migration_line="$(grep -n 'pub struct UnguardedStorageMigration' "$FIXTURE" | cut -d: -f1)"
+version_guarded_storage_migration_line="$(grep -n 'pub struct VersionGuardedStorageMigration' "$FIXTURE" | cut -d: -f1)"
+hook_storage_migration_line="$(grep -n 'pub struct HookStorageMigration' "$FIXTURE" | cut -d: -f1)"
+unchecked_storage_migration_line="$(grep -n 'pub struct UncheckedStorageMigration' "$FIXTURE" | cut -d: -f1)"
+unrelated_storage_migration_line="$(grep -n 'pub struct UnrelatedStorageMigration' "$FIXTURE" | cut -d: -f1)"
+rustc_sec016_unguarded_count="$(jq --argjson line "$unguarded_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
+rustc_sec016_version_guarded_count="$(jq --argjson line "$version_guarded_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
+rustc_sec016_hook_count="$(jq --argjson line "$hook_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
+rustc_sec016_unchecked_count="$(jq --argjson line "$unchecked_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
+rustc_sec016_unrelated_count="$(jq --argjson line "$unrelated_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
 structural_recursive_decode_line="$(grep -n 'pub fn decode_structural_recursive' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_structural_recursive_count="$(jq --argjson line "$structural_recursive_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
@@ -1627,6 +1784,9 @@ literal_bound_input_line="$(grep -n 'pub fn literal_bound_input_vec' "$FIXTURE" 
 fixed_bound_weight_line="$(grep -n 'pub fn fixed_bound_weight' "$FIXTURE" | cut -d: -f1)"
 unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
+alias_identity_key_line="$(grep -n 'pub type AliasIdentityKey' "$FIXTURE" | cut -d: -f1)"
+documented_identity_index_line="$(grep -n 'pub type DocumentedIdentityIndex' "$FIXTURE" | cut -d: -f1)"
+double_identity_key_line="$(grep -n 'pub type DoubleIdentityKey' "$FIXTURE" | cut -d: -f1)"
 whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 unemitted_event_field_line="$(grep -n 'Unemitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
 internal_payload_event_field_line="$(grep -n 'InternalPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
@@ -1654,6 +1814,9 @@ rustc_sec018_fixed_bound_weight_count="$(jq --argjson line "$fixed_bound_weight_
 rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dispatchable_attribute_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_whitespace_storage_count="$(jq --argjson line "$whitespace_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec014_alias_count="$(jq --argjson line "$alias_identity_key_line" '[.[] | select(.rule_id == "SEC014" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
+rustc_sec014_documented_count="$(jq --argjson line "$documented_identity_index_line" '[.[] | select(.rule_id == "SEC014" and .line >= ($line - 1) and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
+rustc_sec014_double_count="$(jq --argjson line "$double_identity_key_line" '[.[] | select(.rule_id == "SEC014" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 rustc_sec017_whitespace_event_count="$(jq --argjson line "$whitespace_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_unemitted_event_count="$(jq --argjson line "$unemitted_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec017_internal_payload_event_count="$(jq --argjson line "$internal_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1736,6 +1899,12 @@ echo "syntax SEC012 findings: $syn_sec012_count"
 echo "rustc SEC012 findings: $rustc_sec012_count"
 echo "syntax SEC013 findings: $syn_sec013_count"
 echo "rustc SEC013 findings: $rustc_sec013_count"
+echo "syntax SEC014 findings: $syn_sec014_count"
+echo "rustc SEC014 findings: $rustc_sec014_count"
+echo "syntax SEC015 findings: $syn_sec015_count"
+echo "rustc SEC015 findings: $rustc_sec015_count"
+echo "syntax SEC016 findings: $syn_sec016_count"
+echo "rustc SEC016 findings: $rustc_sec016_count"
 echo "syntax SEC017 findings: $syn_sec017_count"
 echo "rustc SEC017 findings: $rustc_sec017_count"
 echo "syntax SEC018 findings: $syn_sec018_count"
@@ -1843,6 +2012,23 @@ test "$rustc_sec012_match_bounded_count" = "0"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "2"
 test "$rustc_sec013_whitespace_storage_count" = "1"
+test "$syn_sec014_count" = "1"
+test "$rustc_sec014_count" = "2"
+test "$rustc_sec014_alias_count" = "1"
+test "$rustc_sec014_documented_count" = "0"
+test "$rustc_sec014_double_count" = "1"
+test "$syn_sec015_count" = "2"
+test "$rustc_sec015_count" = "1"
+test "$rustc_sec015_unguarded_count" = "1"
+test "$rustc_sec015_root_guarded_count" = "0"
+test "$rustc_sec015_unrelated_count" = "0"
+test "$syn_sec016_count" = "3"
+test "$rustc_sec016_count" = "2"
+test "$rustc_sec016_unguarded_count" = "1"
+test "$rustc_sec016_version_guarded_count" = "0"
+test "$rustc_sec016_hook_count" = "1"
+test "$rustc_sec016_unchecked_count" = "0"
+test "$rustc_sec016_unrelated_count" = "0"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "7"
 test "$rustc_sec017_whitespace_event_count" = "1"
@@ -1867,7 +2053,7 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "74"
+test "$rustc_filtered_count" = "79"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"

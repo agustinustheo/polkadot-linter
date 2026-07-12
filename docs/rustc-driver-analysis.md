@@ -72,6 +72,16 @@ The driver currently includes typed checks for:
   unioned, including when an input reaches a direct local helper,
   `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
   calls, while filtering macro-generated attribute-line spans.
+- `SEC004`: raw arithmetic in weight attributes. The rustc-backed
+  implementation captures pre-expansion `#[pallet::weight]` spans, then reports
+  only typed integer or `Weight` `+`/`*` operators that originate from the
+  macro-expanded `GetDispatchInfo` expression. Saturating methods and operators
+  outside a weight attribute are excluded.
+- `SEC005`: expensive weight calculations. The rustc-backed implementation
+  captures pre-expansion `#[pallet::weight]` spans, resolves FRAME storage
+  reads, and evaluates typed HIR calls to the established
+  `get_dispatch_info`/SCALE encoding APIs. Configuration `Get::get` calls are
+  not storage reads and are excluded.
 - `SEC006`: unchecked reserved-balance repatriation. The rustc-backed
   implementation resolves FRAME's `ReservableCurrency::repatriate_reserved`
   method, reports discarded remaining balances, and tracks a local result until
@@ -146,6 +156,26 @@ The driver currently includes typed checks for:
   the resolved owner and value type; the marker is constrained to that alias.
   Payloads hidden behind a `Vec<T>` alias
   are reported while bounded wrappers and unbounded keys are skipped.
+- `SEC014`: identity hashers on common storage keys. The rustc-backed
+  implementation reads resolved FRAME storage alias generics, including key
+  type aliases, and reports `Identity` only when it resolves to a common
+  numeric/balance/block-number key. Documented internal numeric layouts remain
+  excluded through crate-root attribute metadata. Non-FRAME storage aliases and
+  broader key-entropy reasoning remain out of scope.
+- `SEC015`: dispatch-filter bypasses. The rustc-backed implementation resolves
+  FRAME's `Dispatchable::dispatch_bypass_filter` method and reports it only in
+  a reachable public or hook path that is outside a resolved
+  `frame_system::ensure_root(...).is_ok()` branch. Same-named unrelated methods
+  and a verified root-guarded branch are excluded. Early-return root guards and
+  interprocedural authorization evidence remain out of scope.
+- `SEC016`: missing storage-version guards in runtime upgrades. The
+  rustc-backed implementation restricts analysis to resolved FRAME
+  `OnRuntimeUpgrade` and `Hooks::on_runtime_upgrade` implementations, excludes
+  `UncheckedOnRuntimeUpgrade`, and reports a resolved FRAME storage write only when no resolved
+  `StorageVersion`, `on_chain_storage_version`, or `in_code_storage_version`
+  check occurs in the body. Unrelated traits with the same method name are
+  excluded. Idempotent reconciliation and interprocedural migration guards
+  remain out of scope.
 - `SEC017`: unbounded event payloads. The rustc-backed implementation visits
   source-linked FRAME event enums and reads resolved field types, so aliases to
   `Vec<T>` are candidates while bounded wrappers such as `BoundedVec` and
@@ -221,6 +251,16 @@ driver:
 - for `SEC013`, the syntax path misses a `#[pallet::storage]` alias whose value
   type is another alias to `Vec`, while the rustc-driver path resolves the value
   alias and reports it while skipping a bounded storage alias
+- for `SEC014`, the syntax path misses an `Identity` storage key hidden behind a
+  `u32` alias, while the rustc-driver resolves and reports it, retains an
+  equivalent double-map key, and skips a documented internal numeric index
+- for `SEC015`, the syntax path reports both the unguarded and root-guarded
+  FRAME bypasses, while the rustc-driver reports only the unguarded resolved
+  FRAME call and also skips an unrelated same-named method
+- for `SEC016`, the syntax path reports unguarded FRAME runtime-upgrade variants
+  and an unrelated trait method with the same name, while the rustc-driver
+  reports only the resolved FRAME upgrades and skips a resolved storage-version
+  guard and `UncheckedOnRuntimeUpgrade`
 - for `SEC017`, the syntax path misses an event payload behind a `Payload`
   alias, while the rustc-driver path resolves the alias and reports it only
   after a reachable constructor receives that unbounded input, while skipping
@@ -259,8 +299,8 @@ Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
 `RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
 back into the public diagnostic format. When `--compiler-backed-rules` is not
 specified, the CLI expands the requested rule filters to the migrated
-compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC006`, `SEC007`, `SEC008`, `SEC009`,
-`SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
+compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC004`, `SEC005`, `SEC006`, `SEC007`, `SEC008`, `SEC009`,
+`SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC014`, `SEC015`, `SEC016`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
 passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
 JSONL file named by `POLKADOT_LINTER_RUSTC_JSONL`. Diagnostics are sorted and
@@ -304,6 +344,30 @@ resolving `<T as Config>::RuntimeCall`. The rustc-backed summary is checked
 against `benchmarks/polkadot-sdk-rustc-pallet-xcm-sec003-baseline.tsv`, and
 the public CLI run relies on default compiler-backed routing rather than
 `--no-syntax`.
+
+Run the SDK `SEC004` weight-arithmetic baseline with:
+
+```sh
+scripts/check-rustc-sdk-sec004.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-collective` package has no package-local raw-weight
+arithmetic candidate, so this is an exact zero baseline. The accompanying
+`check-rustc-sec004-weight-attribute.sh` macro fixture provides the precision
+comparison: it reports raw integer `+` in a macro-expanded
+`#[pallet::weight]` expression and excludes `saturating_add` on the adjacent
+attribute.
+
+Run the SDK `SEC005` expensive-weight baseline with:
+
+```sh
+scripts/check-rustc-sdk-sec005.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-collective` package supplies two compiler-backed findings:
+the `proposal.get_dispatch_info()` expressions at lines 633 and 685. The
+macro fixture proves that a resolved FRAME-shaped storage read and typed
+`get_dispatch_info` call are retained while a configuration `get` is excluded.
 
 Run the SDK `SEC009` precision check with:
 
@@ -358,6 +422,43 @@ values. The syntax path reports an additional false positive because
 `StorageMap` value generic and emits only the three stored values. The output
 is checked against `benchmarks/polkadot-sdk-rustc-session-sec013-baseline.tsv`.
 
+Run the SDK `SEC014` identity-hasher baseline with:
+
+```sh
+scripts/check-rustc-sdk-sec014.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-collective` package has no `Identity` common-key candidate,
+so both paths retain the zero baseline. The typed hard-rule fixture supplies
+the precision comparison by resolving an aliased `u32` key that syntax misses
+while retaining a direct double-map key and skipping a documented index.
+
+Run the SDK `SEC015` dispatch-bypass baseline with:
+
+```sh
+scripts/check-rustc-sdk-sec015.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-collective` package has no package-local SEC015 candidate,
+so this is an exact zero baseline rather than an SDK precision comparison. The
+focused hard-rule fixture supplies the semantic regression coverage: it retains
+an unguarded resolved FRAME bypass while skipping a resolved root-guarded call
+and an unrelated same-named method. The zero result is checked against
+`benchmarks/polkadot-sdk-rustc-collective-sec015-baseline.tsv`.
+
+Run the SDK `SEC016` migration baseline with:
+
+```sh
+scripts/check-rustc-sdk-sec016.sh .repos/polkadot-sdk .benchmarks
+```
+
+The pinned `pallet-bags-list` package supplies a true-positive migration at
+`migrations.rs:105`. The compiler-backed route resolves the FRAME
+`OnRuntimeUpgrade` trait and macro-generated storage alias write before
+reporting it. Because the diagnostic source is a nested module, the benchmark
+includes both the crate root and target module in its source filter. The output
+is checked against `benchmarks/polkadot-sdk-rustc-bags-list-sec016-baseline.tsv`.
+
 Run the SDK `SEC017` event coverage check with:
 
 ```sh
@@ -391,10 +492,11 @@ while the compiler-backed route resolves `RawValues::<T, I>::clear_prefix` and
 reports the unbounded deletion limit at line 440. The output is checked against
 `benchmarks/polkadot-sdk-rustc-oracle-sec012-baseline.tsv`.
 
-The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
-the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
-SDK precision baseline, the multisig `SEC011` migration coverage baseline, and
-the contracts `SEC018` macro-recovery baseline
-and session `SEC013` storage-value and root-offences `SEC017` event baselines
-and multisig `SEC008` panic and oracle `SEC012` clear-prefix baselines after
-the default stable build.
+The CI workflow runs the hard-rule fixtures, the multisig SDK smoke baseline,
+the `pallet-xcm` `SEC003` coverage baseline, the collective `SEC004` zero
+baseline, `SEC005` expensive-weight baseline, and `SEC009` precision baseline, the multisig `SEC011` migration
+coverage baseline, the contracts `SEC018` macro-recovery baseline, session
+`SEC013` storage-value baseline, collective `SEC014` identity-hasher and
+`SEC015` dispatch-bypass zero baselines, bags-list `SEC016` migration baseline,
+root-offences `SEC017` event baseline, and multisig `SEC008` panic and oracle
+`SEC012` clear-prefix baselines after the default stable build.
