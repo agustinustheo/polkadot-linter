@@ -94,6 +94,7 @@ pub struct Origin;
 
 pub trait Config {
     type AdminOrigin: frame_support::traits::EnsureOrigin;
+    type AnyOrigin: frame_support::traits::EnsureOrigin;
 }
 
 pub trait Encode {
@@ -254,6 +255,19 @@ pub fn privileged_config_vec<T: Config>(origin: Origin, payload: Payload) {
     let _ = payload;
 }
 
+#[pallet::call_index(5)] #[pallet::weight(WeightInfo::unknown_origin())]
+pub fn unknown_config_origin_vec<T: Config>(origin: Origin, payload: Payload) {
+    let _ = T::AnyOrigin::ensure_origin(origin);
+    let _ = payload;
+}
+
+#[pallet::call_index(4)]
+#[pallet::weight(WeightInfo::comment_only(/* commented_weight_input.len() */))]
+pub fn comment_only_weight_input(origin: Origin, commented_weight_input: Payload) {
+    let _ = frame_system::ensure_root(origin);
+    let _ = commented_weight_input;
+}
+
 #[pallet::weight(WeightInfo::submit_bounded())]
 pub fn weighted_bounded(payload: BoundedPayload) {
     let _ = payload;
@@ -265,6 +279,17 @@ fn helper_vec(payload: Vec<u8>) {
 
 pub fn storage_iteration() {
     let _ = frame_support::storage::types::StorageMap::iter();
+}
+
+pub fn bounded_storage_iteration() {
+    let bounded_storage_iteration = frame_support::storage::types::StorageMap::iter().take(10);
+    let _ = bounded_storage_iteration;
+}
+
+pub fn dynamically_capped_storage_iteration(limit: usize) {
+    let dynamically_capped_storage_iteration =
+        frame_support::storage::types::StorageMap::iter().take(limit);
+    let _ = dynamically_capped_storage_iteration;
 }
 
 pub fn storage_iteration_via_private_helper() {
@@ -734,10 +759,19 @@ conditional_clean_assignment_decode_line="$(grep -n 'decoded_after_conditional =
 rustc_sec003_conditional_clean_assignment_count="$(jq --argjson line "$conditional_clean_assignment_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
+unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
+comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_comment_only_weight_input_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
+bounded_storage_iteration_line="$(grep -n 'let bounded_storage_iteration =' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_bounded_iteration_count="$(jq --argjson line "$bounded_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
+dynamically_capped_storage_iteration_line="$(grep -n 'frame_support::storage::types::StorageMap::iter().take(limit)' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_dynamic_iteration_count="$(jq --argjson line "$dynamically_capped_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
@@ -769,9 +803,10 @@ echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec001_count" = "0"
-test "$rustc_sec001_count" = "1"
+test "$rustc_sec001_count" = "2"
 test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
+test "$rustc_sec001_unknown_config_origin_count" = "1"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
 test "$syn_sec003_count" = "8"
@@ -792,7 +827,9 @@ test "$rustc_sec009_guarded_subtraction_count" = "0"
 test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
 test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
 test "$syn_sec011_count" = "1"
-test "$rustc_sec011_count" = "8"
+test "$rustc_sec011_count" = "9"
+test "$rustc_sec011_bounded_iteration_count" = "0"
+test "$rustc_sec011_dynamic_iteration_count" = "1"
 test "$syn_sec012_count" = "6"
 test "$rustc_sec012_count" = "3"
 test "$syn_sec013_count" = "0"
@@ -800,10 +837,12 @@ test "$rustc_sec013_count" = "1"
 test "$syn_sec017_count" = "0"
 test "$rustc_sec017_count" = "1"
 test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "3"
+test "$rustc_sec018_count" = "5"
 test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
-test "$rustc_filtered_count" = "34"
+test "$rustc_sec018_unknown_config_origin_count" = "1"
+test "$rustc_sec018_comment_only_weight_input_count" = "1"
+test "$rustc_filtered_count" = "38"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "6"
 test "$rustc_rule_filtered_sec008_count" = "4"
