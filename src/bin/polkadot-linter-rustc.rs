@@ -16,6 +16,7 @@ use std::{
     process,
 };
 
+use rustc_ast::visit as ast_visit;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
     def::Res,
@@ -24,6 +25,7 @@ use rustc_hir::{
     Arm, BinOpKind, Block, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind,
     QPath, StmtKind,
 };
+use rustc_interface::interface::Compiler;
 use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
 use serde::Serialize;
@@ -48,9 +50,45 @@ struct PolkadotCallbacks {
     diagnostics: Vec<RustcDiagnostic>,
     continue_compilation: bool,
     enabled_rules: HashSet<String>,
+    parsed_weight_attributes: Vec<ParsedWeightAttribute>,
+    parsed_item_attributes: Vec<ParsedItemAttributes>,
+}
+
+#[derive(Clone)]
+struct ParsedWeightAttribute {
+    function_name: String,
+    file: String,
+    line: usize,
+    attribute_source: String,
+    deprecated: bool,
+    has_call_index: bool,
+}
+
+#[derive(Clone)]
+struct ParsedItemAttributes {
+    item_name: String,
+    file: String,
+    line: usize,
+    storage: bool,
+    unbounded: bool,
+    event: bool,
 }
 
 impl Callbacks for PolkadotCallbacks {
+    fn after_crate_root_parsing(
+        &mut self,
+        compiler: &Compiler,
+        krate: &mut rustc_ast::ast::Crate,
+    ) -> Compilation {
+        let mut visitor = ParsedWeightAttributeVisitor {
+            source_map: compiler.sess.source_map(),
+            parsed_attributes: &mut self.parsed_weight_attributes,
+            parsed_item_attributes: &mut self.parsed_item_attributes,
+        };
+        ast_visit::walk_crate(&mut visitor, krate);
+        Compilation::Continue
+    }
+
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &rustc_interface::interface::Compiler,
@@ -64,10 +102,20 @@ impl Callbacks for PolkadotCallbacks {
             };
         }
         if self.rule_enabled("SEC013") {
-            report_unbounded_storage_aliases(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+            report_unbounded_storage_aliases(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_item_attributes,
+                &mut self.diagnostics,
+            );
         }
         if self.rule_enabled("SEC017") {
-            report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+            report_vec_event_fields(
+                tcx,
+                tcx.sess.source_map(),
+                &self.parsed_item_attributes,
+                &mut self.diagnostics,
+            );
         }
         let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
             || self.rule_enabled("SEC008")
@@ -138,6 +186,7 @@ impl Callbacks for PolkadotCallbacks {
                     def_id,
                     body,
                     tcx.sess.source_map(),
+                    &self.parsed_weight_attributes,
                     &mut self.diagnostics,
                 );
             }
@@ -148,6 +197,7 @@ impl Callbacks for PolkadotCallbacks {
                     def_id,
                     body,
                     tcx.sess.source_map(),
+                    &self.parsed_weight_attributes,
                     &mut self.diagnostics,
                 );
             }
@@ -638,13 +688,26 @@ impl PolkadotCallbacks {
 fn report_unbounded_storage_aliases<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
         if !matches!(item.kind, ItemKind::TyAlias(..))
-            || !is_frame_storage_alias(tcx, item.owner_id.def_id, item.hir_id(), source_map)
-            || is_explicitly_unbounded_storage(tcx, item.owner_id.def_id, item.hir_id(), source_map)
+            || !is_frame_storage_alias(
+                tcx,
+                item.owner_id.def_id,
+                item.hir_id(),
+                source_map,
+                parsed_item_attributes,
+            )
+            || is_explicitly_unbounded_storage(
+                tcx,
+                item.owner_id.def_id,
+                item.hir_id(),
+                source_map,
+                parsed_item_attributes,
+            )
         {
             continue;
         }
@@ -708,8 +771,12 @@ fn is_frame_storage_alias(
     def_id: LocalDefId,
     hir_id: rustc_hir::HirId,
     source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
 ) -> bool {
     has_hir_attr(tcx, hir_id, &["pallet", "storage"])
+        || parsed_item_attributes_match(tcx, def_id, source_map, parsed_item_attributes, |attrs| {
+            attrs.storage
+        })
         || source_prefix_before_definition(tcx, def_id, source_map).is_some_and(|prefix| {
             prefix
                 .rfind("#[pallet::storage]")
@@ -722,8 +789,12 @@ fn is_explicitly_unbounded_storage(
     def_id: LocalDefId,
     hir_id: rustc_hir::HirId,
     source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
 ) -> bool {
     has_hir_attr(tcx, hir_id, &["pallet", "unbounded"])
+        || parsed_item_attributes_match(tcx, def_id, source_map, parsed_item_attributes, |attrs| {
+            attrs.unbounded
+        })
         || source_prefix_before_definition(tcx, def_id, source_map).is_some_and(|prefix| {
             prefix
                 .rfind("#[pallet::unbounded]")
@@ -734,6 +805,7 @@ fn is_explicitly_unbounded_storage(
 fn report_vec_event_fields<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     for item_id in tcx.hir_free_items() {
@@ -741,7 +813,13 @@ fn report_vec_event_fields<'tcx>(
         let ItemKind::Enum(_, _, enum_def) = item.kind else {
             continue;
         };
-        if !is_frame_event(tcx, item.owner_id.def_id, item.hir_id(), source_map) {
+        if !is_frame_event(
+            tcx,
+            item.owner_id.def_id,
+            item.hir_id(),
+            source_map,
+            parsed_item_attributes,
+        ) {
             continue;
         }
 
@@ -769,8 +847,14 @@ fn is_frame_event(
     def_id: LocalDefId,
     hir_id: rustc_hir::HirId,
     source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
 ) -> bool {
     if has_hir_attr(tcx, hir_id, &["pallet", "event"]) {
+        return true;
+    }
+    if parsed_item_attributes_match(tcx, def_id, source_map, parsed_item_attributes, |attrs| {
+        attrs.event
+    }) {
         return true;
     }
 
@@ -785,14 +869,37 @@ fn is_frame_event(
         && tcx.def_path_str(def_id.to_def_id()).ends_with("::Event")
 }
 
+fn parsed_item_attributes_match(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    parsed_item_attributes: &[ParsedItemAttributes],
+    predicate: impl Fn(&ParsedItemAttributes) -> bool,
+) -> bool {
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let location = source_map.lookup_char_pos(definition_span.lo());
+    let file = location.file.name.prefer_local().to_string();
+    let name = tcx.item_name(def_id.to_def_id());
+    parsed_item_attributes.iter().any(|attributes| {
+        attributes.item_name == name.as_str()
+            && attributes.file == file
+            && attributes.line == location.line
+            && predicate(attributes)
+    })
+}
+
 fn report_unbounded_public_vec_inputs<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
     body: &'tcx rustc_hir::Body<'tcx>,
     source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
-    if !tcx.local_visibility(def_id).is_public() || !is_frame_dispatchable(tcx, def_id, source_map)
+    if !tcx.local_visibility(def_id).is_public()
+        || !is_frame_dispatchable(tcx, def_id, source_map, parsed_weight_attributes)
     {
         return;
     }
@@ -984,13 +1091,16 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
     def_id: LocalDefId,
     body: &'tcx rustc_hir::Body<'tcx>,
     source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     if !tcx.local_visibility(def_id).is_public() {
         return;
     }
 
-    let Some(weight_attributes) = pallet_weight_attributes(tcx, def_id, source_map) else {
+    let Some(weight_attributes) =
+        pallet_weight_attributes(tcx, def_id, source_map, parsed_weight_attributes)
+    else {
         return;
     };
     if has_hir_attr(tcx, tcx.local_def_id_to_hir_id(def_id), &["deprecated"])
@@ -1037,7 +1147,29 @@ fn pallet_weight_attributes(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
     source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
 ) -> Option<PalletWeightAttributes> {
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let definition_location = source_map.lookup_char_pos(definition_span.lo());
+    let definition_file = definition_location.file.name.prefer_local().to_string();
+    let definition_line = definition_location.line;
+    let function_name = tcx.item_name(def_id.to_def_id());
+    if let Some(attributes) = parsed_weight_attributes
+        .iter()
+        .find(|attribute| {
+            attribute.function_name == function_name.as_str()
+                && attribute.file == definition_file
+                && attribute.line == definition_line
+        })
+        .and_then(|attribute| {
+            parse_pallet_weight_attributes(&attribute.attribute_source, attribute.deprecated)
+        })
+    {
+        return Some(attributes);
+    }
+
     let prefix = source_prefix_before_definition(tcx, def_id, source_map)?;
     let start = prefix.rfind("#[pallet::weight")?;
     let attribute_block = &prefix[start..];
@@ -1046,14 +1178,122 @@ fn pallet_weight_attributes(
     }
     let attribute = balanced_attribute(attribute_block)?;
 
+    parse_pallet_weight_attributes(attribute, attribute_block.contains("#[deprecated"))
+}
+
+fn parse_pallet_weight_attributes(
+    attribute: &str,
+    deprecated: bool,
+) -> Option<PalletWeightAttributes> {
     let attributes = syn::Attribute::parse_outer.parse_str(attribute).ok()?;
     let weight_attribute = attributes
         .iter()
         .find(|attr| syn_path_matches(attr.path(), &["pallet", "weight"]))?;
     Some(PalletWeightAttributes {
         expression: weight_attribute.parse_args().ok()?,
-        deprecated: attribute_block.contains("#[deprecated"),
+        deprecated,
     })
+}
+
+struct ParsedWeightAttributeVisitor<'a> {
+    source_map: &'a SourceMap,
+    parsed_attributes: &'a mut Vec<ParsedWeightAttribute>,
+    parsed_item_attributes: &'a mut Vec<ParsedItemAttributes>,
+}
+
+impl ParsedWeightAttributeVisitor<'_> {
+    fn collect_function(
+        &mut self,
+        function_name: &str,
+        span: Span,
+        attributes: &[rustc_ast::ast::Attribute],
+    ) {
+        let Some(weight_attribute) = attributes.iter().find(|attribute| {
+            matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "weight"]))
+        }) else {
+            return;
+        };
+        let Ok(attribute_source) = self.source_map.span_to_snippet(weight_attribute.span) else {
+            return;
+        };
+        let location = self.source_map.lookup_char_pos(span.lo());
+        self.parsed_attributes.push(ParsedWeightAttribute {
+            function_name: function_name.to_string(),
+            file: location.file.name.prefer_local().to_string(),
+            line: location.line,
+            attribute_source,
+            deprecated: attributes.iter().any(|attribute| {
+                matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["deprecated"]))
+            }),
+            has_call_index: attributes.iter().any(|attribute| {
+                matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "call_index"]))
+            }),
+        });
+    }
+
+    fn collect_item_attributes(&mut self, item: &rustc_ast::ast::Item) {
+        let item_name = match &item.kind {
+            rustc_ast::ast::ItemKind::TyAlias(alias) => alias.ident.name.as_str(),
+            rustc_ast::ast::ItemKind::Enum(ident, ..) => ident.name.as_str(),
+            _ => return,
+        };
+        let storage = item.attrs.iter().any(|attribute| {
+            matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "storage"]))
+        });
+        let unbounded = item.attrs.iter().any(|attribute| {
+            matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "unbounded"]))
+        });
+        let event = item.attrs.iter().any(|attribute| {
+            matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "event"]))
+        });
+        if !(storage || unbounded || event) {
+            return;
+        }
+        let location = self.source_map.lookup_char_pos(item.span.lo());
+        self.parsed_item_attributes.push(ParsedItemAttributes {
+            item_name: item_name.to_string(),
+            file: location.file.name.prefer_local().to_string(),
+            line: location.line,
+            storage,
+            unbounded,
+            event,
+        });
+    }
+}
+
+impl<'ast> ast_visit::Visitor<'ast> for ParsedWeightAttributeVisitor<'_> {
+    type Result = ();
+
+    fn visit_item(&mut self, item: &'ast rustc_ast::ast::Item) -> Self::Result {
+        if matches!(
+            item.kind,
+            rustc_ast::ast::ItemKind::TyAlias(..) | rustc_ast::ast::ItemKind::Enum(..)
+        ) {
+            self.collect_item_attributes(item);
+        }
+        if let rustc_ast::ast::ItemKind::Fn(function) = &item.kind {
+            self.collect_function(function.ident.name.as_str(), item.span, &item.attrs);
+        }
+        ast_visit::walk_item(self, item)
+    }
+
+    fn visit_assoc_item(
+        &mut self,
+        item: &'ast rustc_ast::ast::AssocItem,
+        context: ast_visit::AssocCtxt,
+    ) -> Self::Result {
+        if let rustc_ast::ast::AssocItemKind::Fn(function) = &item.kind {
+            self.collect_function(function.ident.name.as_str(), item.span, &item.attrs);
+        }
+        ast_visit::walk_assoc_item(self, item, context)
+    }
+}
+
+fn ast_path_matches(path: &rustc_ast::Path, expected: &[&str]) -> bool {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.name.as_str())
+        .eq(expected.iter().copied())
 }
 
 fn attribute_block_belongs_to_definition(attribute_block: &str) -> bool {
@@ -1080,7 +1320,28 @@ fn syn_path_matches(path: &syn::Path, expected: &[&str]) -> bool {
         .eq(expected.iter().map(|segment| (*segment).to_string()))
 }
 
-fn is_frame_dispatchable(tcx: TyCtxt<'_>, def_id: LocalDefId, source_map: &SourceMap) -> bool {
+fn is_frame_dispatchable(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+) -> bool {
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let definition_location = source_map.lookup_char_pos(definition_span.lo());
+    let definition_file = definition_location.file.name.prefer_local().to_string();
+    let definition_line = definition_location.line;
+    let function_name = tcx.item_name(def_id.to_def_id());
+    if parsed_weight_attributes.iter().any(|attribute| {
+        attribute.has_call_index
+            && attribute.function_name == function_name.as_str()
+            && attribute.file == definition_file
+            && attribute.line == definition_line
+    }) {
+        return true;
+    }
+
     let Some(prefix) = source_prefix_before_definition(tcx, def_id, source_map) else {
         return false;
     };
@@ -1710,20 +1971,22 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
-            let underflow_guard = non_underflow_guard_pair(self.typeck, condition);
-            let nonzero_guard = nonzero_guard_binding(self.typeck, condition);
-            if underflow_guard.is_some() || nonzero_guard.is_some() {
-                if let Some(pair) = underflow_guard {
-                    self.non_underflow_pairs.insert(pair);
-                }
-                if let Some(binding) = nonzero_guard {
-                    self.nonzero_bindings.insert(binding);
-                }
+            let underflow_guards = non_underflow_guard_pairs(self.typeck, condition);
+            let nonzero_guards = nonzero_guard_bindings(self.typeck, condition);
+            if !underflow_guards.is_empty() || !nonzero_guards.is_empty() {
+                let inserted_underflow_guards = underflow_guards
+                    .into_iter()
+                    .filter(|pair| self.non_underflow_pairs.insert(*pair))
+                    .collect::<Vec<_>>();
+                let inserted_nonzero_guards = nonzero_guards
+                    .into_iter()
+                    .filter(|binding| self.nonzero_bindings.insert(*binding))
+                    .collect::<Vec<_>>();
                 self.visit_expr(then_branch);
-                if let Some(pair) = underflow_guard {
+                for pair in inserted_underflow_guards {
                     self.non_underflow_pairs.remove(&pair);
                 }
-                if let Some(binding) = nonzero_guard {
+                for binding in inserted_nonzero_guards {
                     self.nonzero_bindings.remove(&binding);
                 }
                 if let Some(else_branch) = else_branch {
@@ -1766,6 +2029,23 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
     }
 }
 
+fn nonzero_guard_bindings(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Vec<HirId> {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Binary(operator, lhs, rhs) = condition.kind {
+        if operator.node == BinOpKind::And {
+            let mut bindings = nonzero_guard_bindings(typeck, lhs);
+            bindings.extend(nonzero_guard_bindings(typeck, rhs));
+            return bindings;
+        }
+    }
+    nonzero_guard_binding(typeck, condition)
+        .into_iter()
+        .collect()
+}
+
 fn nonzero_guard_binding(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
@@ -1782,6 +2062,23 @@ fn nonzero_guard_binding(
         BinOpKind::Le if positive_integer_literal(lhs) => local_binding_id(typeck, rhs),
         _ => None,
     }
+}
+
+fn non_underflow_guard_pairs(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Vec<(HirId, HirId)> {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Binary(operator, lhs, rhs) = condition.kind {
+        if operator.node == BinOpKind::And {
+            let mut pairs = non_underflow_guard_pairs(typeck, lhs);
+            pairs.extend(non_underflow_guard_pairs(typeck, rhs));
+            return pairs;
+        }
+    }
+    non_underflow_guard_pair(typeck, condition)
+        .into_iter()
+        .collect()
 }
 
 fn non_underflow_guard_pair(
