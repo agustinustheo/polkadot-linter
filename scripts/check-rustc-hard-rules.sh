@@ -234,6 +234,19 @@ pub fn active_debug_assert(value: u32) {
     debug_assert!(value > 0, "active debug assertion should be linted");
 }
 
+pub fn debug_assert_via_private_helper(value: u32) {
+    reachable_private_debug_assert(value);
+}
+
+fn reachable_private_debug_assert(value: u32) {
+    debug_assert!(value > 0, "private helper is reachable from a public entry point");
+}
+
+#[allow(dead_code)]
+fn private_debug_assert(value: u32) {
+    debug_assert!(value > 0, "private helper is not a callable entry point");
+}
+
 pub fn infallible_result() -> Result<u32, Infallible> {
     Ok(7)
 }
@@ -252,6 +265,14 @@ pub fn unwrap_infallible_result() -> u32 {
 
 pub fn unwrap_fallible_result(flag: bool) -> u32 {
     fallible_result(flag).expect("flag controls the error path")
+}
+
+pub fn unwrap_via_private_helper(flag: bool) -> u32 {
+    reachable_private_unwrap_fallible_result(flag)
+}
+
+fn reachable_private_unwrap_fallible_result(flag: bool) -> u32 {
+    fallible_result(flag).expect("private helper is reachable from a public entry point")
 }
 
 #[allow(dead_code)]
@@ -383,9 +404,9 @@ rustc_rule_filtered_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | l
 rustc_rule_filtered_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_rule_filtered_other_count="$(jq '[.[] | select(.rule_id != "SEC008" and .rule_id != "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_JSON")"
-rustc_sec002_line="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON")"
+rustc_sec002_lines="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
 rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
-rustc_sec008_line="$(jq -r '.[] | select(.rule_id == "SEC008") | .line' "$RUSTC_JSON")"
+rustc_sec008_lines="$(jq -r '.[] | select(.rule_id == "SEC008") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
 rustc_sec009_line="$(jq -r '.[] | select(.rule_id == "SEC009") | .line' "$RUSTC_JSON")"
 rustc_sec011_line="$(jq -r '.[] | select(.rule_id == "SEC011") | .line' "$RUSTC_JSON")"
 rustc_sec012_line="$(jq -r '.[] | select(.rule_id == "SEC012") | .line' "$RUSTC_JSON")"
@@ -421,17 +442,17 @@ test "$syn_sec001_count" = "0"
 test "$rustc_sec001_count" = "1"
 test "$rustc_sec001_line" = "81"
 test "$syn_sec002_count" = "2"
-test "$rustc_sec002_count" = "1"
-test "$rustc_sec002_line" = "153"
+test "$rustc_sec002_count" = "2"
+test "$rustc_sec002_lines" = "153,161"
 test "$syn_sec003_count" = "1"
 test "$rustc_sec003_count" = "3"
 test "$syn_sec008_count" = "3"
-test "$rustc_sec008_count" = "1"
+test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
 test "$rustc_sec009_count" = "1"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "1"
-test "$rustc_sec008_line" = "173"
+test "$rustc_sec008_lines" = "173,181"
 test "$rustc_sec009_line" = "182"
 test "$rustc_sec011_line" = "100"
 test "$syn_sec012_count" = "2"

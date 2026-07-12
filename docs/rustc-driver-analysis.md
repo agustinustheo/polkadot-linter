@@ -39,7 +39,9 @@ The driver currently includes typed checks for:
   function; public helper methods are excluded.
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
-  so cfg-disabled source that never reaches expanded HIR is not reported.
+  so cfg-disabled source that never reaches expanded HIR is not reported. It
+  limits analysis to public and hook entry points plus direct local callees;
+  indirect calls and path-sensitive control flow remain out of scope.
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
   reads resolved call return types and decode receiver types, so aliases to
   `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
@@ -49,7 +51,9 @@ The driver currently includes typed checks for:
   attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
-  where the error path is statically uninhabited.
+  where the error path is statically uninhabited. It analyzes public and hook
+  entry points and direct calls to local helpers rather than private helper-only
+  bodies. Indirect calls and path-sensitive control flow remain out of scope.
 - `SEC009`: raw arithmetic in fallible functions. The rustc-backed
   implementation reads HIR and type-checking results, then reports binary `+`,
   `-`, `*`, `/`, and `%` only when both operands resolve to integer types inside
@@ -250,8 +254,19 @@ compiler-backed rule resolves the FRAME event payload and reports
 `OffenceCreated::offenders` at line 116. The output is checked against
 `benchmarks/polkadot-sdk-rustc-root-offences-sec017-baseline.tsv`.
 
+Run the SDK `SEC008` panic coverage check with:
+
+```sh
+scripts/check-rustc-sdk-sec008.sh .repos/polkadot-sdk .benchmarks
+```
+
+The stabilized syntax rule emits zero `SEC008` diagnostics for
+`pallet-multisig`, while the compiler-backed route resolves and reports five
+reachable `.expect()` paths. The output is checked against
+`benchmarks/polkadot-sdk-rustc-multisig-sec008-baseline.tsv`.
+
 The CI workflow runs the hard-rule fixture, the multisig SDK smoke baseline,
 the `pallet-xcm` `SEC003` SDK coverage baseline, and the collective `SEC009`
 SDK precision baseline, and the contracts `SEC018` macro-recovery baseline
 and session `SEC013` storage-value and root-offences `SEC017` event baselines
-after the default stable build.
+and multisig `SEC008` panic baseline after the default stable build.

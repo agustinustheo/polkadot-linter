@@ -1,0 +1,5 @@
+SEC008	substrate/frame/multisig/src/lib.rs	141	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/multisig/src/lib.rs	210	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/multisig/src/lib.rs	215	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/multisig/src/lib.rs	225	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/multisig/src/lib.rs	647	`.expect()` can panic on a reachable error path

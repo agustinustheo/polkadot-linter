@@ -48,6 +48,26 @@ impl Callbacks for PolkadotCallbacks {
         if self.rule_enabled("SEC017") {
             report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
+        let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
+            || self.rule_enabled("SEC008"))
+        .then(|| reachable_local_function_bodies(tcx))
+        .unwrap_or_default();
+        if self.rule_enabled("SEC002") {
+            report_reachable_debug_assertions(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC008") {
+            report_reachable_panic_calls(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
 
         for def_id in tcx.hir_body_owners() {
             let body_owner_kind = tcx.hir_body_owner_kind(def_id);
@@ -90,28 +110,6 @@ impl Callbacks for PolkadotCallbacks {
                         .collect(),
                 };
                 decode_visitor.visit_body(body);
-            }
-
-            if self.rule_enabled("SEC002") {
-                let mut debug_assert_visitor = Sec002Visitor {
-                    source_map: tcx.sess.source_map(),
-                    diagnostics: &mut self.diagnostics,
-                    reported_lines: HashSet::new(),
-                };
-                debug_assert_visitor.visit_body(body);
-            }
-
-            if matches!(body_owner_kind, BodyOwnerKind::Fn)
-                && is_public_or_hook(tcx, def_id)
-                && self.rule_enabled("SEC008")
-            {
-                let mut panic_visitor = Sec008Visitor {
-                    source_map: tcx.sess.source_map(),
-                    tcx,
-                    typeck,
-                    diagnostics: &mut self.diagnostics,
-                };
-                panic_visitor.visit_body(body);
             }
 
             if matches!(body_owner_kind, BodyOwnerKind::Fn)
@@ -159,6 +157,81 @@ impl Callbacks for PolkadotCallbacks {
         } else {
             Compilation::Stop
         }
+    }
+}
+
+fn reachable_local_function_bodies(tcx: TyCtxt<'_>) -> Vec<LocalDefId> {
+    let mut pending = tcx
+        .hir_body_owners()
+        .filter(|def_id| {
+            matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
+                && is_public_or_hook(tcx, *def_id)
+        })
+        .collect::<Vec<_>>();
+    let mut visited = HashSet::new();
+    let mut reachable = Vec::new();
+
+    while let Some(def_id) = pending.pop() {
+        if !visited.insert(def_id) || !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn)
+        {
+            continue;
+        }
+
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let typeck = tcx.typeck(def_id);
+        let mut callee_visitor = LocalCalleeVisitor {
+            typeck,
+            callees: HashSet::new(),
+        };
+        callee_visitor.visit_body(body);
+        pending.extend(callee_visitor.callees);
+        reachable.push(def_id);
+    }
+
+    reachable
+}
+
+fn report_reachable_debug_assertions<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut debug_assert_visitor = Sec002Visitor {
+        source_map,
+        diagnostics,
+        reported_lines: HashSet::new(),
+    };
+
+    for def_id in reachable_bodies {
+        if let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) {
+            debug_assert_visitor.visit_body(body);
+        }
+    }
+}
+
+fn report_reachable_panic_calls<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in reachable_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let mut panic_visitor = Sec008Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(*def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        panic_visitor.visit_body(body);
     }
 }
 
@@ -614,6 +687,7 @@ struct Sec008Visitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
@@ -627,18 +701,56 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
                 )
             {
                 let (file, line, column) = span_location(self.source_map, expr.span);
-                self.diagnostics.push(RustcDiagnostic {
-                    rule_id: "SEC008",
-                    rule_name: "panic-in-production",
-                    file,
-                    line,
-                    column,
-                    message: format!("`.{method}()` can panic on a reachable error path"),
-                });
+                if self.reported_lines.insert((file.clone(), line)) {
+                    self.diagnostics.push(RustcDiagnostic {
+                        rule_id: "SEC008",
+                        rule_name: "panic-in-production",
+                        file,
+                        line,
+                        column,
+                        message: format!("`.{method}()` can panic on a reachable error path"),
+                    });
+                }
             }
         }
 
         intravisit::walk_expr(self, expr);
+    }
+}
+
+struct LocalCalleeVisitor<'a, 'tcx> {
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    callees: HashSet<LocalDefId>,
+}
+
+impl<'tcx> Visitor<'tcx> for LocalCalleeVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        match expr.kind {
+            ExprKind::Call(callee, _) => self.record_callee(callee),
+            ExprKind::MethodCall(..) => {
+                if let Some(def_id) = self.typeck.type_dependent_def_id(expr.hir_id) {
+                    if let Some(local_def_id) = def_id.as_local() {
+                        self.callees.insert(local_def_id);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl LocalCalleeVisitor<'_, '_> {
+    fn record_callee(&mut self, callee: &Expr<'_>) {
+        let ExprKind::Path(qpath) = callee.kind else {
+            return;
+        };
+        if let Res::Def(_, def_id) = self.typeck.qpath_res(&qpath, callee.hir_id) {
+            if let Some(local_def_id) = def_id.as_local() {
+                self.callees.insert(local_def_id);
+            }
+        }
     }
 }
 
