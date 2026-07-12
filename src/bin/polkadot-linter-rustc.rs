@@ -49,7 +49,9 @@ impl Callbacks for PolkadotCallbacks {
             report_vec_event_fields(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
         let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
-            || self.rule_enabled("SEC008"))
+            || self.rule_enabled("SEC008")
+            || self.rule_enabled("SEC011")
+            || self.rule_enabled("SEC012"))
         .then(|| reachable_local_function_bodies(tcx, false))
         .unwrap_or_default();
         let reachable_fallible_entry_point_bodies = self
@@ -77,6 +79,22 @@ impl Callbacks for PolkadotCallbacks {
                 tcx,
                 tcx.sess.source_map(),
                 &reachable_fallible_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC011") {
+            report_reachable_storage_iteration(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC012") {
+            report_reachable_clear_prefix(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_entry_point_bodies,
                 &mut self.diagnostics,
             );
         }
@@ -123,29 +141,6 @@ impl Callbacks for PolkadotCallbacks {
                 };
                 decode_visitor.visit_body(body);
             }
-
-            if matches!(body_owner_kind, BodyOwnerKind::Fn)
-                && self.rule_enabled("SEC011")
-                && is_public_or_hook(tcx, def_id)
-            {
-                let mut storage_iteration_visitor = Sec011Visitor {
-                    source_map: tcx.sess.source_map(),
-                    tcx,
-                    typeck,
-                    diagnostics: &mut self.diagnostics,
-                };
-                storage_iteration_visitor.visit_body(body);
-            }
-
-            if matches!(body_owner_kind, BodyOwnerKind::Fn) && self.rule_enabled("SEC012") {
-                let mut clear_prefix_visitor = Sec012Visitor {
-                    source_map: tcx.sess.source_map(),
-                    tcx,
-                    typeck,
-                    diagnostics: &mut self.diagnostics,
-                };
-                clear_prefix_visitor.visit_body(body);
-            }
         }
 
         if self.continue_compilation {
@@ -164,7 +159,7 @@ fn reachable_local_function_bodies(
         .hir_body_owners()
         .filter(|def_id| {
             matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
-                && is_public_or_hook(tcx, *def_id)
+                && is_reachable_entry_point(tcx, *def_id)
                 && (!fallible_entry_points_only || returns_fallible(tcx, *def_id))
         })
         .collect::<Vec<_>>();
@@ -252,6 +247,46 @@ fn report_reachable_raw_arithmetic<'tcx>(
             typeck: tcx.typeck(*def_id),
             diagnostics,
             reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_reachable_storage_iteration<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in reachable_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let mut visitor = Sec011Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(*def_id),
+            diagnostics,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_reachable_clear_prefix<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in reachable_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let mut visitor = Sec012Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(*def_id),
+            diagnostics,
         };
         visitor.visit_body(body);
     }
@@ -828,8 +863,7 @@ impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::Call(callee, _) = expr.kind {
             if associated_call_name(callee).is_some_and(|name| name == "iter" || name == "drain")
-                && associated_call_receiver_type(self.typeck, callee)
-                    .is_some_and(|ty| type_is_frame_storage_owner(self.tcx, ty))
+                && is_frame_storage_associated_call(self.tcx, self.typeck, callee)
             {
                 let (file, line, column) = span_location(self.source_map, expr.span);
                 self.diagnostics.push(RustcDiagnostic {
@@ -858,8 +892,7 @@ impl<'tcx> Visitor<'tcx> for Sec012Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::Call(callee, args) = expr.kind {
             if associated_call_name(callee).is_some_and(|name| name == "clear_prefix")
-                && associated_call_receiver_type(self.typeck, callee)
-                    .is_some_and(|ty| type_is_frame_storage_owner(self.tcx, ty))
+                && is_frame_storage_associated_call(self.tcx, self.typeck, callee)
                 && args
                     .get(1)
                     .is_some_and(|limit| is_unbounded_clear_prefix_limit(limit))
@@ -886,17 +919,25 @@ fn returns_fallible<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> bool {
     type_is_fallible(tcx, sig.output())
 }
 
-fn is_public_or_hook(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     if tcx.local_visibility(def_id).is_public() {
         return true;
     }
 
     let item_name = tcx.item_name(def_id.to_def_id());
     let name = item_name.as_str();
-    matches!(
+    if matches!(
         name,
         "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
-    )
+    ) {
+        return true;
+    }
+
+    tcx.impl_of_method(def_id.to_def_id())
+        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
+        .is_some_and(|trait_id| {
+            tcx.item_name(trait_id).as_str() == "ChangeMembers" && name == "change_members_sorted"
+        })
 }
 
 fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
@@ -1099,8 +1140,22 @@ fn associated_call_name(expr: &Expr<'_>) -> Option<String> {
     };
     match qpath {
         QPath::TypeRelative(_, segment) => Some(segment.ident.name.to_string()),
-        QPath::Resolved(_, _) | QPath::LangItem(_, _) => None,
+        QPath::Resolved(_, path) => path
+            .segments
+            .last()
+            .map(|segment| segment.ident.name.to_string()),
+        QPath::LangItem(_, _) => None,
     }
+}
+
+fn is_frame_storage_associated_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    associated_call_receiver_type(typeck, callee)
+        .is_some_and(|ty| type_is_frame_storage_owner(tcx, ty))
+        || matches!(callee.kind, ExprKind::Path(qpath) if matches!(typeck.qpath_res(&qpath, callee.hir_id), Res::Def(_, def_id) if matches_frame_storage_owner_name(&tcx.def_path_str(def_id))))
 }
 
 fn associated_call_receiver_type<'tcx>(
@@ -1118,8 +1173,11 @@ fn expand_alias_type<'tcx>(
     kind: AliasTyKind,
     alias_ty: rustc_middle::ty::AliasTy<'tcx>,
 ) -> Option<Ty<'tcx>> {
-    matches!(kind, AliasTyKind::Free | AliasTyKind::Opaque)
-        .then(|| tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args))
+    matches!(
+        kind,
+        AliasTyKind::Free | AliasTyKind::Opaque | AliasTyKind::Projection
+    )
+    .then(|| tcx.type_of(alias_ty.def_id).instantiate(tcx, alias_ty.args))
 }
 
 fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
@@ -1255,7 +1313,8 @@ fn type_is_frame_storage_owner<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
 }
 
 fn matches_frame_storage_owner_name(name: &str) -> bool {
-    if !name.contains("frame_support::storage") {
+    if !(name.contains("frame_support::storage") || name.contains("frame_support::pallet_prelude"))
+    {
         return false;
     }
 
