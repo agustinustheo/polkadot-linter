@@ -885,6 +885,94 @@ fn reachable_private_raw_integer(a: u32, b: u32) -> u32 {
     a + b
 }
 
+pub fn raw_integer_via_function_value(a: u32, b: u32) -> Result<u32, ()> {
+    let helper = function_value_raw_integer;
+    Ok(helper(a, b))
+}
+
+fn function_value_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+pub fn raw_integer_via_function_value_alias(a: u32, b: u32) -> Result<u32, ()> {
+    let mut helper = function_value_alias_raw_integer;
+    let alias = helper;
+    helper = alias;
+    Ok(helper(a, b))
+}
+
+fn function_value_alias_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+pub fn raw_integer_via_conditional_function_value(
+    a: u32,
+    b: u32,
+    replace: bool,
+) -> Result<u32, ()> {
+    let mut helper: fn(u32, u32) -> u32 = conditional_function_value_raw_integer;
+    if replace {
+        helper = conditional_function_value_safe_integer;
+    }
+    Ok(helper(a, b))
+}
+
+fn conditional_function_value_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+fn conditional_function_value_safe_integer(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
+pub fn raw_integer_via_match_function_value(
+    a: u32,
+    b: u32,
+    replace: bool,
+) -> Result<u32, ()> {
+    let mut helper: fn(u32, u32) -> u32 = match_function_value_raw_integer;
+    match replace {
+        true => helper = match_function_value_safe_integer,
+        false => {}
+    }
+    Ok(helper(a, b))
+}
+
+fn match_function_value_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+fn match_function_value_safe_integer(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
+#[allow(unused_assignments)]
+pub fn overwritten_function_value_is_not_reachable(
+    a: u32,
+    b: u32,
+    replace: bool,
+) -> Result<u32, ()> {
+    let mut helper: fn(u32, u32) -> u32 = overwritten_function_value_raw_integer;
+    if replace {
+        helper = overwritten_function_value_safe_integer;
+    } else {
+        helper = overwritten_function_value_other_safe_integer;
+    }
+    Ok(helper(a, b))
+}
+
+fn overwritten_function_value_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
+fn overwritten_function_value_safe_integer(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
+fn overwritten_function_value_other_safe_integer(a: u32, b: u32) -> u32 {
+    a.saturating_add(b)
+}
+
 #[allow(dead_code)]
 fn private_raw_integer(a: u32, b: u32) -> Result<u32, ()> {
     Ok(a + b)
@@ -1009,7 +1097,17 @@ rustc_sec009_early_return_guarded_subtraction_count="$(jq --argjson line "$early
 else_guarded_subtraction_line="$(grep -n 'pub fn guarded_subtraction_in_else' "$FIXTURE" | cut -d: -f1)"
 rustc_sec009_else_guarded_subtraction_count="$(jq --argjson line "$else_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 raw_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | head -n1 | cut -d: -f1)"
+function_value_raw_line="$(grep -n 'fn function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
 rustc_sec009_raw_division_count="$(jq --argjson line "$raw_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec009_function_value_raw_count="$(jq --argjson line "$function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+function_value_alias_raw_line="$(grep -n 'fn function_value_alias_raw_integer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_function_value_alias_raw_count="$(jq --argjson line "$function_value_alias_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+conditional_function_value_raw_line="$(grep -n 'fn conditional_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_conditional_function_value_raw_count="$(jq --argjson line "$conditional_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+match_function_value_raw_line="$(grep -n 'fn match_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_match_function_value_raw_count="$(jq --argjson line "$match_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+overwritten_function_value_raw_line="$(grep -n 'fn overwritten_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_overwritten_function_value_raw_count="$(jq --argjson line "$overwritten_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
 rustc_sec009_guarded_division_count="$(jq --argjson line "$guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 conjunction_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
@@ -1176,13 +1274,18 @@ test "$rustc_sec008_some_let_else_unwrap_count" = "0"
 test "$rustc_sec008_ok_let_else_expect_count" = "0"
 test "$rustc_sec008_guarded_overwrite_unwrap_count" = "1"
 test "$syn_sec009_count" = "6"
-test "$rustc_sec009_count" = "3"
+test "$rustc_sec009_count" = "7"
 test "$rustc_sec009_guarded_subtraction_count" = "0"
 test "$rustc_sec009_conjunction_guarded_subtraction_count" = "0"
 test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
 test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
 test "$rustc_sec009_else_guarded_subtraction_count" = "0"
 test "$rustc_sec009_raw_division_count" = "1"
+test "$rustc_sec009_function_value_raw_count" = "1"
+test "$rustc_sec009_function_value_alias_raw_count" = "1"
+test "$rustc_sec009_conditional_function_value_raw_count" = "1"
+test "$rustc_sec009_match_function_value_raw_count" = "1"
+test "$rustc_sec009_overwritten_function_value_raw_count" = "0"
 test "$rustc_sec009_guarded_division_count" = "0"
 test "$rustc_sec009_conjunction_guarded_division_count" = "0"
 test "$rustc_sec009_ensure_guarded_division_count" = "0"
@@ -1219,9 +1322,9 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "50"
+test "$rustc_filtered_count" = "54"
 test "$rustc_filtered_empty_count" = "0"
-test "$rustc_rule_filtered_count" = "7"
+test "$rustc_rule_filtered_count" = "11"
 test "$rustc_rule_filtered_sec008_count" = "4"
-test "$rustc_rule_filtered_sec009_count" = "3"
+test "$rustc_rule_filtered_sec009_count" = "7"
 test "$rustc_rule_filtered_other_count" = "0"

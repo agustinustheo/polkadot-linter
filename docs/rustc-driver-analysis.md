@@ -83,8 +83,11 @@ The driver currently includes typed checks for:
   implementation reads HIR and type-checking results, then reports binary `+`,
   `-`, `*`, `/`, and `%` only when both operands resolve to integer types inside
   a function reachable from a public or hook `Result` entry point, including
-  direct local helper calls. It recognizes non-underflow subtraction inside a
-  resolved `if a >= b` or `if b <= a` branch and after an early-return guard
+  direct local helper calls and locally aliased or reassigned function values.
+  Local function-item bindings are merged across `if` and `match` branches, so
+  a conditional reassignment retains each feasible callee while a full branch
+  overwrite drops the pre-branch callee. It recognizes non-underflow
+  subtraction inside a resolved `if a >= b` or `if b <= a` branch and after an early-return guard
   such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero or
   positive divisor guards and `core::num::NonZero` `.get()` values for `/` and
   `%`. It also recognizes those proofs in the safe `else` branch after a

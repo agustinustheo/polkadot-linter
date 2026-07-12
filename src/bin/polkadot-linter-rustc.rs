@@ -295,6 +295,7 @@ fn reachable_local_function_bodies(
         let mut callee_visitor = LocalCalleeVisitor {
             typeck,
             callees: HashSet::new(),
+            function_bindings: HashMap::new(),
         };
         callee_visitor.visit_body(body);
         pending.extend(callee_visitor.callees);
@@ -1971,12 +1972,48 @@ fn exiting_unwrappable_let_binding(
 struct LocalCalleeVisitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     callees: HashSet<LocalDefId>,
+    function_bindings: HashMap<HirId, HashSet<LocalDefId>>,
 }
 
 impl<'tcx> Visitor<'tcx> for LocalCalleeVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming_bindings = self.function_bindings.clone();
+
+            self.visit_expr(then_branch);
+            let then_bindings = self.function_bindings.clone();
+
+            self.function_bindings = incoming_bindings;
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.function_bindings =
+                merge_function_bindings(then_bindings, &self.function_bindings);
+            return;
+        }
+
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            let incoming_bindings = self.function_bindings.clone();
+            let mut arm_bindings = HashMap::new();
+
+            for arm in arms {
+                self.function_bindings = incoming_bindings.clone();
+                self.visit_arm(arm);
+                arm_bindings = merge_function_bindings(arm_bindings, &self.function_bindings);
+            }
+            self.function_bindings = arm_bindings;
+            return;
+        }
+
         match expr.kind {
             ExprKind::Call(callee, _) => self.record_callee(callee),
+            ExprKind::Assign(target, value, _) => {
+                if let Some(binding) = local_binding_id(self.typeck, target) {
+                    self.assign_function_binding(binding, value);
+                }
+            }
             ExprKind::MethodCall(..) => {
                 if let Some(def_id) = self.typeck.type_dependent_def_id(expr.hir_id) {
                     if let Some(local_def_id) = def_id.as_local() {
@@ -1989,19 +2026,71 @@ impl<'tcx> Visitor<'tcx> for LocalCalleeVisitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        let bindings = pattern_binding_ids(local.pat);
+        if let Some(init) = local.init {
+            let callees = self.callees_for_value(init);
+            for binding in bindings {
+                if callees.is_empty() {
+                    self.function_bindings.remove(&binding);
+                } else {
+                    self.function_bindings.insert(binding, callees.clone());
+                }
+            }
+        }
+        intravisit::walk_local(self, local);
+    }
 }
 
 impl LocalCalleeVisitor<'_, '_> {
     fn record_callee(&mut self, callee: &Expr<'_>) {
-        let ExprKind::Path(qpath) = callee.kind else {
-            return;
-        };
-        if let Res::Def(_, def_id) = self.typeck.qpath_res(&qpath, callee.hir_id) {
-            if let Some(local_def_id) = def_id.as_local() {
-                self.callees.insert(local_def_id);
-            }
+        self.callees.extend(self.callees_for_value(callee));
+    }
+
+    fn assign_function_binding(&mut self, binding: HirId, value: &Expr<'_>) {
+        let callees = self.callees_for_value(value);
+        if callees.is_empty() {
+            self.function_bindings.remove(&binding);
+        } else {
+            self.function_bindings.insert(binding, callees);
         }
     }
+
+    fn callees_for_value(&self, value: &Expr<'_>) -> HashSet<LocalDefId> {
+        if let Some(callee) = direct_local_callee(self.typeck, value) {
+            return HashSet::from([callee]);
+        }
+        local_binding_id(self.typeck, value)
+            .and_then(|binding| self.function_bindings.get(&binding).cloned())
+            .unwrap_or_default()
+    }
+}
+
+fn merge_function_bindings(
+    mut first: HashMap<HirId, HashSet<LocalDefId>>,
+    second: &HashMap<HirId, HashSet<LocalDefId>>,
+) -> HashMap<HirId, HashSet<LocalDefId>> {
+    for (binding, callees) in second {
+        first
+            .entry(*binding)
+            .or_default()
+            .extend(callees.iter().copied());
+    }
+    first
+}
+
+fn direct_local_callee(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> Option<LocalDefId> {
+    let ExprKind::Path(qpath) = expr.kind else {
+        return None;
+    };
+    typeck
+        .qpath_res(&qpath, expr.hir_id)
+        .opt_def_id()?
+        .as_local()
 }
 
 struct TaintedLocalCallVisitor<'a, 'tcx> {
