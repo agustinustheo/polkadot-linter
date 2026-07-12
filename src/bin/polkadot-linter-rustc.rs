@@ -179,14 +179,16 @@ fn report_unbounded_storage_aliases<'tcx>(
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
         if !matches!(item.kind, ItemKind::TyAlias(..))
-            || !has_hir_attr(tcx, item.hir_id(), &["pallet", "storage"])
-            || has_hir_attr(tcx, item.hir_id(), &["pallet", "unbounded"])
+            || !is_frame_storage_alias(tcx, item.owner_id.def_id, item.hir_id(), source_map)
+            || is_explicitly_unbounded_storage(tcx, item.owner_id.def_id, item.hir_id(), source_map)
         {
             continue;
         }
 
         let alias_ty = tcx.type_of(item.owner_id.def_id).instantiate_identity();
-        if type_contains_unbounded_storage_collection(tcx, alias_ty) {
+        if storage_alias_value_type(tcx, alias_ty)
+            .is_some_and(|value_ty| type_contains_unbounded_storage_collection(tcx, value_ty))
+        {
             let (file, line, column) = span_location(source_map, item.span);
             diagnostics.push(RustcDiagnostic {
                 rule_id: "SEC013",
@@ -200,6 +202,65 @@ fn report_unbounded_storage_aliases<'tcx>(
     }
 }
 
+fn storage_alias_value_type<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    match ty.kind() {
+        TyKind::Adt(adt, args) => {
+            let name = tcx.def_path_str(adt.did());
+            let value_index = match storage_owner_name(&name)? {
+                "StorageValue" => 1,
+                "StorageMap" | "CountedStorageMap" => 3,
+                "StorageDoubleMap" => 5,
+                "StorageNMap" => 2,
+                _ => return None,
+            };
+            args.iter()
+                .filter_map(|arg| match arg.kind() {
+                    GenericArgKind::Type(arg_ty) => Some(arg_ty),
+                    _ => None,
+                })
+                .nth(value_index)
+        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .and_then(|expanded| storage_alias_value_type(tcx, expanded)),
+        _ => None,
+    }
+}
+
+fn storage_owner_name(name: &str) -> Option<&'static str> {
+    [
+        "CountedStorageMap",
+        "StorageDoubleMap",
+        "StorageMap",
+        "StorageNMap",
+        "StorageValue",
+    ]
+    .iter()
+    .copied()
+    .find(|owner| name == *owner || name.ends_with(&format!("::{owner}")))
+}
+
+fn is_frame_storage_alias(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    hir_id: rustc_hir::HirId,
+    source_map: &SourceMap,
+) -> bool {
+    has_hir_attr(tcx, hir_id, &["pallet", "storage"])
+        || source_prefix_before_definition(tcx, def_id, source_map)
+            .is_some_and(|prefix| prefix.contains("#[pallet::storage]"))
+}
+
+fn is_explicitly_unbounded_storage(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    hir_id: rustc_hir::HirId,
+    source_map: &SourceMap,
+) -> bool {
+    has_hir_attr(tcx, hir_id, &["pallet", "unbounded"])
+        || source_prefix_before_definition(tcx, def_id, source_map)
+            .is_some_and(|prefix| prefix.contains("#[pallet::unbounded]"))
+}
+
 fn report_vec_event_fields<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
@@ -207,10 +268,16 @@ fn report_vec_event_fields<'tcx>(
 ) {
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
-        let ItemKind::Enum(ident, _, enum_def) = item.kind else {
+        let ItemKind::Enum(_, _, enum_def) = item.kind else {
             continue;
         };
-        if ident.name.as_str() != "Event" {
+        if !is_frame_event(
+            tcx,
+            item.owner_id.def_id,
+            item.hir_id(),
+            item.span,
+            source_map,
+        ) {
             continue;
         }
 
@@ -233,6 +300,31 @@ fn report_vec_event_fields<'tcx>(
     }
 }
 
+fn is_frame_event(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    hir_id: rustc_hir::HirId,
+    span: Span,
+    source_map: &SourceMap,
+) -> bool {
+    if has_hir_attr(tcx, hir_id, &["pallet", "event"]) {
+        return true;
+    }
+
+    let location = source_map.lookup_char_pos(span.source_callsite().lo());
+    let source_path = location.file.name.prefer_local().to_string();
+    let Ok(source) = std::fs::read_to_string(source_path) else {
+        return false;
+    };
+    let lines = source.lines().collect::<Vec<_>>();
+    let definition_line = location.line.saturating_sub(1).min(lines.len());
+    let start_line = definition_line.saturating_sub(64);
+    let context = lines[start_line..=definition_line].join("\n");
+
+    context.contains("#[pallet::event]")
+        && tcx.def_path_str(def_id.to_def_id()).ends_with("::Event")
+}
+
 fn report_unbounded_public_vec_inputs<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: LocalDefId,
@@ -240,7 +332,8 @@ fn report_unbounded_public_vec_inputs<'tcx>(
     source_map: &SourceMap,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
-    if !tcx.local_visibility(def_id).is_public() {
+    if !tcx.local_visibility(def_id).is_public() || !is_frame_dispatchable(tcx, def_id, source_map)
+    {
         return;
     }
 
@@ -276,20 +369,14 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
         return;
     }
 
-    let hir_id = tcx.local_def_id_to_hir_id(def_id);
-    let Some(weight_attr) = tcx
-        .hir_attrs(hir_id)
-        .iter()
-        .find(|attr| attr.path_matches(&[Symbol::intern("pallet"), Symbol::intern("weight")]))
-    else {
+    let Some(weight_attributes) = pallet_weight_attributes(tcx, def_id, source_map) else {
         return;
     };
-    let weight_snippet = source_map
-        .span_to_snippet(weight_attr.span())
-        .unwrap_or_default()
-        .chars()
-        .filter(|ch| !ch.is_whitespace())
-        .collect::<String>();
+    if has_hir_attr(tcx, tcx.local_def_id_to_hir_id(def_id), &["deprecated"])
+        || weight_attributes.deprecated
+    {
+        return;
+    }
 
     let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
     for (idx, ty) in sig.inputs().iter().enumerate() {
@@ -302,7 +389,7 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
         let Some(param_name) = body_param_name(param) else {
             continue;
         };
-        if weight_accounts_for_param(&weight_snippet, &param_name) {
+        if weight_accounts_for_param(&weight_attributes.snippet, &param_name) {
             continue;
         }
 
@@ -318,6 +405,91 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
             ),
         });
     }
+}
+
+struct PalletWeightAttributes {
+    snippet: String,
+    deprecated: bool,
+}
+
+fn pallet_weight_attributes(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+) -> Option<PalletWeightAttributes> {
+    let prefix = source_prefix_before_definition(tcx, def_id, source_map)?;
+    let start = prefix.rfind("#[pallet::weight")?;
+    let attribute_block = &prefix[start..];
+    let attribute = balanced_attribute(attribute_block)?;
+
+    attribute
+        .strip_prefix("#[pallet::weight")
+        .map(|_| PalletWeightAttributes {
+            snippet: attribute.chars().filter(|ch| !ch.is_whitespace()).collect(),
+            deprecated: attribute_block.contains("#[deprecated"),
+        })
+}
+
+fn is_frame_dispatchable(tcx: TyCtxt<'_>, def_id: LocalDefId, source_map: &SourceMap) -> bool {
+    let Some(prefix) = source_prefix_before_definition(tcx, def_id, source_map) else {
+        return false;
+    };
+    let Some(call_index_start) = prefix.rfind("#[pallet::call_index") else {
+        return false;
+    };
+    let attribute_block = &prefix[call_index_start..];
+
+    attribute_block.contains("#[pallet::weight") && !attribute_block.contains("\npub fn ")
+}
+
+fn source_prefix_before_definition(
+    tcx: TyCtxt<'_>,
+    def_id: LocalDefId,
+    source_map: &SourceMap,
+) -> Option<String> {
+    let definition_span = tcx
+        .def_ident_span(def_id.to_def_id())
+        .unwrap_or_else(|| tcx.def_span(def_id));
+    let location = source_map.lookup_char_pos(definition_span.lo());
+    let source_path = location.file.name.prefer_local().to_string();
+    let source = std::fs::read_to_string(source_path).ok()?;
+    let lines = source.lines().collect::<Vec<_>>();
+    let function_line = location.line.saturating_sub(1).min(lines.len());
+    let start_line = function_line.saturating_sub(64);
+    Some(lines[start_line..function_line].join("\n"))
+}
+
+fn balanced_attribute(source: &str) -> Option<&str> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, ch) in source.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if ch == '"' {
+            in_string = true;
+            continue;
+        }
+        if ch == '[' {
+            depth += 1;
+        } else if ch == ']' {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(&source[..=index]);
+            }
+        }
+    }
+
+    None
 }
 
 struct Sec002Visitor<'a> {
