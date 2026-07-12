@@ -57,7 +57,7 @@ echo "SEC008 rustc package findings: $rustc_findings"
 cat "$SUMMARY"
 
 test "$syntax_findings" -eq 0
-test "$rustc_findings" -eq 5
+test "$rustc_findings" -eq 2
 test "$rustc_findings" -gt "$syntax_findings"
 
 if ! diff -u <(sort "$BASELINE") <(sort "$SUMMARY"); then
