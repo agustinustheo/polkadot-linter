@@ -180,6 +180,14 @@ pub mod frame {
     }
 }
 
+pub mod polkadot_sdk_frame {
+    pub mod prelude {
+        pub trait OnRuntimeUpgrade {
+            fn on_runtime_upgrade();
+        }
+    }
+}
+
 pub mod xcm_executor {
     pub mod traits {
         pub trait OnResponse {
@@ -290,6 +298,14 @@ impl frame_support::traits::OnRuntimeUpgrade for Migration {
 pub struct RenamedFrameMigration;
 
 impl crate::frame::traits::OnRuntimeUpgrade for RenamedFrameMigration {
+    fn on_runtime_upgrade() {
+        let _ = frame_support::storage::types::StorageMap::iter();
+    }
+}
+
+pub struct FacadeMigration;
+
+impl crate::polkadot_sdk_frame::prelude::OnRuntimeUpgrade for FacadeMigration {
     fn on_runtime_upgrade() {
         let _ = frame_support::storage::types::StorageMap::iter();
     }
@@ -645,7 +661,7 @@ test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
 test "$rustc_sec009_count" = "2"
 test "$syn_sec011_count" = "1"
-test "$rustc_sec011_count" = "7"
+test "$rustc_sec011_count" = "8"
 test "$syn_sec012_count" = "6"
 test "$rustc_sec012_count" = "3"
 test "$syn_sec013_count" = "0"
@@ -656,7 +672,7 @@ test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "3"
 test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
-test "$rustc_filtered_count" = "28"
+test "$rustc_filtered_count" = "29"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "4"
 test "$rustc_rule_filtered_sec008_count" = "2"

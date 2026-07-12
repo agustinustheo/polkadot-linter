@@ -1742,7 +1742,10 @@ fn matches_frame_storage_method_owner_path(name: &str) -> bool {
 }
 
 fn is_frame_support_path(name: &str) -> bool {
-    name.contains("frame_support::") || name.starts_with("frame::") || name.contains("::frame::")
+    name.contains("frame_support::")
+        || name.contains("polkadot_sdk_frame::")
+        || name.starts_with("frame::")
+        || name.contains("::frame::")
 }
 
 fn has_hir_attr(tcx: TyCtxt<'_>, hir_id: rustc_hir::HirId, path: &[&str]) -> bool {

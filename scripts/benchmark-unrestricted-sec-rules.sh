@@ -3,30 +3,31 @@
 set -euo pipefail
 
 if ! command -v jq >/dev/null 2>&1; then
-  echo "error: jq is required for scripts/benchmark-sec-rules.sh" >&2
+  echo "error: jq is required for scripts/benchmark-unrestricted-sec-rules.sh" >&2
   exit 1
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_PATH="${1:-$ROOT_DIR/.repos/polkadot-sdk}"
 OUTPUT_DIR="${2:-$ROOT_DIR/.benchmarks}"
-CONFIG_FILE="${POLKADOT_LINTER_FOCUSED_CONFIG:-$ROOT_DIR/polkadot-linter.toml}"
+CONFIG_FILE="${POLKADOT_LINTER_UNRESTRICTED_CONFIG:-$ROOT_DIR/config/default.toml}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 mkdir -p "$OUTPUT_DIR"
 
-RAW_JSON="$OUTPUT_DIR/sec-rules-$TIMESTAMP.json"
-SUMMARY_TXT="$OUTPUT_DIR/sec-rules-$TIMESTAMP-summary.txt"
+RAW_JSON="$OUTPUT_DIR/sec-rules-unrestricted-$TIMESTAMP.json"
+SUMMARY_TXT="$OUTPUT_DIR/sec-rules-unrestricted-$TIMESTAMP-summary.txt"
 
-cargo run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
+cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$CONFIG_FILE" \
   --rules SEC \
   --no-rustc \
-  -f json \
+  --format json \
   "$TARGET_PATH" > "$RAW_JSON"
 
 {
   echo "Benchmark target: $TARGET_PATH"
+  echo "Config: $CONFIG_FILE"
   echo "Generated at: $TIMESTAMP"
   echo
   echo "Findings by rule:"
