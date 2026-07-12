@@ -56,9 +56,11 @@ The driver currently includes typed checks for:
   unrelated public trait implementations are not treated as runtime entry
   points. Indirect calls and path-sensitive control flow remain out of scope.
 - `SEC003`: unsafe recursive decode calls. The rustc-backed implementation
-  reads resolved call return types and decode receiver types, so aliases to
-  `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
-  resolution instead of source text matching. It propagates input evidence from
+  reads resolved call return types and decode receiver types. It detects cycles
+  through resolved ADT fields and generic arguments, while retaining support
+  for associated projections named `RuntimeCall`, `UncheckedExtrinsic`, or
+  `OpaqueExtrinsic` that cannot be structurally expanded in a generic pallet.
+  It propagates input evidence from
   entry-point parameters through local bindings, local aliases and assignments
   passed to direct local helpers (with unconditional internal-buffer overwrites
   clearing taint and conditional assignments or branch-value expressions merged
@@ -100,7 +102,8 @@ The driver currently includes typed checks for:
   cap is recognized as bounded; a dynamic cap remains reportable.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
-  such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
+  such as `None` and `Some(u32::MAX)`, including unbounded locals that reach a
+  call without being overwritten, only when the owner is a FRAME storage
   collection reachable from a public or hook entry point, including direct
   local helper calls.
 - `SEC013`: unbounded storage aliases. The rustc-backed implementation reads

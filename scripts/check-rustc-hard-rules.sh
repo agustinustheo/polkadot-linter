@@ -225,6 +225,7 @@ impl Domain {
 pub struct RuntimeCall;
 pub type AliasCall = RuntimeCall;
 pub struct MigrationState;
+pub struct RecursivePayload(pub Box<RecursivePayload>);
 
 impl RuntimeCall {
     pub fn decode(_input: &mut &[u8]) -> Result<Self, ()> {
@@ -239,6 +240,12 @@ impl RuntimeCall {
 impl MigrationState {
     pub fn decode(_input: &mut &[u8]) -> Result<Self, ()> {
         Ok(MigrationState)
+    }
+}
+
+impl RecursivePayload {
+    pub fn decode(_input: &mut &[u8]) -> Result<Self, ()> {
+        Err(())
     }
 }
 
@@ -385,6 +392,18 @@ pub fn storage_clear_prefix_unbounded() {
     frame_support::storage::types::StorageMap::clear_prefix((), Some(u32::MAX));
 }
 
+pub fn storage_clear_prefix_local_unbounded() {
+    let limit = Some(u32::MAX);
+    frame_support::storage::types::StorageMap::clear_prefix((), limit);
+}
+
+pub fn storage_clear_prefix_overwritten_bounded() {
+    let mut limit = Some(u32::MAX);
+    let _previous_limit = limit;
+    limit = Some(10);
+    frame_support::storage::types::StorageMap::clear_prefix((), limit);
+}
+
 pub fn storage_clear_prefix_via_private_helper() {
     reachable_private_clear_prefix();
 }
@@ -431,6 +450,10 @@ fn private_storage_iteration() {
 
 pub fn decode_alias_call(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     AliasCall::decode(&mut data)
+}
+
+pub fn decode_structural_recursive(mut data: &[u8]) -> Result<RecursivePayload, ()> {
+    RecursivePayload::decode(&mut data)
 }
 
 pub fn decode_alias_in_encoded(payload: EncodedInput) -> Result<RuntimeCall, ()> {
@@ -914,6 +937,8 @@ match_selected_input_decode_line="$(grep -n 'decoded_after_match_selected_input 
 rustc_sec003_match_selected_input_count="$(jq --argjson line "$match_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 match_helper_decode_line="$(grep -n 'decoded_from_match_helper = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_match_helper_count="$(jq --argjson line "$match_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
+structural_recursive_decode_line="$(grep -n 'pub fn decode_structural_recursive' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_structural_recursive_count="$(jq --argjson line "$structural_recursive_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
@@ -941,6 +966,10 @@ literal_bound_storage_iteration_line="$(grep -n 'let literal_bound_storage_itera
 rustc_sec011_literal_bound_iteration_count="$(jq --argjson line "$literal_bound_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
 dynamically_capped_storage_iteration_line="$(grep -n 'frame_support::storage::types::StorageMap::iter().take(limit)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec011_dynamic_iteration_count="$(jq --argjson line "$dynamically_capped_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
+local_unbounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_local_unbounded' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_local_unbounded_count="$(jq --argjson line "$local_unbounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
+overwritten_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_overwritten_bounded' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_overwritten_bounded_count="$(jq --argjson line "$overwritten_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
@@ -981,12 +1010,13 @@ test "$rustc_sec013_unrelated_storage_count" = "0"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
 test "$syn_sec003_count" = "11"
-test "$rustc_sec003_count" = "11"
+test "$rustc_sec003_count" = "12"
 test "$rustc_sec003_clean_assignment_count" = "0"
 test "$rustc_sec003_conditional_clean_assignment_count" = "1"
 test "$rustc_sec003_branch_selected_input_count" = "1"
 test "$rustc_sec003_match_selected_input_count" = "1"
 test "$rustc_sec003_match_helper_count" = "1"
+test "$rustc_sec003_structural_recursive_count" = "1"
 test "$syn_sec008_count" = "14"
 test "$rustc_sec008_count" = "4"
 test "$rustc_sec008_known_ok_count" = "0"
@@ -1016,7 +1046,9 @@ test "$rustc_sec011_bounded_iteration_count" = "0"
 test "$rustc_sec011_literal_bound_iteration_count" = "0"
 test "$rustc_sec011_dynamic_iteration_count" = "1"
 test "$syn_sec012_count" = "6"
-test "$rustc_sec012_count" = "3"
+test "$rustc_sec012_count" = "4"
+test "$rustc_sec012_local_unbounded_count" = "1"
+test "$rustc_sec012_overwritten_bounded_count" = "0"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "1"
 test "$syn_sec017_count" = "0"
@@ -1030,7 +1062,7 @@ test "$rustc_sec018_comment_only_weight_input_count" = "1"
 test "$rustc_sec018_weighted_tuple_count" = "0"
 test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "42"
+test "$rustc_filtered_count" = "44"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "7"
 test "$rustc_rule_filtered_sec008_count" = "4"

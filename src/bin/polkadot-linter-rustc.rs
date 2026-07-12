@@ -19,7 +19,7 @@ use std::{
 use rustc_driver::{Callbacks, Compilation};
 use rustc_hir::{
     def::Res,
-    def_id::LocalDefId,
+    def_id::{DefId, LocalDefId},
     intravisit::{self, Visitor},
     Arm, BinOpKind, Block, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind,
     QPath, StmtKind,
@@ -561,6 +561,7 @@ fn report_reachable_clear_prefix<'tcx>(
             tcx,
             typeck: tcx.typeck(*def_id),
             diagnostics,
+            unbounded_limit_bindings: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -1971,16 +1972,38 @@ struct Sec012Visitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
+    unbounded_limit_bindings: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec012Visitor<'_, 'tcx> {
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(is_unbounded_clear_prefix_limit) {
+            self.unbounded_limit_bindings
+                .extend(pattern_binding_ids(local.pat));
+        }
+
+        intravisit::walk_local(self, local);
+    }
+
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Assign(target, value, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                if is_unbounded_clear_prefix_limit(value) {
+                    self.unbounded_limit_bindings.insert(binding);
+                } else {
+                    self.unbounded_limit_bindings.remove(&binding);
+                }
+            }
+        }
+
         if let ExprKind::Call(callee, args) = expr.kind {
             if associated_call_name(callee).is_some_and(|name| name == "clear_prefix")
                 && is_frame_storage_associated_call(self.tcx, self.typeck, callee)
-                && args
-                    .get(1)
-                    .is_some_and(|limit| is_unbounded_clear_prefix_limit(limit))
+                && args.get(1).is_some_and(|limit| {
+                    is_unbounded_clear_prefix_limit(limit)
+                        || local_binding_id(self.typeck, limit)
+                            .is_some_and(|binding| self.unbounded_limit_bindings.contains(&binding))
+                })
             {
                 let (file, line, column) = span_location(self.source_map, expr.span);
                 self.diagnostics.push(RustcDiagnostic {
@@ -2358,22 +2381,46 @@ fn expand_alias_type<'tcx>(
 }
 
 fn type_contains_recursive_decode_target<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    type_contains_recursive_decode_target_inner(tcx, ty, &mut HashSet::new())
+}
+
+fn type_contains_recursive_decode_target_inner<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    adt_stack: &mut HashSet<DefId>,
+) -> bool {
     match ty.kind() {
         TyKind::Adt(adt, args) => {
             let name = tcx.def_path_str(adt.did());
-            is_recursive_decode_target_name(&name)
-                || args.iter().any(|arg| match arg.kind() {
-                    GenericArgKind::Type(arg_ty) => {
-                        type_contains_recursive_decode_target(tcx, arg_ty)
-                    }
-                    _ => false,
-                })
+            if is_recursive_decode_target_name(&name) || !adt_stack.insert(adt.did()) {
+                return true;
+            }
+            let recursive = args.iter().any(|arg| match arg.kind() {
+                GenericArgKind::Type(arg_ty) => {
+                    type_contains_recursive_decode_target_inner(tcx, arg_ty, adt_stack)
+                }
+                _ => false,
+            }) || adt.all_fields().any(|field| {
+                type_contains_recursive_decode_target_inner(tcx, field.ty(tcx, args), adt_stack)
+            });
+            adt_stack.remove(&adt.did());
+            recursive
         }
         TyKind::Alias(kind, alias_ty) => {
             is_recursive_decode_target_name(&tcx.def_path_str(alias_ty.def_id))
-                || expand_alias_type(tcx, *kind, *alias_ty)
-                    .is_some_and(|expanded| type_contains_recursive_decode_target(tcx, expanded))
+                || expand_alias_type(tcx, *kind, *alias_ty).is_some_and(|expanded| {
+                    type_contains_recursive_decode_target_inner(tcx, expanded, adt_stack)
+                })
         }
+        TyKind::Ref(_, inner, _) => {
+            type_contains_recursive_decode_target_inner(tcx, *inner, adt_stack)
+        }
+        TyKind::Array(inner, _) | TyKind::Slice(inner) => {
+            type_contains_recursive_decode_target_inner(tcx, *inner, adt_stack)
+        }
+        TyKind::Tuple(types) => types
+            .iter()
+            .any(|inner| type_contains_recursive_decode_target_inner(tcx, inner, adt_stack)),
         _ => false,
     }
 }
