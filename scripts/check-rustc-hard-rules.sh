@@ -323,6 +323,15 @@ pub fn bounded_input_vec(payload: Payload) {
     let _ = payload;
 }
 
+#[pallet::call_index(28)] #[pallet::weight(WeightInfo::submit_bounded(payload.len() as u32))]
+pub fn literal_bound_input_vec(payload: Payload) {
+    let max_payload_len = 32;
+    if payload.len() > max_payload_len {
+        return;
+    }
+    let _ = payload;
+}
+
 #[pallet::call_index(9)] #[pallet::weight(WeightInfo::fixed_bound())]
 pub fn fixed_bound_weight(payload: Payload) {
     if payload.len() > 32 {
@@ -400,6 +409,44 @@ pub fn dynamically_capped_storage_iteration(limit: usize) {
     let _ = dynamically_capped_storage_iteration;
 }
 
+pub fn conditionally_unbounded_storage_iteration(clear: bool, limit: usize) {
+    let mut cap = 10;
+    if clear {
+        cap = limit;
+    }
+    let _ = frame_support::storage::types::StorageMap::iter().take(cap);
+}
+
+#[allow(unused_assignments)]
+pub fn conditionally_bounded_storage_iteration(select_first: bool) {
+    let mut cap = 10;
+    if select_first {
+        cap = 20;
+    } else {
+        cap = 30;
+    }
+    let _ = frame_support::storage::types::StorageMap::iter().take(cap);
+}
+
+pub fn match_conditionally_unbounded_storage_iteration(select_first: bool, limit: usize) {
+    let mut cap = 10;
+    match select_first {
+        true => cap = limit,
+        false => {},
+    }
+    let _ = frame_support::storage::types::StorageMap::iter().take(cap);
+}
+
+#[allow(unused_assignments)]
+pub fn match_bounded_storage_iteration(select_first: bool) {
+    let mut cap = 10;
+    match select_first {
+        true => cap = 20,
+        false => cap = 30,
+    }
+    let _ = frame_support::storage::types::StorageMap::iter().take(cap);
+}
+
 pub fn storage_iteration_via_private_helper() {
     reachable_private_storage_iteration();
 }
@@ -469,6 +516,33 @@ pub fn storage_clear_prefix_overwritten_bounded() {
     let mut limit = Some(u32::MAX);
     let _previous_limit = limit;
     limit = Some(10);
+    frame_support::storage::types::StorageMap::clear_prefix((), limit);
+}
+
+pub fn storage_clear_prefix_conditionally_overwritten_bounded(clear: bool) {
+    let mut limit = Some(u32::MAX);
+    if clear {
+        limit = Some(10);
+    }
+    frame_support::storage::types::StorageMap::clear_prefix((), limit);
+}
+
+pub fn storage_clear_prefix_match_overwritten_bounded(clear: bool) {
+    let mut limit = Some(u32::MAX);
+    match clear {
+        true => limit = Some(10),
+        false => {},
+    }
+    frame_support::storage::types::StorageMap::clear_prefix((), limit);
+}
+
+#[allow(unused_assignments)]
+pub fn storage_clear_prefix_match_bounded(clear: bool) {
+    let mut limit = Some(u32::MAX);
+    match clear {
+        true => limit = Some(10),
+        false => limit = Some(20),
+    }
     frame_support::storage::types::StorageMap::clear_prefix((), limit);
 }
 
@@ -921,6 +995,20 @@ pub fn guarded_positive_division(a: i32, b: i32) -> Result<i32, ()> {
     Err(())
 }
 
+pub fn match_nonzero_division(a: u32, b: u32) -> Result<u32, ()> {
+    match b {
+        1 => Ok(a / b),
+        _ => Err(()),
+    }
+}
+
+pub fn match_zero_division(a: u32, b: u32) -> Result<u32, ()> {
+    match b {
+        0 => Ok(a / b),
+        _ => Err(()),
+    }
+}
+
 pub fn nonzero_division(a: u32, b: std::num::NonZeroU32) -> Result<u32, ()> {
     Ok(a / b.get())
 }
@@ -1164,12 +1252,16 @@ guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | head -n1 | cut
 rustc_sec009_guarded_division_count="$(jq --argjson line "$guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 conjunction_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
 rustc_sec009_conjunction_guarded_division_count="$(jq --argjson line "$conjunction_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-ensure_guarded_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
-rustc_sec009_ensure_guarded_division_count="$(jq --argjson line "$ensure_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+ensure_guarded_division_line="$(grep -n 'pub fn guarded_division_with_ensure' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_ensure_guarded_division_count="$(jq --argjson line "$ensure_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 else_guarded_division_line="$(grep -n 'pub fn guarded_division_in_else' "$FIXTURE" | cut -d: -f1)"
 rustc_sec009_else_guarded_division_count="$(jq --argjson line "$else_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 positive_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec009_positive_guarded_division_count="$(jq --argjson line "$positive_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+match_nonzero_division_line="$(grep -n 'pub fn match_nonzero_division' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_match_nonzero_division_count="$(jq --argjson line "$match_nonzero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
+match_zero_division_line="$(grep -n 'pub fn match_zero_division' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_match_zero_division_count="$(jq --argjson line "$match_zero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
 nonzero_division_line="$(grep -n 'pub fn nonzero_division' "$FIXTURE" | cut -d: -f1)"
 nonzero_remainder_line="$(grep -n 'pub fn nonzero_remainder' "$FIXTURE" | cut -d: -f1)"
 rustc_sec009_nonzero_division_count="$(jq --argjson line "$nonzero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
@@ -1224,6 +1316,7 @@ privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
 bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
+literal_bound_input_line="$(grep -n 'pub fn literal_bound_input_vec' "$FIXTURE" | cut -d: -f1)"
 fixed_bound_weight_line="$(grep -n 'pub fn fixed_bound_weight' "$FIXTURE" | cut -d: -f1)"
 unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
@@ -1242,6 +1335,7 @@ rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" 
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_literal_bound_input_count="$(jq --argjson line "$literal_bound_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_fixed_bound_weight_count="$(jq --argjson line "$fixed_bound_weight_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dispatchable_attribute_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1267,10 +1361,24 @@ literal_bound_storage_iteration_line="$(grep -n 'let literal_bound_storage_itera
 rustc_sec011_literal_bound_iteration_count="$(jq --argjson line "$literal_bound_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
 dynamically_capped_storage_iteration_line="$(grep -n 'frame_support::storage::types::StorageMap::iter().take(limit)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec011_dynamic_iteration_count="$(jq --argjson line "$dynamically_capped_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
+conditionally_unbounded_iteration_line="$(grep -n 'pub fn conditionally_unbounded_storage_iteration' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_conditionally_unbounded_count="$(jq --argjson line "$conditionally_unbounded_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
+conditionally_bounded_iteration_line="$(grep -n 'pub fn conditionally_bounded_storage_iteration' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_conditionally_bounded_count="$(jq --argjson line "$conditionally_bounded_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
+match_conditionally_unbounded_iteration_line="$(grep -n 'pub fn match_conditionally_unbounded_storage_iteration' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_match_conditionally_unbounded_count="$(jq --argjson line "$match_conditionally_unbounded_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
+match_bounded_iteration_line="$(grep -n 'pub fn match_bounded_storage_iteration' "$FIXTURE" | cut -d: -f1)"
+rustc_sec011_match_bounded_count="$(jq --argjson line "$match_bounded_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 local_unbounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_local_unbounded' "$FIXTURE" | cut -d: -f1)"
 rustc_sec012_local_unbounded_count="$(jq --argjson line "$local_unbounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 overwritten_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_overwritten_bounded' "$FIXTURE" | cut -d: -f1)"
 rustc_sec012_overwritten_bounded_count="$(jq --argjson line "$overwritten_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
+conditionally_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_conditionally_overwritten_bounded' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_conditionally_bounded_count="$(jq --argjson line "$conditionally_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
+match_overwritten_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_match_overwritten_bounded' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_match_overwritten_bounded_count="$(jq --argjson line "$match_overwritten_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
+match_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_match_bounded' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_match_bounded_count="$(jq --argjson line "$match_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
@@ -1307,6 +1415,7 @@ test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
 test "$rustc_sec001_bounded_input_count" = "0"
+test "$rustc_sec001_literal_bound_input_count" = "0"
 test "$rustc_sec018_fixed_bound_weight_count" = "0"
 test "$rustc_sec001_whitespace_dispatchable_count" = "1"
 test "$rustc_sec013_unrelated_storage_count" = "0"
@@ -1341,7 +1450,7 @@ test "$rustc_sec008_conditional_known_assignment_count" = "1"
 test "$rustc_sec008_match_known_assignment_count" = "1"
 test "$rustc_sec008_all_branches_known_assignment_count" = "0"
 test "$syn_sec009_count" = "6"
-test "$rustc_sec009_count" = "7"
+test "$rustc_sec009_count" = "8"
 test "$rustc_sec009_guarded_subtraction_count" = "0"
 test "$rustc_sec009_conjunction_guarded_subtraction_count" = "0"
 test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
@@ -1358,17 +1467,26 @@ test "$rustc_sec009_conjunction_guarded_division_count" = "0"
 test "$rustc_sec009_ensure_guarded_division_count" = "0"
 test "$rustc_sec009_else_guarded_division_count" = "0"
 test "$rustc_sec009_positive_guarded_division_count" = "0"
+test "$rustc_sec009_match_nonzero_division_count" = "0"
+test "$rustc_sec009_match_zero_division_count" = "1"
 test "$rustc_sec009_nonzero_division_count" = "0"
 test "$rustc_sec009_nonzero_remainder_count" = "0"
 test "$syn_sec011_count" = "1"
-test "$rustc_sec011_count" = "9"
+test "$rustc_sec011_count" = "11"
 test "$rustc_sec011_bounded_iteration_count" = "0"
 test "$rustc_sec011_literal_bound_iteration_count" = "0"
 test "$rustc_sec011_dynamic_iteration_count" = "1"
+test "$rustc_sec011_conditionally_unbounded_count" = "1"
+test "$rustc_sec011_conditionally_bounded_count" = "0"
+test "$rustc_sec011_match_conditionally_unbounded_count" = "1"
+test "$rustc_sec011_match_bounded_count" = "0"
 test "$syn_sec012_count" = "6"
-test "$rustc_sec012_count" = "4"
+test "$rustc_sec012_count" = "6"
 test "$rustc_sec012_local_unbounded_count" = "1"
 test "$rustc_sec012_overwritten_bounded_count" = "0"
+test "$rustc_sec012_conditionally_bounded_count" = "1"
+test "$rustc_sec012_match_overwritten_bounded_count" = "1"
+test "$rustc_sec012_match_bounded_count" = "0"
 test "$syn_sec013_count" = "0"
 test "$rustc_sec013_count" = "2"
 test "$rustc_sec013_whitespace_storage_count" = "1"
@@ -1389,9 +1507,9 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "58"
+test "$rustc_filtered_count" = "63"
 test "$rustc_filtered_empty_count" = "0"
-test "$rustc_rule_filtered_count" = "13"
+test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"
-test "$rustc_rule_filtered_sec009_count" = "7"
+test "$rustc_rule_filtered_sec009_count" = "8"
 test "$rustc_rule_filtered_other_count" = "0"
