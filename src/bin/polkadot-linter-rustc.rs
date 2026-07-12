@@ -1699,7 +1699,10 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
 
         if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
             self.visit_expr(scrutinee);
+            let incoming_taint = self.tainted_bindings.clone();
+            let mut arm_taint = HashSet::new();
             for arm in arms {
+                self.tainted_bindings = incoming_taint.clone();
                 let tainted_arm_bindings = tainted_pattern_binding_ids(
                     self.typeck,
                     scrutinee,
@@ -1712,7 +1715,9 @@ impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
                 for binding in tainted_arm_bindings {
                     self.tainted_bindings.remove(&binding);
                 }
+                arm_taint.extend(self.tainted_bindings.iter().copied());
             }
+            self.tainted_bindings = arm_taint;
             return;
         }
 
@@ -1771,6 +1776,9 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
+            let incoming_bindings = self.known_unwrappable_bindings.clone();
+
+            self.known_unwrappable_bindings = incoming_bindings.clone();
             if let Some(binding) = unwrappable_then_guard_binding(self.tcx, self.typeck, condition)
                 .or_else(|| unwrappable_then_let_binding(self.tcx, self.typeck, condition))
             {
@@ -1784,18 +1792,28 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
                 }
             } else {
                 self.visit_expr(then_branch);
-                if let Some(else_branch) = else_branch {
-                    self.visit_expr(else_branch);
-                }
             }
+            let then_bindings = self.known_unwrappable_bindings.clone();
+
+            self.known_unwrappable_bindings = incoming_bindings;
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.known_unwrappable_bindings = intersect_known_unwrappable_bindings(
+                then_bindings,
+                &self.known_unwrappable_bindings,
+            );
             return;
         }
 
         if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
             self.visit_expr(scrutinee);
+            let incoming_bindings = self.known_unwrappable_bindings.clone();
             let known_binding = local_binding_id(self.typeck, scrutinee)
                 .filter(|_| type_is_option_or_result(self.tcx, self.typeck.expr_ty(scrutinee)));
+            let mut arm_bindings = None;
             for arm in arms {
+                self.known_unwrappable_bindings = incoming_bindings.clone();
                 if let Some(binding) =
                     known_binding.filter(|_| pattern_is_unwrappable_success(arm.pat))
                 {
@@ -1807,7 +1825,15 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
                 } else {
                     self.visit_arm(arm);
                 }
+                let current_bindings = self.known_unwrappable_bindings.clone();
+                arm_bindings = Some(match arm_bindings {
+                    Some(bindings) => {
+                        intersect_known_unwrappable_bindings(bindings, &current_bindings)
+                    }
+                    None => current_bindings,
+                });
             }
+            self.known_unwrappable_bindings = arm_bindings.unwrap_or(incoming_bindings);
             return;
         }
 
@@ -1862,6 +1888,14 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
 
         intravisit::walk_local(self, local);
     }
+}
+
+fn intersect_known_unwrappable_bindings(
+    mut first: HashSet<HirId>,
+    second: &HashSet<HirId>,
+) -> HashSet<HirId> {
+    first.retain(|binding| second.contains(binding));
+    first
 }
 
 fn pattern_is_unwrappable_success(pattern: &Pat<'_>) -> bool {
@@ -2118,7 +2152,10 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
 
         if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
             self.visit_expr(scrutinee);
+            let incoming_taint = self.tainted_bindings.clone();
+            let mut arm_taint = HashSet::new();
             for arm in arms {
+                self.tainted_bindings = incoming_taint.clone();
                 let tainted_arm_bindings = tainted_pattern_binding_ids(
                     self.typeck,
                     scrutinee,
@@ -2131,7 +2168,9 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
                 for binding in tainted_arm_bindings {
                     self.tainted_bindings.remove(&binding);
                 }
+                arm_taint.extend(self.tainted_bindings.iter().copied());
             }
+            self.tainted_bindings = arm_taint;
             return;
         }
 

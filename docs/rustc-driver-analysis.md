@@ -64,7 +64,8 @@ The driver currently includes typed checks for:
   entry-point parameters through local bindings, local aliases and assignments
   passed to direct local helpers (with unconditional internal-buffer overwrites
   clearing taint and conditional assignments or branch-value expressions merged
-  conservatively), including match-arm bindings passed through local helpers,
+  conservatively). Match arms are analyzed from the same incoming state and
+  unioned, including when an input reaches a direct local helper,
   `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
   calls, while filtering macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
@@ -75,7 +76,8 @@ The driver currently includes typed checks for:
   used in an `is_some`/`is_ok` or `if let Some`/`if let Ok` success branch, or
   used in a matching `Some`/`Ok` arm or after a terminating `let Some`/`let Ok`
   else block. It clears local-construction
-  proof if the local is overwritten. It analyzes
+  proof if the local is overwritten or is not proven on every continuing `if`
+  or `match` branch. It analyzes
   public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
   control flow remain out of scope.
