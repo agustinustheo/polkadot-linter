@@ -397,7 +397,32 @@ pub fn decode_via_private_helper(data: &[u8]) -> Result<RuntimeCall, ()> {
     decode_private(data)
 }
 
+pub fn decode_via_private_helper_alias(data: &[u8]) -> Result<RuntimeCall, ()> {
+    let forwarded = data;
+    decode_private_alias(forwarded)
+}
+
+pub fn decode_via_private_helper_assignment(data: &[u8]) -> Result<RuntimeCall, ()> {
+    let forwarded: &[u8];
+    forwarded = data;
+    decode_private_assignment(forwarded)
+}
+
+pub fn decode_after_clean_assignment(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    let _was_empty = data.is_empty();
+    data = &[];
+    RuntimeCall::decode(&mut data)
+}
+
 fn decode_private(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    RuntimeCall::decode(&mut data)
+}
+
+fn decode_private_alias(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    RuntimeCall::decode(&mut data)
+}
+
+fn decode_private_assignment(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     RuntimeCall::decode(&mut data)
 }
 
@@ -612,6 +637,8 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
+clean_assignment_line="$(grep -n 'pub fn decode_after_clean_assignment' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_clean_assignment_count="$(jq --argjson line "$clean_assignment_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -654,8 +681,9 @@ test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
-test "$syn_sec003_count" = "4"
-test "$rustc_sec003_count" = "5"
+test "$syn_sec003_count" = "7"
+test "$rustc_sec003_count" = "7"
+test "$rustc_sec003_clean_assignment_count" = "0"
 test "$syn_sec008_count" = "4"
 test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
@@ -672,7 +700,7 @@ test "$syn_sec018_count" = "0"
 test "$rustc_sec018_count" = "3"
 test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
-test "$rustc_filtered_count" = "29"
+test "$rustc_filtered_count" = "31"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "4"
 test "$rustc_rule_filtered_sec008_count" = "2"

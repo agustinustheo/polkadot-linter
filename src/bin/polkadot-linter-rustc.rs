@@ -249,7 +249,7 @@ fn tainted_reachable_function_bodies<'tcx>(
             .collect::<HashSet<_>>();
         let mut visitor = TaintedLocalCallVisitor {
             typeck: tcx.typeck(def_id),
-            tainted_bindings: &tainted_bindings,
+            tainted_bindings,
             tainted_callee_parameters: Vec::new(),
         };
         visitor.visit_body(body);
@@ -990,6 +990,16 @@ struct Sec003Visitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Assign(target, value, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                if expr_references_tainted_binding(self.typeck, value, &self.tainted_bindings) {
+                    self.tainted_bindings.insert(binding);
+                } else {
+                    self.tainted_bindings.remove(&binding);
+                }
+            }
+        }
+
         if is_unlimited_decode_call(expr)
             && (type_contains_recursive_decode_target(self.tcx, self.typeck.expr_ty(expr))
                 || decode_receiver_contains_recursive_target(self.tcx, self.typeck, expr))
@@ -1145,13 +1155,22 @@ impl LocalCalleeVisitor<'_, '_> {
 
 struct TaintedLocalCallVisitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
-    tainted_bindings: &'a HashSet<HirId>,
+    tainted_bindings: HashSet<HirId>,
     tainted_callee_parameters: Vec<(LocalDefId, usize)>,
 }
 
 impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         match expr.kind {
+            ExprKind::Assign(target, value, _) => {
+                if let Some(binding) = local_binding_id(self.typeck, target) {
+                    if expr_references_tainted_binding(self.typeck, value, &self.tainted_bindings) {
+                        self.tainted_bindings.insert(binding);
+                    } else {
+                        self.tainted_bindings.remove(&binding);
+                    }
+                }
+            }
             ExprKind::Call(callee, args) => {
                 let local_def_id = match callee.kind {
                     ExprKind::Path(qpath) => self
@@ -1178,6 +1197,16 @@ impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(|init| {
+            expr_references_tainted_binding(self.typeck, init, &self.tainted_bindings)
+        }) {
+            self.tainted_bindings.extend(pattern_binding_ids(local.pat));
+        }
+
+        intravisit::walk_local(self, local);
+    }
 }
 
 impl TaintedLocalCallVisitor<'_, '_> {
@@ -1191,7 +1220,7 @@ impl TaintedLocalCallVisitor<'_, '_> {
         };
         self.tainted_callee_parameters
             .extend(args.enumerate().filter_map(|(index, arg)| {
-                expr_references_tainted_binding(self.typeck, arg, self.tainted_bindings)
+                expr_references_tainted_binding(self.typeck, arg, &self.tainted_bindings)
                     .then_some((local_def_id, index))
             }));
     }
@@ -1431,6 +1460,19 @@ fn expr_references_tainted_binding(
             .iter()
             .any(|value| expr_references_tainted_binding(typeck, value, tainted_bindings)),
         _ => false,
+    }
+}
+
+fn local_binding_id(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> Option<HirId> {
+    let ExprKind::Path(qpath) = expr.kind else {
+        return None;
+    };
+    match typeck.qpath_res(&qpath, expr.hir_id) {
+        Res::Local(hir_id) => Some(hir_id),
+        _ => None,
     }
 }
 
