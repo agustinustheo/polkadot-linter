@@ -323,6 +323,14 @@ pub fn bounded_input_vec(payload: Payload) {
     let _ = payload;
 }
 
+#[pallet::call_index(9)] #[pallet::weight(WeightInfo::fixed_bound())]
+pub fn fixed_bound_weight(payload: Payload) {
+    if payload.len() > 32 {
+        return;
+    }
+    let _ = payload;
+}
+
 pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
     let _ = payload;
 }
@@ -1044,6 +1052,7 @@ privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
 bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
+fixed_bound_weight_line="$(grep -n 'pub fn fixed_bound_weight' "$FIXTURE" | cut -d: -f1)"
 unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
 whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
@@ -1061,6 +1070,7 @@ rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" 
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec018_fixed_bound_weight_count="$(jq --argjson line "$fixed_bound_weight_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dispatchable_attribute_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec013_whitespace_storage_count="$(jq --argjson line "$whitespace_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -1125,6 +1135,7 @@ test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
 test "$rustc_sec001_bounded_input_count" = "0"
+test "$rustc_sec018_fixed_bound_weight_count" = "0"
 test "$rustc_sec001_whitespace_dispatchable_count" = "1"
 test "$rustc_sec013_unrelated_storage_count" = "0"
 test "$rustc_sec002_raw_string_count" = "0"
