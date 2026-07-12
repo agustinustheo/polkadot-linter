@@ -87,7 +87,8 @@ The driver currently includes typed checks for:
   resolved `if a >= b` or `if b <= a` branch and after an early-return guard
   such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero or
   positive divisor guards and `core::num::NonZero` `.get()` values for `/` and
-  `%`. Indirect calls and broader path-sensitive
+  `%`. It also recognizes those proofs in the safe `else` branch after a
+  failed underflow or zero check. Indirect calls and broader path-sensitive
   control flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls

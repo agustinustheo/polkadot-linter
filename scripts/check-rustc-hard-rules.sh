@@ -831,6 +831,10 @@ pub fn guarded_subtraction_with_early_return(a: u32, b: u32) -> Result<u32, ()> 
     Ok(a - b)
 }
 
+pub fn guarded_subtraction_in_else(a: u32, b: u32) -> Result<u32, ()> {
+    if a < b { Err(()) } else { Ok(a - b) }
+}
+
 pub fn raw_division(a: u32, b: u32) -> Result<u32, ()> {
     Ok(a / b)
 }
@@ -852,6 +856,10 @@ pub fn conjunction_guarded_division(a: u32, b: u32, enabled: bool) -> Result<u32
 pub fn guarded_division_with_ensure(a: u32, b: u32) -> Result<u32, ()> {
     ensure!(b != 0, ());
     Ok(a / b)
+}
+
+pub fn guarded_division_in_else(a: u32, b: u32) -> Result<u32, ()> {
+    if b == 0 { Err(()) } else { Ok(a / b) }
 }
 
 pub fn guarded_positive_division(a: i32, b: i32) -> Result<i32, ()> {
@@ -998,6 +1006,8 @@ ensure_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n2 | h
 rustc_sec009_ensure_guarded_subtraction_count="$(jq --argjson line "$ensure_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 early_return_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec009_early_return_guarded_subtraction_count="$(jq --argjson line "$early_return_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+else_guarded_subtraction_line="$(grep -n 'pub fn guarded_subtraction_in_else' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_else_guarded_subtraction_count="$(jq --argjson line "$else_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 raw_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | head -n1 | cut -d: -f1)"
 rustc_sec009_raw_division_count="$(jq --argjson line "$raw_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
@@ -1006,6 +1016,8 @@ conjunction_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | ta
 rustc_sec009_conjunction_guarded_division_count="$(jq --argjson line "$conjunction_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 ensure_guarded_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec009_ensure_guarded_division_count="$(jq --argjson line "$ensure_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+else_guarded_division_line="$(grep -n 'pub fn guarded_division_in_else' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_else_guarded_division_count="$(jq --argjson line "$else_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 positive_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec009_positive_guarded_division_count="$(jq --argjson line "$positive_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 nonzero_division_line="$(grep -n 'pub fn nonzero_division' "$FIXTURE" | cut -d: -f1)"
@@ -1169,10 +1181,12 @@ test "$rustc_sec009_guarded_subtraction_count" = "0"
 test "$rustc_sec009_conjunction_guarded_subtraction_count" = "0"
 test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
 test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
+test "$rustc_sec009_else_guarded_subtraction_count" = "0"
 test "$rustc_sec009_raw_division_count" = "1"
 test "$rustc_sec009_guarded_division_count" = "0"
 test "$rustc_sec009_conjunction_guarded_division_count" = "0"
 test "$rustc_sec009_ensure_guarded_division_count" = "0"
+test "$rustc_sec009_else_guarded_division_count" = "0"
 test "$rustc_sec009_positive_guarded_division_count" = "0"
 test "$rustc_sec009_nonzero_division_count" = "0"
 test "$rustc_sec009_nonzero_remainder_count" = "0"

@@ -2156,7 +2156,15 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
             self.visit_expr(condition);
             let underflow_guards = non_underflow_guard_pairs(self.typeck, condition);
             let nonzero_guards = nonzero_guard_bindings(self.typeck, condition);
-            if !underflow_guards.is_empty() || !nonzero_guards.is_empty() {
+            let else_underflow_guard =
+                else_branch.and_then(|_| failed_non_underflow_guard_pair(self.typeck, condition));
+            let else_nonzero_guard =
+                else_branch.and_then(|_| failed_nonzero_guard_binding(self.typeck, condition));
+            if !underflow_guards.is_empty()
+                || !nonzero_guards.is_empty()
+                || else_underflow_guard.is_some()
+                || else_nonzero_guard.is_some()
+            {
                 let inserted_underflow_guards = underflow_guards
                     .into_iter()
                     .filter(|pair| self.non_underflow_pairs.insert(*pair))
@@ -2173,7 +2181,19 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
                     self.nonzero_bindings.remove(&binding);
                 }
                 if let Some(else_branch) = else_branch {
+                    if let Some(pair) = else_underflow_guard {
+                        self.non_underflow_pairs.insert(pair);
+                    }
+                    if let Some(binding) = else_nonzero_guard {
+                        self.nonzero_bindings.insert(binding);
+                    }
                     self.visit_expr(else_branch);
+                    if let Some(pair) = else_underflow_guard {
+                        self.non_underflow_pairs.remove(&pair);
+                    }
+                    if let Some(binding) = else_nonzero_guard {
+                        self.nonzero_bindings.remove(&binding);
+                    }
                 }
                 return;
             }
