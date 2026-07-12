@@ -455,6 +455,14 @@ macro_rules! nested_debug_assert {
     };
 }
 
+macro_rules! ensure {
+    ($condition:expr, $error:expr) => {
+        if !$condition {
+            return Err($error);
+        }
+    };
+}
+
 pub fn active_debug_assert(value: u32) {
     let note = "debug_assert! in a string is not an assertion";
     let _ = note;
@@ -516,6 +524,24 @@ pub fn unwrap_after_unknown_overwrite() -> u32 {
     value.expect("unknown overwrite can fail")
 }
 
+pub fn unwrap_after_option_guard(value: Option<u32>) -> Result<u32, ()> {
+    ensure!(value.is_some(), ());
+    Ok(value.unwrap())
+}
+
+pub fn unwrap_after_result_guard(value: Result<u32, ()>) -> Result<u32, ()> {
+    if value.is_err() {
+        return Err(());
+    }
+    Ok(value.expect("the error path returned early"))
+}
+
+pub fn unwrap_after_guarded_overwrite(mut value: Option<u32>) -> Result<u32, ()> {
+    ensure!(value.is_some(), ());
+    value = None;
+    Ok(value.unwrap())
+}
+
 pub fn unwrap_via_private_helper(flag: bool) -> u32 {
     reachable_private_unwrap_fallible_result(flag)
 }
@@ -531,6 +557,25 @@ fn private_unwrap_fallible_result(flag: bool) -> u32 {
 
 pub fn raw_integer(a: u32, b: u32, c: u32) -> Result<u32, ()> {
     Ok((a + b) - c)
+}
+
+pub fn guarded_subtraction(a: u32, b: u32) -> Result<u32, ()> {
+    if a >= b {
+        return Ok(a - b);
+    }
+    Err(())
+}
+
+pub fn guarded_subtraction_with_ensure(a: u32, b: u32) -> Result<u32, ()> {
+    ensure!(a >= b, ());
+    Ok(a - b)
+}
+
+pub fn guarded_subtraction_with_early_return(a: u32, b: u32) -> Result<u32, ()> {
+    if a < b {
+        return Err(());
+    }
+    Ok(a - b)
 }
 
 pub fn raw_integer_via_private_helper(a: u32, b: u32) -> Result<u32, ()> {
@@ -654,12 +699,24 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
 rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
 rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
+guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | cut -d: -f1)"
+rustc_sec009_guarded_subtraction_count="$(jq --argjson line "$guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+ensure_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
+rustc_sec009_ensure_guarded_subtraction_count="$(jq --argjson line "$ensure_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
+early_return_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
+rustc_sec009_early_return_guarded_subtraction_count="$(jq --argjson line "$early_return_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
 known_ok_line="$(grep -n 'known_ok.unwrap' "$FIXTURE" | cut -d: -f1)"
 known_some_line="$(grep -n 'known_some.expect' "$FIXTURE" | cut -d: -f1)"
 unknown_overwrite_line="$(grep -n 'value.expect("unknown overwrite can fail")' "$FIXTURE" | cut -d: -f1)"
 rustc_sec008_known_ok_count="$(jq --argjson line "$known_ok_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec008_known_some_count="$(jq --argjson line "$known_some_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec008_unknown_overwrite_count="$(jq --argjson line "$unknown_overwrite_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
+option_guarded_unwrap_line="$(grep -n 'Ok(value.unwrap())' "$FIXTURE" | head -n1 | cut -d: -f1)"
+rustc_sec008_option_guarded_unwrap_count="$(jq --argjson line "$option_guarded_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
+result_guarded_expect_line="$(grep -n 'value.expect("the error path returned early")' "$FIXTURE" | cut -d: -f1)"
+rustc_sec008_result_guarded_expect_count="$(jq --argjson line "$result_guarded_expect_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
+guarded_overwrite_unwrap_line="$(grep -n 'Ok(value.unwrap())' "$FIXTURE" | tail -n1 | cut -d: -f1)"
+rustc_sec008_guarded_overwrite_unwrap_count="$(jq --argjson line "$guarded_overwrite_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 clean_assignment_line="$(grep -n 'pub fn decode_after_clean_assignment' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_clean_assignment_count="$(jq --argjson line "$clean_assignment_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
@@ -707,13 +764,19 @@ test "$rustc_sec002_count" = "3"
 test "$syn_sec003_count" = "7"
 test "$rustc_sec003_count" = "7"
 test "$rustc_sec003_clean_assignment_count" = "0"
-test "$syn_sec008_count" = "7"
-test "$rustc_sec008_count" = "3"
+test "$syn_sec008_count" = "10"
+test "$rustc_sec008_count" = "4"
 test "$rustc_sec008_known_ok_count" = "0"
 test "$rustc_sec008_known_some_count" = "0"
 test "$rustc_sec008_unknown_overwrite_count" = "1"
-test "$syn_sec009_count" = "3"
+test "$rustc_sec008_option_guarded_unwrap_count" = "0"
+test "$rustc_sec008_result_guarded_expect_count" = "0"
+test "$rustc_sec008_guarded_overwrite_unwrap_count" = "1"
+test "$syn_sec009_count" = "5"
 test "$rustc_sec009_count" = "2"
+test "$rustc_sec009_guarded_subtraction_count" = "0"
+test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
+test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "8"
 test "$syn_sec012_count" = "6"
@@ -728,7 +791,7 @@ test "$rustc_sec018_privileged_root_count" = "1"
 test "$rustc_sec018_privileged_config_count" = "1"
 test "$rustc_filtered_count" = "32"
 test "$rustc_filtered_empty_count" = "0"
-test "$rustc_rule_filtered_count" = "5"
-test "$rustc_rule_filtered_sec008_count" = "3"
+test "$rustc_rule_filtered_count" = "6"
+test "$rustc_rule_filtered_sec008_count" = "4"
 test "$rustc_rule_filtered_sec009_count" = "2"
 test "$rustc_rule_filtered_other_count" = "0"

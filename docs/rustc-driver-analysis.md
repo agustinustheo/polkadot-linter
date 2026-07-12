@@ -64,16 +64,20 @@ The driver currently includes typed checks for:
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited. It also tracks local values
-  constructed as `Ok`/`Some` and clears that proof if the local is overwritten.
-  It analyzes public and hook entry points and direct calls to local helpers
+  constructed as `Ok`/`Some`, or proven present by a terminating
+  `is_none`/`is_err` guard (including expanded `ensure!(value.is_some(), ...)`),
+  and clears local-construction proof if the local is overwritten. It analyzes
+  public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
   control flow remain out of scope.
 - `SEC009`: raw arithmetic in fallible functions. The rustc-backed
   implementation reads HIR and type-checking results, then reports binary `+`,
   `-`, `*`, `/`, and `%` only when both operands resolve to integer types inside
   a function reachable from a public or hook `Result` entry point, including
-  direct local helper calls. Indirect calls and path-sensitive control flow
-  remain out of scope.
+  direct local helper calls. It recognizes non-underflow subtraction inside a
+  resolved `if a >= b` or `if b <= a` branch and after an early-return guard
+  such as FRAME's expanded `ensure!(a >= b, ...)`. Indirect calls and broader
+  path-sensitive control flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
