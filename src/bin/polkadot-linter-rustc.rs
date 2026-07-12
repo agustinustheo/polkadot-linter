@@ -20,7 +20,8 @@ use rustc_hir::{
     def::Res,
     def_id::LocalDefId,
     intravisit::{self, Visitor},
-    Arm, BinOpKind, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind, QPath,
+    Arm, BinOpKind, Block, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind,
+    QPath, StmtKind,
 };
 use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
@@ -510,6 +511,7 @@ fn report_reachable_raw_arithmetic<'tcx>(
             typeck: tcx.typeck(*def_id),
             diagnostics,
             reported_lines: &mut reported_lines,
+            non_underflow_pairs: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -1092,6 +1094,28 @@ struct Sec008Visitor<'a, 'tcx> {
 }
 
 impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
+    fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
+        let mut exit_guards = Vec::new();
+
+        for statement in block.stmts {
+            self.visit_stmt(statement);
+            if let Some(binding) =
+                exiting_unwrappable_guard_binding(self.tcx, self.typeck, statement)
+            {
+                if self.known_unwrappable_bindings.insert(binding) {
+                    exit_guards.push(binding);
+                }
+            }
+        }
+        if let Some(expr) = block.expr {
+            self.visit_expr(expr);
+        }
+
+        for binding in exit_guards {
+            self.known_unwrappable_bindings.remove(&binding);
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
@@ -1144,6 +1168,41 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
 
         intravisit::walk_local(self, local);
     }
+}
+
+fn exiting_unwrappable_guard_binding(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    statement: &rustc_hir::Stmt<'_>,
+) -> Option<HirId> {
+    let (StmtKind::Expr(expr) | StmtKind::Semi(expr)) = statement.kind else {
+        return None;
+    };
+    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(expr).kind else {
+        return None;
+    };
+    if !expression_exits_current_function(then_branch) {
+        return None;
+    }
+
+    let condition = strip_drop_temps(condition);
+    let (negated, condition) = match condition.kind {
+        ExprKind::Unary(rustc_hir::UnOp::Not, inner) => (true, strip_drop_temps(inner)),
+        _ => (false, condition),
+    };
+    let ExprKind::MethodCall(segment, receiver, _, _) = condition.kind else {
+        return None;
+    };
+    let receiver_ty = typeck.expr_ty(receiver);
+    let method = segment.ident.name.as_str();
+    let guard_rejects_failure = (method == "is_none" && !negated)
+        || (method == "is_some" && negated)
+        || (method == "is_err" && !negated)
+        || (method == "is_ok" && negated);
+    if !guard_rejects_failure || !type_is_option_or_result(tcx, receiver_ty) {
+        return None;
+    }
+    local_binding_id(typeck, receiver)
 }
 
 struct LocalCalleeVisitor<'a, 'tcx> {
@@ -1260,16 +1319,52 @@ struct Sec009Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
+    non_underflow_pairs: HashSet<(HirId, HirId)>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
+    fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
+        let mut exit_guards = Vec::new();
+
+        for statement in block.stmts {
+            self.visit_stmt(statement);
+            if let Some(pair) = exiting_non_underflow_guard_pair(self.typeck, statement) {
+                if self.non_underflow_pairs.insert(pair) {
+                    exit_guards.push(pair);
+                }
+            }
+        }
+        if let Some(expr) = block.expr {
+            self.visit_expr(expr);
+        }
+
+        for pair in exit_guards {
+            self.non_underflow_pairs.remove(&pair);
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            if let Some(pair) = non_underflow_guard_pair(self.typeck, condition) {
+                self.non_underflow_pairs.insert(pair);
+                self.visit_expr(then_branch);
+                self.non_underflow_pairs.remove(&pair);
+                if let Some(else_branch) = else_branch {
+                    self.visit_expr(else_branch);
+                }
+                return;
+            }
+        }
+
         if let ExprKind::Binary(op, lhs, rhs) = expr.kind {
             let (file, line, column) = span_location(self.source_map, expr.span);
             if !span_line_starts_with_attribute(self.source_map, expr.span)
                 && is_raw_arithmetic(op.node)
                 && is_integral(self.typeck.expr_ty(lhs))
                 && is_integral(self.typeck.expr_ty(rhs))
+                && !(matches!(op.node, BinOpKind::Sub)
+                    && subtraction_is_guarded(self.typeck, lhs, rhs, &self.non_underflow_pairs))
                 && self.reported_lines.insert((file.clone(), line))
             {
                 self.diagnostics.push(RustcDiagnostic {
@@ -1286,6 +1381,96 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn non_underflow_guard_pair(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<(HirId, HirId)> {
+    let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    let lhs_binding = local_binding_id(typeck, lhs)?;
+    let rhs_binding = local_binding_id(typeck, rhs)?;
+    match operator.node {
+        BinOpKind::Ge => Some((lhs_binding, rhs_binding)),
+        BinOpKind::Le => Some((rhs_binding, lhs_binding)),
+        _ => None,
+    }
+}
+
+fn exiting_non_underflow_guard_pair(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    statement: &rustc_hir::Stmt<'_>,
+) -> Option<(HirId, HirId)> {
+    let (StmtKind::Expr(expr) | StmtKind::Semi(expr)) = statement.kind else {
+        return None;
+    };
+    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(expr).kind else {
+        return None;
+    };
+    if !expression_exits_current_function(then_branch) {
+        return None;
+    }
+    failed_non_underflow_guard_pair(typeck, condition)
+}
+
+fn failed_non_underflow_guard_pair(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<(HirId, HirId)> {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
+        return non_underflow_guard_pair(typeck, inner);
+    }
+
+    let ExprKind::Binary(operator, lhs, rhs) = condition.kind else {
+        return None;
+    };
+    let lhs_binding = local_binding_id(typeck, lhs)?;
+    let rhs_binding = local_binding_id(typeck, rhs)?;
+    match operator.node {
+        BinOpKind::Lt => Some((lhs_binding, rhs_binding)),
+        BinOpKind::Gt => Some((rhs_binding, lhs_binding)),
+        _ => None,
+    }
+}
+
+fn expression_exits_current_function(expr: &Expr<'_>) -> bool {
+    match strip_drop_temps(expr).kind {
+        ExprKind::Ret(_) => true,
+        ExprKind::Block(block, _) => {
+            block.expr.is_some_and(expression_exits_current_function)
+                || block
+                    .stmts
+                    .last()
+                    .and_then(statement_expression)
+                    .is_some_and(expression_exits_current_function)
+        }
+        _ => false,
+    }
+}
+
+fn statement_expression<'hir>(statement: &'hir rustc_hir::Stmt<'hir>) -> Option<&'hir Expr<'hir>> {
+    match statement.kind {
+        StmtKind::Expr(expr) | StmtKind::Semi(expr) => Some(expr),
+        StmtKind::Let(_) | StmtKind::Item(_) => None,
+    }
+}
+
+fn subtraction_is_guarded(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    lhs: &Expr<'_>,
+    rhs: &Expr<'_>,
+    non_underflow_pairs: &HashSet<(HirId, HirId)>,
+) -> bool {
+    let Some(lhs_binding) = local_binding_id(typeck, lhs) else {
+        return false;
+    };
+    let Some(rhs_binding) = local_binding_id(typeck, rhs) else {
+        return false;
+    };
+    non_underflow_pairs.contains(&(lhs_binding, rhs_binding))
 }
 
 fn span_line_starts_with_attribute(source_map: &SourceMap, span: Span) -> bool {
@@ -1496,6 +1681,7 @@ fn local_binding_id(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     expr: &Expr<'_>,
 ) -> Option<HirId> {
+    let expr = strip_drop_temps(expr);
     let ExprKind::Path(qpath) = expr.kind else {
         return None;
     };
@@ -1503,6 +1689,13 @@ fn local_binding_id(
         Res::Local(hir_id) => Some(hir_id),
         _ => None,
     }
+}
+
+fn strip_drop_temps<'hir>(mut expr: &'hir Expr<'hir>) -> &'hir Expr<'hir> {
+    while let ExprKind::DropTemps(inner) = expr.kind {
+        expr = inner;
+    }
+    expr
 }
 
 fn expression_is_known_unwrappable(
@@ -1534,6 +1727,17 @@ fn expression_constructs_known_unwrappable(
         && ((constructor == "Some" && type_path.ends_with("::Option"))
             || (constructor == "Ok"
                 && (type_path.ends_with("::Result") || type_path.contains("result::Result"))))
+}
+
+fn type_is_option_or_result(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
+    let TyKind::Adt(adt, _) = ty.kind() else {
+        return false;
+    };
+    let type_path = tcx.def_path_str(adt.did());
+    type_path.ends_with("::Option")
+        || type_path.ends_with("::Result")
+        || type_path.contains("option::Option")
+        || type_path.contains("result::Result")
 }
 
 fn pattern_binding_ids(pattern: &Pat<'_>) -> Vec<HirId> {
