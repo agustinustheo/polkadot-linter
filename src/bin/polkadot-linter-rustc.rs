@@ -26,6 +26,11 @@ use rustc_hir::{
 use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
 use serde::Serialize;
+use syn::{
+    parse::Parser,
+    visit::{self, Visit as SynVisit},
+    Expr as SynExpr, ExprCall as SynExprCall, ExprMethodCall as SynExprMethodCall,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct RustcDiagnostic {
@@ -787,7 +792,7 @@ impl<'tcx> Visitor<'tcx> for PrivilegedOriginVisitor<'_, 'tcx> {
                 let path = self.tcx.def_path_str(def_id);
                 self.has_privileged_guard |= is_frame_system_root_check(&path)
                     || (is_frame_ensure_origin_check(&path)
-                        && callee_uses_named_privileged_origin(self.tcx.sess.source_map(), callee));
+                        && callee_uses_named_privileged_origin(self.tcx, self.typeck, callee));
             }
         }
 
@@ -807,20 +812,30 @@ fn is_frame_ensure_origin_check(path: &str) -> bool {
         )
 }
 
-fn callee_uses_named_privileged_origin(source_map: &SourceMap, callee: &Expr<'_>) -> bool {
-    let Ok(snippet) = source_map.span_to_snippet(callee.span) else {
-        return false;
+fn callee_uses_named_privileged_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    callee: &'tcx Expr<'tcx>,
+) -> bool {
+    associated_call_receiver_type(typeck, callee)
+        .is_some_and(|origin_ty| type_is_named_privileged_origin(tcx, origin_ty))
+}
+
+fn type_is_named_privileged_origin<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let def_id = match ty.kind() {
+        TyKind::Alias(_, alias_ty) => alias_ty.def_id,
+        TyKind::Adt(adt, _) => adt.did(),
+        _ => return false,
     };
-    [
-        "AdminOrigin",
-        "ForceOrigin",
-        "FounderSetOrigin",
-        "GovernanceOrigin",
-        "RelayChainOrigin",
-        "RootOrigin",
-    ]
-    .iter()
-    .any(|origin| snippet.contains(origin))
+    matches!(
+        tcx.item_name(def_id).as_str(),
+        "AdminOrigin"
+            | "ForceOrigin"
+            | "FounderSetOrigin"
+            | "GovernanceOrigin"
+            | "RelayChainOrigin"
+            | "RootOrigin"
+    )
 }
 
 fn report_missing_weight_for_unbounded_inputs<'tcx>(
@@ -854,7 +869,7 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
         let Some(param_name) = body_param_name(param) else {
             continue;
         };
-        if weight_accounts_for_param(&weight_attributes.snippet, &param_name) {
+        if weight_accounts_for_param(&weight_attributes.expression, &param_name) {
             continue;
         }
 
@@ -873,7 +888,7 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
 }
 
 struct PalletWeightAttributes {
-    snippet: String,
+    expression: SynExpr,
     deprecated: bool,
 }
 
@@ -887,12 +902,21 @@ fn pallet_weight_attributes(
     let attribute_block = &prefix[start..];
     let attribute = balanced_attribute(attribute_block)?;
 
-    attribute
-        .strip_prefix("#[pallet::weight")
-        .map(|_| PalletWeightAttributes {
-            snippet: attribute.chars().filter(|ch| !ch.is_whitespace()).collect(),
-            deprecated: attribute_block.contains("#[deprecated"),
-        })
+    let attributes = syn::Attribute::parse_outer.parse_str(attribute).ok()?;
+    let weight_attribute = attributes
+        .iter()
+        .find(|attr| syn_path_matches(attr.path(), &["pallet", "weight"]))?;
+    Some(PalletWeightAttributes {
+        expression: weight_attribute.parse_args().ok()?,
+        deprecated: attribute_block.contains("#[deprecated"),
+    })
+}
+
+fn syn_path_matches(path: &syn::Path, expected: &[&str]) -> bool {
+    path.segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .eq(expected.iter().map(|segment| (*segment).to_string()))
 }
 
 fn is_frame_dispatchable(tcx: TyCtxt<'_>, def_id: LocalDefId, source_map: &SourceMap) -> bool {
@@ -1520,24 +1544,47 @@ struct Sec011Visitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::Call(callee, _) = expr.kind {
-            if associated_call_name(callee).is_some_and(|name| name == "iter" || name == "drain")
-                && is_frame_storage_associated_call(self.tcx, self.typeck, callee)
+        if let ExprKind::MethodCall(segment, receiver, args, _) = expr.kind {
+            if segment.ident.name.as_str() == "take"
+                && args.len() == 1
+                && is_literal_iteration_limit(&args[0])
+                && is_frame_storage_iteration_call(self.tcx, self.typeck, receiver)
             {
-                let (file, line, column) = span_location(self.source_map, expr.span);
-                self.diagnostics.push(RustcDiagnostic {
-                    rule_id: "SEC011",
-                    rule_name: "storage-iteration-in-dispatchables",
-                    file,
-                    line,
-                    column,
-                    message: "Callable iterates a resolved FRAME storage collection".to_string(),
-                });
+                self.visit_expr(&args[0]);
+                return;
             }
+        }
+
+        if is_frame_storage_iteration_call(self.tcx, self.typeck, expr) {
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            self.diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC011",
+                rule_name: "storage-iteration-in-dispatchables",
+                file,
+                line,
+                column,
+                message: "Callable iterates a resolved FRAME storage collection".to_string(),
+            });
         }
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn is_frame_storage_iteration_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &Expr<'tcx>,
+) -> bool {
+    let ExprKind::Call(callee, _) = expr.kind else {
+        return false;
+    };
+    associated_call_name(callee).is_some_and(|name| name == "iter" || name == "drain")
+        && is_frame_storage_associated_call(tcx, typeck, callee)
+}
+
+fn is_literal_iteration_limit(expr: &Expr<'_>) -> bool {
+    matches!(strip_drop_temps(expr).kind, ExprKind::Lit(_))
 }
 
 struct Sec012Visitor<'a, 'tcx> {
@@ -2105,17 +2152,69 @@ fn body_param_name(param: &rustc_hir::Param<'_>) -> Option<String> {
     }
 }
 
-fn weight_accounts_for_param(weight_snippet: &str, param_name: &str) -> bool {
-    [
-        format!("{param_name}.len()"),
-        format!("{param_name}.encoded_size()"),
-        format!("{param_name}.using_encoded("),
-        format!("{param_name}.using_encoded(|"),
-        format!("encoded_size({param_name})"),
-        format!("encoded_size(&{param_name})"),
-    ]
-    .iter()
-    .any(|needle| weight_snippet.contains(needle))
+fn weight_accounts_for_param(weight_expression: &SynExpr, param_name: &str) -> bool {
+    struct WeightParamVisitor<'a> {
+        param_name: &'a str,
+        found: bool,
+    }
+
+    impl<'ast> SynVisit<'ast> for WeightParamVisitor<'_> {
+        fn visit_expr_method_call(&mut self, node: &'ast SynExprMethodCall) {
+            if matches!(
+                node.method.to_string().as_str(),
+                "len" | "encoded_size" | "using_encoded"
+            ) && syn_expr_root_ident(&node.receiver).as_deref() == Some(self.param_name)
+            {
+                self.found = true;
+            }
+            visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_call(&mut self, node: &'ast SynExprCall) {
+            if syn_expr_last_path_segment(&node.func).as_deref() == Some("encoded_size")
+                && node.args.iter().any(|argument| {
+                    syn_expr_root_ident(argument).as_deref() == Some(self.param_name)
+                })
+            {
+                self.found = true;
+            }
+            visit::visit_expr_call(self, node);
+        }
+    }
+
+    let mut visitor = WeightParamVisitor {
+        param_name,
+        found: false,
+    };
+    visitor.visit_expr(weight_expression);
+    visitor.found
+}
+
+fn syn_expr_root_ident(expr: &SynExpr) -> Option<String> {
+    match expr {
+        SynExpr::Path(path) if path.qself.is_none() && path.path.segments.len() == 1 => path
+            .path
+            .segments
+            .first()
+            .map(|segment| segment.ident.to_string()),
+        SynExpr::Reference(reference) => syn_expr_root_ident(&reference.expr),
+        SynExpr::Paren(paren) => syn_expr_root_ident(&paren.expr),
+        SynExpr::Group(group) => syn_expr_root_ident(&group.expr),
+        _ => None,
+    }
+}
+
+fn syn_expr_last_path_segment(expr: &SynExpr) -> Option<String> {
+    match expr {
+        SynExpr::Path(path) if path.qself.is_none() => path
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string()),
+        SynExpr::Paren(paren) => syn_expr_last_path_segment(&paren.expr),
+        SynExpr::Group(group) => syn_expr_last_path_segment(&group.expr),
+        _ => None,
+    }
 }
 
 fn is_unbounded_clear_prefix_limit(expr: &Expr<'_>) -> bool {

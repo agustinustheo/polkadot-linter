@@ -36,7 +36,9 @@ The driver currently includes typed checks for:
   input resolves to `Vec<T>`, including type aliases that are invisible to the
   syntax-only rule. FRAME consumes `#[pallet::call_index]`, so dispatchable
   identity is recovered from the source span associated with the rustc-resolved
-  function; public helper methods are excluded.
+  function; public helper methods are excluded. `EnsureOrigin` guards are
+  evaluated from their resolved receiver projections, preserving arbitrary
+  configured origins while recognizing the named privileged FRAME origins.
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported. It
@@ -88,7 +90,8 @@ The driver currently includes typed checks for:
   aliases, it falls back to the resolved associated-method owner path without
   forcing projection expansion, accepting the canonical `frame_support` crate
   path, the SDK's `frame` crate alias, and its `polkadot_sdk_frame` facade
-  path.
+  path. A direct `.take(<integer literal>)` cap is recognized as bounded; a
+  dynamic cap remains reportable.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
@@ -110,9 +113,10 @@ The driver currently includes typed checks for:
   source `#[pallet::weight(...)]` annotation. FRAME consumes this custom
   annotation during macro expansion, so source-span recovery is required while
   rustc remains the authority for the dispatchable and its input types. Aliased
-  `Vec<T>` inputs are reported when the weight expression does not reference
-  the parameter length or encoded size; deprecated compatibility dispatchables
-  are excluded.
+  `Vec<T>` inputs are reported when the parsed weight expression does not
+  reference the parameter length or encoded size; comments and string literals
+  cannot satisfy this check. Deprecated compatibility dispatchables are
+  excluded.
 
 This removes syntax-level false negatives for aliased unbounded inputs and
 aliased recursive decode targets, storage payloads, and event payloads, plus
