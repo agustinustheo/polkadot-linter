@@ -19,14 +19,14 @@ Validation evidence used for this matrix:
 - `cargo +1.93.0 clippy --all-targets -- -D warnings`: passed
 - `cargo +1.93.0 build`: passed
 - `scripts/check-rustc-hard-rules.sh`: `SEC001` syntax path 0 findings,
-  rustc path 1 finding; `SEC002` syntax path 2 findings, rustc path 1
-  finding; `SEC003` syntax path 1 finding, rustc path 3 findings; `SEC008`
-  syntax path 3 findings, rustc path 1 finding; `SEC009` syntax path 3
-  findings, rustc path 1 finding; `SEC011` syntax path 1 finding, rustc path
-  1 finding; `SEC012` syntax path 2 findings, rustc path 1 finding; `SEC013`
+  rustc path 1 finding; `SEC002` syntax path 4 findings, rustc path 2
+  findings; `SEC003` syntax path 1 finding, rustc path 3 findings; `SEC008`
+  syntax path 4 findings, rustc path 2 findings; `SEC009` syntax path 3
+  findings, rustc path 2 findings; `SEC011` syntax path 1 finding, rustc path
+  2 findings; `SEC012` syntax path 4 findings, rustc path 2 findings; `SEC013`
   syntax path 0 findings, rustc path 1 finding; `SEC017` syntax path 0
   findings, rustc path 1 finding; `SEC018` syntax path 0 findings, rustc path
-  1 finding; rustc driver rule filter `SEC008,SEC009` emitted exactly those 2
+  1 finding; rustc driver rule filter `SEC008,SEC009` emitted exactly those 4
   findings and no other rule IDs
 - `scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks`:
   `pallet-multisig` checked successfully through the public `polkadot-linter`
@@ -95,8 +95,8 @@ Validation evidence used for this matrix:
 | `SEC008` false positives in `genesis_build`, benchmarks, `runtime-benchmarks`, and type-provably infallible conversions. | Partially superseded by rustc-driver increment; still incomplete. | Tests cover benchmark/runtime-benchmark/genesis/helper paths. The rustc fixture now covers one type-provably infallible conversion via `Result<T, Infallible>`. Broader panic reachability and debug assertion handling still require compiler-backed control-flow and cfg evidence. |
 | `SEC009` had 706 findings with 79% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | `polkadot-linter-rustc` reports `SEC009` from HIR/typeck for resolved integer operands reachable from public or hook fallible entry points, including direct local helpers. `scripts/check-rustc-hard-rules.sh` proves overloaded `Add` and an unreachable private helper are removed while a helper reached by a fallible entry point is retained. `scripts/check-rustc-sdk-sec009.sh` proves SDK package precision on `pallet-collective`: syntax reports 5 findings, while default compiler-backed routing emits the 2 rustc-backed resolved-integer findings and drops generic/operator and macro-generated noise. Indirect reachability and path-sensitive control flow remain future work. |
 | `SEC010` had 16 findings with 88% sampled FP rate. | Still true unless later scoped evidence proves otherwise. | Current unrestricted scan has no `SEC010` findings after stabilization, but there is no compiler-backed proof for hook transactional semantics. |
-| `SEC011` had 4 findings with 100% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 1. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves associated-call owner types and reports `StorageMap::iter()` while skipping a syntax-only `Domain::iter()` false positive. SDK-scale hook/dispatchable coverage still needs the full compiler-backed FRAME model. |
-| `SEC012` had 14 findings with 64% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 8. `scripts/check-rustc-hard-rules.sh` now proves the rustc path resolves `clear_prefix` owner types and reports unbounded limits only for FRAME storage owners, skipping a syntax-only `Domain::clear_prefix` false positive. SDK-scale migration still needs the compiler-backed pipeline wired as the final authority for this rule. |
+| `SEC011` had 4 findings with 100% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 1. `scripts/check-rustc-hard-rules.sh` proves the rustc path resolves associated-call owner types, reports `StorageMap::iter()` through a direct private helper, skips an unreachable private helper, and removes a syntax-only `Domain::iter()` false positive. SDK-scale hook/dispatchable coverage still needs the full compiler-backed FRAME model. |
+| `SEC012` had 14 findings with 64% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 8. `scripts/check-rustc-hard-rules.sh` proves the rustc path resolves `clear_prefix` owner types, reports unbounded limits through a direct private helper, skips an unreachable private helper, and removes a syntax-only `Domain::clear_prefix` false positive. SDK-scale migration still needs reproducible compiler-backed benchmarks. |
 | `SEC013` had 55 findings with 60% sampled FP rate. | Partially superseded by rustc-driver increment; not fully migrated. | Current unrestricted count is 45. The rustc path resolves source-linked `#[pallet::storage]` aliases and inspects storage values rather than collection-like keys. `scripts/check-rustc-sdk-sec013.sh` proves improved SDK precision on `pallet-session`: 3 stored unbounded values are retained while the syntax-only `KeyOwner` key false positive is removed. |
 | `SEC013` false positives on bounded storage wrappers. | Partially superseded by rustc-driver increment; not fully migrated. | Syntax tests cover bounded wrappers and capacity-limited docs. The rustc fixture now also skips a bounded storage alias after type resolution. Remaining risk is full FRAME storage expansion and SDK-scale proof. |
 | `SEC014` had 14 findings with 100% sampled FP rate. | Fixed for current SDK unrestricted scan. | Current unrestricted scan has no `SEC014` findings. Existing tests cover account-id keys and documented internal numeric layouts. |

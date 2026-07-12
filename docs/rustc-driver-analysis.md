@@ -64,10 +64,12 @@ The driver currently includes typed checks for:
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
   `StorageDoubleMap`, `StorageNMap`, `CountedStorageMap`, and `StorageValue`.
+  It follows public and hook entry points through direct local helper calls.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
-  collection.
+  collection reachable from a public or hook entry point, including direct
+  local helper calls.
 - `SEC013`: unbounded storage aliases. The rustc-backed implementation reads
   resolved storage alias types and examines the storage value generic rather
   than collection-like key generics. FRAME consumes `#[pallet::storage]`, so
