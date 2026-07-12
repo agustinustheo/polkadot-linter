@@ -514,6 +514,7 @@ fn report_reachable_raw_arithmetic<'tcx>(
         };
         let mut visitor = Sec009Visitor {
             source_map,
+            tcx,
             typeck: tcx.typeck(*def_id),
             diagnostics,
             reported_lines: &mut reported_lines,
@@ -649,8 +650,11 @@ fn is_frame_storage_alias(
     source_map: &SourceMap,
 ) -> bool {
     has_hir_attr(tcx, hir_id, &["pallet", "storage"])
-        || source_prefix_before_definition(tcx, def_id, source_map)
-            .is_some_and(|prefix| prefix.contains("#[pallet::storage]"))
+        || source_prefix_before_definition(tcx, def_id, source_map).is_some_and(|prefix| {
+            prefix
+                .rfind("#[pallet::storage]")
+                .is_some_and(|start| attribute_block_belongs_to_definition(&prefix[start..]))
+        })
 }
 
 fn is_explicitly_unbounded_storage(
@@ -660,8 +664,11 @@ fn is_explicitly_unbounded_storage(
     source_map: &SourceMap,
 ) -> bool {
     has_hir_attr(tcx, hir_id, &["pallet", "unbounded"])
-        || source_prefix_before_definition(tcx, def_id, source_map)
-            .is_some_and(|prefix| prefix.contains("#[pallet::unbounded]"))
+        || source_prefix_before_definition(tcx, def_id, source_map).is_some_and(|prefix| {
+            prefix
+                .rfind("#[pallet::unbounded]")
+                .is_some_and(|start| attribute_block_belongs_to_definition(&prefix[start..]))
+        })
 }
 
 fn report_vec_event_fields<'tcx>(
@@ -1254,6 +1261,7 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
             if let Some(binding) = unwrappable_then_guard_binding(self.tcx, self.typeck, condition)
+                .or_else(|| unwrappable_then_let_binding(self.tcx, self.typeck, condition))
             {
                 let newly_known = self.known_unwrappable_bindings.insert(binding);
                 self.visit_expr(then_branch);
@@ -1382,6 +1390,20 @@ fn unwrappable_then_guard_binding(
     (guard_accepts_success && type_is_option_or_result(tcx, receiver_ty))
         .then(|| local_binding_id(typeck, receiver))
         .flatten()
+}
+
+fn unwrappable_then_let_binding(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let ExprKind::Let(let_expr) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    (pattern_is_unwrappable_success(let_expr.pat)
+        && type_is_option_or_result(tcx, typeck.expr_ty(let_expr.init)))
+    .then(|| local_binding_id(typeck, let_expr.init))
+    .flatten()
 }
 
 fn exiting_unwrappable_guard_binding(
@@ -1564,6 +1586,7 @@ impl TaintedLocalCallVisitor<'_, '_> {
 
 struct Sec009Visitor<'a, 'tcx> {
     source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
@@ -1636,7 +1659,12 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
                 && !(matches!(op.node, BinOpKind::Sub)
                     && subtraction_is_guarded(self.typeck, lhs, rhs, &self.non_underflow_pairs))
                 && !(matches!(op.node, BinOpKind::Div | BinOpKind::Rem)
-                    && divisor_is_proven_nonzero(self.typeck, rhs, &self.nonzero_bindings))
+                    && divisor_is_proven_nonzero(
+                        self.tcx,
+                        self.typeck,
+                        rhs,
+                        &self.nonzero_bindings,
+                    ))
                 && self.reported_lines.insert((file.clone(), line))
             {
                 self.diagnostics.push(RustcDiagnostic {
@@ -1802,11 +1830,29 @@ fn subtraction_is_guarded(
 }
 
 fn divisor_is_proven_nonzero(
+    tcx: TyCtxt<'_>,
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     divisor: &Expr<'_>,
     nonzero_bindings: &HashSet<HirId>,
 ) -> bool {
     local_binding_id(typeck, divisor).is_some_and(|binding| nonzero_bindings.contains(&binding))
+        || divisor_is_nonzero_integer_get(tcx, typeck, divisor)
+}
+
+fn divisor_is_nonzero_integer_get(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    divisor: &Expr<'_>,
+) -> bool {
+    let ExprKind::MethodCall(segment, receiver, args, _) = strip_drop_temps(divisor).kind else {
+        return false;
+    };
+    args.is_empty()
+        && segment.ident.name.as_str() == "get"
+        && typeck
+            .expr_ty(receiver)
+            .ty_adt_def()
+            .is_some_and(|adt| tcx.def_path_str(adt.did()).ends_with("::NonZero"))
 }
 
 fn integer_literal(expr: &Expr<'_>) -> bool {

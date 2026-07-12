@@ -70,8 +70,8 @@ The driver currently includes typed checks for:
   where the error path is statically uninhabited. It also tracks local values
   constructed as `Ok`/`Some`, proven present by a terminating
   `is_none`/`is_err` guard (including expanded `ensure!(value.is_some(), ...)`),
-  used in an `is_some`/`is_ok` success branch, or used in a matching
-  `Some`/`Ok` arm. It clears local-construction
+  used in an `is_some`/`is_ok` or `if let Some`/`if let Ok` success branch, or
+  used in a matching `Some`/`Ok` arm. It clears local-construction
   proof if the local is overwritten. It analyzes
   public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
@@ -83,7 +83,8 @@ The driver currently includes typed checks for:
   direct local helper calls. It recognizes non-underflow subtraction inside a
   resolved `if a >= b` or `if b <= a` branch and after an early-return guard
   such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero or
-  positive divisor guards for `/` and `%`. Indirect calls and broader path-sensitive
+  positive divisor guards and `core::num::NonZero` `.get()` values for `/` and
+  `%`. Indirect calls and broader path-sensitive
   control flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
@@ -106,7 +107,8 @@ The driver currently includes typed checks for:
   resolved storage alias types and examines the storage value generic rather
   than collection-like key generics. FRAME consumes `#[pallet::storage]`, so
   source-span recovery identifies the storage declaration while rustc provides
-  the resolved owner and value type. Payloads hidden behind a `Vec<T>` alias
+  the resolved owner and value type; the marker is constrained to that alias.
+  Payloads hidden behind a `Vec<T>` alias
   are reported while bounded wrappers and unbounded keys are skipped.
 - `SEC017`: unbounded event payloads. The rustc-backed implementation visits
   source-linked FRAME event enums and reads resolved field types, so aliases to
