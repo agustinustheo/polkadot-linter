@@ -2,9 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main, polkadot-linter-updates, "fix/**", "codex/**"]
+    branches: [main, polkadot-linter-updates]
   pull_request:
     branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   polkadot-linter:
