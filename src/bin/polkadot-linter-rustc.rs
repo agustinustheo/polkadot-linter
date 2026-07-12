@@ -993,6 +993,21 @@ struct Sec003Visitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for Sec003Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming_taint = self.tainted_bindings.clone();
+
+            self.visit_expr(then_branch);
+            let then_taint = self.tainted_bindings.clone();
+
+            self.tainted_bindings = incoming_taint.clone();
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.tainted_bindings.extend(then_taint);
+            return;
+        }
+
         if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
                 if expr_references_tainted_binding(self.typeck, value, &self.tainted_bindings) {
@@ -1249,6 +1264,21 @@ struct TaintedLocalCallVisitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for TaintedLocalCallVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming_taint = self.tainted_bindings.clone();
+
+            self.visit_expr(then_branch);
+            let then_taint = self.tainted_bindings.clone();
+
+            self.tainted_bindings = incoming_taint.clone();
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.tainted_bindings.extend(then_taint);
+            return;
+        }
+
         match expr.kind {
             ExprKind::Assign(target, value, _) => {
                 if let Some(binding) = local_binding_id(self.typeck, target) {
