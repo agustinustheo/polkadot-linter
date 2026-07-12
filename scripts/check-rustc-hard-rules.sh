@@ -284,6 +284,14 @@ pub fn raw_integer(a: u32, b: u32, c: u32) -> Result<u32, ()> {
     Ok((a + b) - c)
 }
 
+pub fn raw_integer_via_private_helper(a: u32, b: u32) -> Result<u32, ()> {
+    Ok(reachable_private_raw_integer(a, b))
+}
+
+fn reachable_private_raw_integer(a: u32, b: u32) -> u32 {
+    a + b
+}
+
 #[allow(dead_code)]
 fn private_raw_integer(a: u32, b: u32) -> Result<u32, ()> {
     Ok(a + b)
@@ -407,7 +415,7 @@ rustc_sec001_line="$(jq -r '.[] | select(.rule_id == "SEC001") | .line' "$RUSTC_
 rustc_sec002_lines="$(jq -r '.[] | select(.rule_id == "SEC002") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
 rustc_sec003_line="$(jq -r '.[] | select(.rule_id == "SEC003") | .line' "$RUSTC_JSON")"
 rustc_sec008_lines="$(jq -r '.[] | select(.rule_id == "SEC008") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
-rustc_sec009_line="$(jq -r '.[] | select(.rule_id == "SEC009") | .line' "$RUSTC_JSON")"
+rustc_sec009_lines="$(jq -r '.[] | select(.rule_id == "SEC009") | .line' "$RUSTC_JSON" | sort -n | paste -sd, -)"
 rustc_sec011_line="$(jq -r '.[] | select(.rule_id == "SEC011") | .line' "$RUSTC_JSON")"
 rustc_sec012_line="$(jq -r '.[] | select(.rule_id == "SEC012") | .line' "$RUSTC_JSON")"
 rustc_sec013_line="$(jq -r '.[] | select(.rule_id == "SEC013") | .line' "$RUSTC_JSON")"
@@ -449,11 +457,11 @@ test "$rustc_sec003_count" = "3"
 test "$syn_sec008_count" = "3"
 test "$rustc_sec008_count" = "2"
 test "$syn_sec009_count" = "3"
-test "$rustc_sec009_count" = "1"
+test "$rustc_sec009_count" = "2"
 test "$syn_sec011_count" = "1"
 test "$rustc_sec011_count" = "1"
 test "$rustc_sec008_lines" = "173,181"
-test "$rustc_sec009_line" = "182"
+test "$rustc_sec009_lines" = "182,190"
 test "$rustc_sec011_line" = "100"
 test "$syn_sec012_count" = "2"
 test "$rustc_sec012_count" = "1"
