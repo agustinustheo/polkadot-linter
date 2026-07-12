@@ -1289,6 +1289,9 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
         let Some(param_name) = body_param_name(param) else {
             continue;
         };
+        if has_initial_terminating_vec_length_bound(tcx.typeck(def_id), body, param) {
+            continue;
+        }
         if weight_accounts_for_param(&weight_attributes.expression, &param_name) {
             continue;
         }
