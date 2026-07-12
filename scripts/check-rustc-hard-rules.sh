@@ -240,6 +240,14 @@ pub fn submit_alias(payload: Payload) {
     helper_vec(Vec::new());
 }
 
+#[pallet::call_index(6)] #[pallet::weight(WeightInfo::submit_bounded(payload.len() as u32))]
+pub fn bounded_input_vec(payload: Payload) {
+    if payload.len() > 32 {
+        return;
+    }
+    let _ = payload;
+}
+
 pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
     let _ = payload;
 }
@@ -439,6 +447,16 @@ pub fn decode_via_private_helper_assignment(data: &[u8]) -> Result<RuntimeCall, 
     decode_private_assignment(forwarded)
 }
 
+pub fn decode_via_match_helper(
+    data: &[u8],
+    select_input: bool,
+) -> Result<RuntimeCall, ()> {
+    match (data, select_input) {
+        (data, true) => decode_private_match(data),
+        _ => Ok(RuntimeCall),
+    }
+}
+
 pub fn decode_after_clean_assignment(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     let _was_empty = data.is_empty();
     data = &[];
@@ -487,6 +505,11 @@ fn decode_private_alias(mut data: &[u8]) -> Result<RuntimeCall, ()> {
 
 fn decode_private_assignment(mut data: &[u8]) -> Result<RuntimeCall, ()> {
     RuntimeCall::decode(&mut data)
+}
+
+fn decode_private_match(mut data: &[u8]) -> Result<RuntimeCall, ()> {
+    let decoded_from_match_helper = RuntimeCall::decode(&mut data);
+    decoded_from_match_helper
 }
 
 #[allow(dead_code)]
@@ -597,6 +620,14 @@ pub fn unwrap_after_result_guard(value: Result<u32, ()>) -> Result<u32, ()> {
         return Err(());
     }
     Ok(value.expect("the error path returned early"))
+}
+
+pub fn unwrap_inside_some_branch(value: Option<u32>) -> u32 {
+    if value.is_some() {
+        value.unwrap()
+    } else {
+        0
+    }
 }
 
 pub fn unwrap_after_guarded_overwrite(mut value: Option<u32>) -> Result<u32, ()> {
@@ -800,6 +831,8 @@ option_guarded_unwrap_line="$(grep -n 'Ok(value.unwrap())' "$FIXTURE" | head -n1
 rustc_sec008_option_guarded_unwrap_count="$(jq --argjson line "$option_guarded_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 result_guarded_expect_line="$(grep -n 'value.expect("the error path returned early")' "$FIXTURE" | cut -d: -f1)"
 rustc_sec008_result_guarded_expect_count="$(jq --argjson line "$result_guarded_expect_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
+some_branch_unwrap_line="$(grep -n 'value.unwrap()' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
+rustc_sec008_some_branch_unwrap_count="$(jq --argjson line "$some_branch_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 guarded_overwrite_unwrap_line="$(grep -n 'Ok(value.unwrap())' "$FIXTURE" | tail -n1 | cut -d: -f1)"
 rustc_sec008_guarded_overwrite_unwrap_count="$(jq --argjson line "$guarded_overwrite_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
 clean_assignment_line="$(grep -n 'pub fn decode_after_clean_assignment' "$FIXTURE" | cut -d: -f1)"
@@ -810,14 +843,18 @@ branch_selected_input_decode_line="$(grep -n 'decoded_after_branch_selected_inpu
 rustc_sec003_branch_selected_input_count="$(jq --argjson line "$branch_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 match_selected_input_decode_line="$(grep -n 'decoded_after_match_selected_input = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
 rustc_sec003_match_selected_input_count="$(jq --argjson line "$match_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
+match_helper_decode_line="$(grep -n 'decoded_from_match_helper = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
+rustc_sec003_match_helper_count="$(jq --argjson line "$match_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
 privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
 privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
 unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
+bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
 comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
 weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
 rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
+rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
 rustc_sec018_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
@@ -862,21 +899,24 @@ test "$rustc_sec001_count" = "2"
 test "$rustc_sec001_privileged_root_count" = "0"
 test "$rustc_sec001_privileged_config_count" = "0"
 test "$rustc_sec001_unknown_config_origin_count" = "1"
+test "$rustc_sec001_bounded_input_count" = "0"
 test "$syn_sec002_count" = "4"
 test "$rustc_sec002_count" = "3"
-test "$syn_sec003_count" = "10"
-test "$rustc_sec003_count" = "10"
+test "$syn_sec003_count" = "11"
+test "$rustc_sec003_count" = "11"
 test "$rustc_sec003_clean_assignment_count" = "0"
 test "$rustc_sec003_conditional_clean_assignment_count" = "1"
 test "$rustc_sec003_branch_selected_input_count" = "1"
 test "$rustc_sec003_match_selected_input_count" = "1"
-test "$syn_sec008_count" = "10"
+test "$rustc_sec003_match_helper_count" = "1"
+test "$syn_sec008_count" = "11"
 test "$rustc_sec008_count" = "4"
 test "$rustc_sec008_known_ok_count" = "0"
 test "$rustc_sec008_known_some_count" = "0"
 test "$rustc_sec008_unknown_overwrite_count" = "1"
 test "$rustc_sec008_option_guarded_unwrap_count" = "0"
 test "$rustc_sec008_result_guarded_expect_count" = "0"
+test "$rustc_sec008_some_branch_unwrap_count" = "0"
 test "$rustc_sec008_guarded_overwrite_unwrap_count" = "1"
 test "$syn_sec009_count" = "5"
 test "$rustc_sec009_count" = "3"
@@ -903,7 +943,7 @@ test "$rustc_sec018_privileged_config_count" = "1"
 test "$rustc_sec018_unknown_config_origin_count" = "1"
 test "$rustc_sec018_comment_only_weight_input_count" = "1"
 test "$rustc_sec018_weighted_tuple_count" = "0"
-test "$rustc_filtered_count" = "41"
+test "$rustc_filtered_count" = "42"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "7"
 test "$rustc_rule_filtered_sec008_count" = "4"
