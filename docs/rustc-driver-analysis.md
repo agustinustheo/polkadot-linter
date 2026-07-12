@@ -56,7 +56,9 @@ The driver currently includes typed checks for:
   reads resolved call return types and decode receiver types, so aliases to
   `RuntimeCall`, `UncheckedExtrinsic`, or `OpaqueExtrinsic` are handled by type
   resolution instead of source text matching. It propagates input evidence from
-  entry-point parameters through local bindings, match-arm bindings,
+  entry-point parameters through local bindings, local aliases and assignments
+  passed to direct local helpers (with internal-buffer overwrites clearing
+  taint), match-arm bindings,
   `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
   calls, while filtering macro-generated attribute-line spans.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
