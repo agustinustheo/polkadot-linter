@@ -42,6 +42,10 @@ The driver currently includes typed checks for:
   so cfg-disabled source that never reaches expanded HIR is not reported. It
   follows nested macro call-site provenance when the immediate expansion frame
   is a different macro such as `assert!`.
+  When a FRAME attribute macro collapses the expanded expression span to its
+  outer attribute, the driver recovers direct `debug_assert!` call sites only
+  from the rustc-selected reachable function source; comments and string
+  literals are excluded.
   It limits analysis to public entry points, resolved FRAME `Hooks`,
   `OnRuntimeUpgrade`, and `UncheckedOnRuntimeUpgrade` callbacks,
   `ChangeMembers::change_members_sorted`, XCM `OnResponse::on_response`, and
@@ -74,8 +78,9 @@ The driver currently includes typed checks for:
   including `Hooks::on_runtime_upgrade`, `OnRuntimeUpgrade`, and
   `UncheckedOnRuntimeUpgrade`, and direct local helper calls. For storage
   aliases, it falls back to the resolved associated-method owner path without
-  forcing projection expansion, accepting both the canonical `frame_support`
-  crate path and the SDK's `frame` crate alias.
+  forcing projection expansion, accepting the canonical `frame_support` crate
+  path, the SDK's `frame` crate alias, and its `polkadot_sdk_frame` facade
+  path.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)` only when the owner is a FRAME storage
