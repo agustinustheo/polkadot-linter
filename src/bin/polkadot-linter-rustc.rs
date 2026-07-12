@@ -50,8 +50,12 @@ impl Callbacks for PolkadotCallbacks {
         }
         let reachable_entry_point_bodies = (self.rule_enabled("SEC002")
             || self.rule_enabled("SEC008"))
-        .then(|| reachable_local_function_bodies(tcx))
+        .then(|| reachable_local_function_bodies(tcx, false))
         .unwrap_or_default();
+        let reachable_fallible_entry_point_bodies = self
+            .rule_enabled("SEC009")
+            .then(|| reachable_local_function_bodies(tcx, true))
+            .unwrap_or_default();
         if self.rule_enabled("SEC002") {
             report_reachable_debug_assertions(
                 tcx,
@@ -65,6 +69,14 @@ impl Callbacks for PolkadotCallbacks {
                 tcx,
                 tcx.sess.source_map(),
                 &reachable_entry_point_bodies,
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEC009") {
+            report_reachable_raw_arithmetic(
+                tcx,
+                tcx.sess.source_map(),
+                &reachable_fallible_entry_point_bodies,
                 &mut self.diagnostics,
             );
         }
@@ -134,22 +146,6 @@ impl Callbacks for PolkadotCallbacks {
                 };
                 clear_prefix_visitor.visit_body(body);
             }
-
-            if !matches!(body_owner_kind, BodyOwnerKind::Fn)
-                || !is_public_or_hook(tcx, def_id)
-                || !self.rule_enabled("SEC009")
-                || !returns_fallible(tcx, def_id)
-            {
-                continue;
-            }
-
-            let mut visitor = Sec009Visitor {
-                source_map: tcx.sess.source_map(),
-                typeck,
-                diagnostics: &mut self.diagnostics,
-                reported_lines: HashSet::new(),
-            };
-            visitor.visit_body(body);
         }
 
         if self.continue_compilation {
@@ -160,12 +156,16 @@ impl Callbacks for PolkadotCallbacks {
     }
 }
 
-fn reachable_local_function_bodies(tcx: TyCtxt<'_>) -> Vec<LocalDefId> {
+fn reachable_local_function_bodies(
+    tcx: TyCtxt<'_>,
+    fallible_entry_points_only: bool,
+) -> Vec<LocalDefId> {
     let mut pending = tcx
         .hir_body_owners()
         .filter(|def_id| {
             matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
                 && is_public_or_hook(tcx, *def_id)
+                && (!fallible_entry_points_only || returns_fallible(tcx, *def_id))
         })
         .collect::<Vec<_>>();
     let mut visited = HashSet::new();
@@ -232,6 +232,28 @@ fn report_reachable_panic_calls<'tcx>(
             reported_lines: &mut reported_lines,
         };
         panic_visitor.visit_body(body);
+    }
+}
+
+fn report_reachable_raw_arithmetic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    reachable_bodies: &[LocalDefId],
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in reachable_bodies {
+        let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
+            continue;
+        };
+        let mut visitor = Sec009Visitor {
+            source_map,
+            typeck: tcx.typeck(*def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
     }
 }
 
@@ -758,7 +780,7 @@ struct Sec009Visitor<'a, 'tcx> {
     source_map: &'a SourceMap,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
-    reported_lines: HashSet<(String, usize)>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {

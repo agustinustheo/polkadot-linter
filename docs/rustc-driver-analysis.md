@@ -57,7 +57,9 @@ The driver currently includes typed checks for:
 - `SEC009`: raw arithmetic in fallible functions. The rustc-backed
   implementation reads HIR and type-checking results, then reports binary `+`,
   `-`, `*`, `/`, and `%` only when both operands resolve to integer types inside
-  a function returning `Result`.
+  a function reachable from a public or hook `Result` entry point, including
+  direct local helper calls. Indirect calls and path-sensitive control flow
+  remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
