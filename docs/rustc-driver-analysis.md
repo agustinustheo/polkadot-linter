@@ -72,6 +72,16 @@ The driver currently includes typed checks for:
   unioned, including when an input reaches a direct local helper,
   `using_encoded(|mut bytes| ...)` closure inputs, and direct resolved local
   calls, while filtering macro-generated attribute-line spans.
+- `SEC006`: unchecked reserved-balance repatriation. The rustc-backed
+  implementation resolves FRAME's `ReservableCurrency::repatriate_reserved`
+  method, reports discarded remaining balances, and tracks a local result until
+  it is checked with a zero/comparison/subtraction operation. It skips unrelated
+  same-named methods; interprocedural accounting evidence remains out of scope.
+- `SEC007`: discarded `Result` values. The rustc-backed implementation resolves
+  wildcard bindings to `Result<T, E>` and reports only non-unit error types,
+  skipping the control-flow-only `Result<(), ()>` pattern and same-named
+  non-`Result` calls. It evaluates the compiled cfg-expanded crate rather than
+  source text, so inactive code is excluded.
 - `SEC008`: panic-capable unwrap/expect calls. The rustc-backed implementation
   reads the resolved receiver type and skips `Result<T, Infallible>` unwraps,
   where the error path is statically uninhabited. It also tracks local values
@@ -144,8 +154,8 @@ The driver currently includes typed checks for:
   propagated through direct local calls; unconstructed event declarations
   therefore do not report. A direct FRAME dispatchable emission is also
   suppressed when its captured `#[pallet::weight]` expression accounts for
-  that exact input parameter; helper-mediated provenance remains reportable
-  until weight evidence can be propagated across calls. FRAME `generate_deposit` expansions can remove the
+  that exact input parameter, including through direct local helper calls when
+  every tainted call path preserves that accounting evidence. FRAME `generate_deposit` expansions can remove the
   callable body needed for that evidence; the driver then uses a narrow
   source-linked metadata fallback while retaining rustc-resolved field types.
 - `SEC018`: missing weight accounting for unbounded inputs. The rustc-backed
@@ -249,7 +259,7 @@ Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
 `RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
 back into the public diagnostic format. When `--compiler-backed-rules` is not
 specified, the CLI expands the requested rule filters to the migrated
-compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC008`, `SEC009`,
+compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC006`, `SEC007`, `SEC008`, `SEC009`,
 `SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
 passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
