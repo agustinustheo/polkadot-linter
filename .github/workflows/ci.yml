@@ -61,6 +61,9 @@ jobs:
       - name: Run rustc-backed hard-rule precision checks
         run: scripts/check-rustc-hard-rules.sh
 
+      - name: Check default compiler-backed CLI routing
+        run: scripts/check-rustc-cli-default.sh
+
       - name: Check rustc-backed SDK baseline
         run: scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
 

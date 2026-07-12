@@ -130,6 +130,10 @@ pub fn run_cargo_check(
     command
         .env("RUSTC_WORKSPACE_WRAPPER", &driver_path)
         .env("POLKADOT_LINTER_RUSTC_JSONL", &jsonl_path)
+        .env(
+            "POLKADOT_LINTER_RUSTC_MANIFEST_ROOT",
+            manifest_path.parent().unwrap_or_else(|| Path::new(".")),
+        )
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
     prepend_dynamic_library_path(&mut command, &rustc_library_dir);

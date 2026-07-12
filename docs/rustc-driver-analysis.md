@@ -47,8 +47,8 @@ The driver currently includes typed checks for:
   is a different macro such as `assert!`.
   When a FRAME attribute macro collapses the expanded expression span to its
   outer attribute, the driver recovers direct `debug_assert!` call sites only
-  from the rustc-selected reachable function source; comments and string
-  literals are excluded.
+  from the rustc-selected reachable function source; nested block comments,
+  string literals, and raw string literals are excluded.
   It limits analysis to public entry points, resolved FRAME `Hooks`,
   `OnRuntimeUpgrade`, and `UncheckedOnRuntimeUpgrade` callbacks,
   `ChangeMembers::change_members_sorted`, XCM `OnResponse::on_response`, and
@@ -73,7 +73,8 @@ The driver currently includes typed checks for:
   constructed as `Ok`/`Some`, proven present by a terminating
   `is_none`/`is_err` guard (including expanded `ensure!(value.is_some(), ...)`),
   used in an `is_some`/`is_ok` or `if let Some`/`if let Ok` success branch, or
-  used in a matching `Some`/`Ok` arm. It clears local-construction
+  used in a matching `Some`/`Ok` arm or after a terminating `let Some`/`let Ok`
+  else block. It clears local-construction
   proof if the local is overwritten. It analyzes
   public and hook entry points and direct calls to local helpers
   rather than private helper-only bodies. Indirect calls and path-sensitive
@@ -144,6 +145,11 @@ Run the reproducible precision check with:
 ```sh
 scripts/check-rustc-hard-rules.sh
 ```
+
+`scripts/check-rustc-cli-default.sh` separately proves the public CLI default:
+for a compilable Cargo crate, scanning a path with no rustc-specific flags
+discovers its manifest, removes syntax `SEC013` results, and returns the
+resolved compiler-backed storage finding instead.
 
 That fixture intentionally compares the existing syntax rule against the typed
 driver:

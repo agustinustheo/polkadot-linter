@@ -12,7 +12,7 @@ use std::{
     env,
     fs::OpenOptions,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     process,
 };
 
@@ -183,7 +183,22 @@ fn crate_matches_source_filters(tcx: TyCtxt<'_>, filters: &[String]) -> bool {
     let source_map = tcx.sess.source_map();
     let location = source_map.lookup_char_pos(tcx.hir_root_module().spans.inner_span.lo());
     let crate_source = location.file.name.prefer_local().to_string();
-    filters.iter().any(|filter| crate_source.contains(filter))
+    source_matches_filters(&crate_source, filters)
+}
+
+fn source_matches_filters(source: &str, filters: &[String]) -> bool {
+    if filters.is_empty() {
+        return true;
+    }
+
+    let manifest_root = env::var_os("POLKADOT_LINTER_RUSTC_MANIFEST_ROOT").map(PathBuf::from);
+    filters.iter().any(|filter| {
+        source.contains(filter)
+            || filter.ends_with(source)
+            || manifest_root.as_ref().is_some_and(|root| {
+                Path::new(source).is_relative() && root.join(source).starts_with(Path::new(filter))
+            })
+    })
 }
 
 fn reachable_local_function_bodies(
@@ -361,9 +376,10 @@ fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize,
     enum ScanState {
         Code,
         LineComment,
-        BlockComment,
+        BlockComment { depth: usize },
         String { escaped: bool },
         Character { escaped: bool },
+        RawString { hashes: usize },
     }
 
     let mut state = ScanState::Code;
@@ -385,7 +401,15 @@ fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize,
                 } else if ch == '/' && next == Some('*') {
                     chars.next();
                     column += 1;
-                    state = ScanState::BlockComment;
+                    state = ScanState::BlockComment { depth: 1 };
+                } else if ch == 'r' && raw_string_hash_count(&chars).is_some() {
+                    let hashes =
+                        raw_string_hash_count(&chars).expect("raw string prefix was found");
+                    for _ in 0..=hashes {
+                        chars.next();
+                        column += 1;
+                    }
+                    state = ScanState::RawString { hashes };
                 } else if ch == '"' {
                     state = ScanState::String { escaped: false };
                 } else if ch == '\'' {
@@ -422,11 +446,19 @@ fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize,
                     state = ScanState::Code;
                 }
             }
-            ScanState::BlockComment => {
-                if ch == '*' && next == Some('/') {
+            ScanState::BlockComment { mut depth } => {
+                if ch == '/' && next == Some('*') {
                     chars.next();
                     column += 1;
-                    state = ScanState::Code;
+                    depth += 1;
+                    state = ScanState::BlockComment { depth };
+                } else if ch == '*' && next == Some('/') {
+                    chars.next();
+                    column += 1;
+                    depth -= 1;
+                    state = (depth == 0)
+                        .then_some(ScanState::Code)
+                        .unwrap_or(ScanState::BlockComment { depth });
                 }
             }
             ScanState::String { escaped } => {
@@ -447,6 +479,15 @@ fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize,
                     state = ScanState::Code;
                 }
             }
+            ScanState::RawString { hashes } => {
+                if ch == '"' && raw_string_terminator_matches(&chars, hashes) {
+                    for _ in 0..hashes {
+                        chars.next();
+                        column += 1;
+                    }
+                    state = ScanState::Code;
+                }
+            }
         }
 
         if ch == '\n' {
@@ -458,6 +499,24 @@ fn source_debug_assert_locations(source: &str, start_line: usize) -> Vec<(usize,
     }
 
     locations
+}
+
+fn raw_string_hash_count(chars: &std::iter::Peekable<std::str::Chars<'_>>) -> Option<usize> {
+    let mut preview = chars.clone();
+    let mut hashes = 0;
+    while preview.peek() == Some(&'#') {
+        preview.next();
+        hashes += 1;
+    }
+    (preview.next() == Some('"')).then_some(hashes)
+}
+
+fn raw_string_terminator_matches(
+    chars: &std::iter::Peekable<std::str::Chars<'_>>,
+    hashes: usize,
+) -> bool {
+    let mut preview = chars.clone();
+    (0..hashes).all(|_| preview.next() == Some('#'))
 }
 
 fn source_function_start(
@@ -1248,6 +1307,12 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
                     exit_guards.push(binding);
                 }
             }
+            if let Some(binding) = exiting_unwrappable_let_binding(self.tcx, self.typeck, statement)
+            {
+                if self.known_unwrappable_bindings.insert(binding) {
+                    exit_guards.push(binding);
+                }
+            }
         }
         if let Some(expr) = block.expr {
             self.visit_expr(expr);
@@ -1440,6 +1505,23 @@ fn exiting_unwrappable_guard_binding(
         return None;
     }
     local_binding_id(typeck, receiver)
+}
+
+fn exiting_unwrappable_let_binding(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    statement: &rustc_hir::Stmt<'_>,
+) -> Option<HirId> {
+    let StmtKind::Let(local) = statement.kind else {
+        return None;
+    };
+    let init = local.init?;
+    let else_block = local.els?;
+    (pattern_is_unwrappable_success(local.pat)
+        && type_is_option_or_result(tcx, typeck.expr_ty(init))
+        && block_exits_current_function(else_block))
+    .then(|| local_binding_id(typeck, init))
+    .flatten()
 }
 
 struct LocalCalleeVisitor<'a, 'tcx> {
@@ -1796,16 +1878,18 @@ fn failed_nonzero_guard_binding(
 fn expression_exits_current_function(expr: &Expr<'_>) -> bool {
     match strip_drop_temps(expr).kind {
         ExprKind::Ret(_) => true,
-        ExprKind::Block(block, _) => {
-            block.expr.is_some_and(expression_exits_current_function)
-                || block
-                    .stmts
-                    .last()
-                    .and_then(statement_expression)
-                    .is_some_and(expression_exits_current_function)
-        }
+        ExprKind::Block(block, _) => block_exits_current_function(block),
         _ => false,
     }
+}
+
+fn block_exits_current_function(block: &Block<'_>) -> bool {
+    block.expr.is_some_and(expression_exits_current_function)
+        || block
+            .stmts
+            .last()
+            .and_then(statement_expression)
+            .is_some_and(expression_exits_current_function)
 }
 
 fn statement_expression<'hir>(statement: &'hir rustc_hir::Stmt<'hir>) -> Option<&'hir Expr<'hir>> {
@@ -2812,12 +2896,7 @@ fn filtered_unique_diagnostics(
 ) -> Vec<RustcDiagnostic> {
     let mut filtered = diagnostics
         .iter()
-        .filter(|diagnostic| {
-            file_filters.is_empty()
-                || file_filters
-                    .iter()
-                    .any(|needle| diagnostic.file.contains(needle))
-        })
+        .filter(|diagnostic| source_matches_filters(&diagnostic.file, file_filters))
         .cloned()
         .collect::<Vec<_>>();
 
