@@ -39,7 +39,9 @@ The driver currently includes typed checks for:
   function; public helper methods are excluded. `EnsureOrigin` guards are
   evaluated from their resolved receiver projections, preserving arbitrary
   configured origins while recognizing the named privileged FRAME origins. An
-  initial terminating literal length guard is recognized as a local input bound.
+  initial terminating length guard is recognized as a local input bound when it
+  compares the resolved input length with an integer literal or an immediately
+  preceding immutable local integer literal.
 - `SEC002`: debug assertions in production code. The rustc-backed
   implementation identifies `debug_assert!` through macro expansion ancestry,
   so cfg-disabled source that never reaches expanded HIR is not reported. It
@@ -92,9 +94,10 @@ The driver currently includes typed checks for:
   subtraction inside a resolved `if a >= b` or `if b <= a` branch and after an early-return guard
   such as FRAME's expanded `ensure!(a >= b, ...)`, and recognizes nonzero or
   positive divisor guards and `core::num::NonZero` `.get()` values for `/` and
-  `%`. It also recognizes those proofs in the safe `else` branch after a
-  failed underflow or zero check. Indirect calls and broader path-sensitive
-  control flow remain out of scope.
+  `%`. It also recognizes a resolved local divisor matched by a positive integer
+  literal within that arm, and proofs in the safe `else` branch after a failed
+  underflow or zero check. Indirect calls and broader path-sensitive control
+  flow remain out of scope.
 - `SEC011`: storage iteration in callable paths. The rustc-backed
   implementation resolves the owner type of associated `iter()`/`drain()` calls
   and reports only known FRAME storage collection owners such as `StorageMap`,
@@ -106,11 +109,14 @@ The driver currently includes typed checks for:
   forcing projection expansion, accepting the canonical `frame_support` crate
   path, the SDK's `frame` crate alias, and its `polkadot_sdk_frame` facade
   path. A direct `.take(<integer literal>)` cap or an unmodified local literal
-  cap is recognized as bounded; a dynamic cap remains reportable.
+  cap is recognized as bounded only when every `if` or `match` path preserves
+  that bound; a dynamic cap remains reportable.
 - `SEC012`: unbounded `clear_prefix`. The rustc-backed implementation resolves
   the owner type of associated `clear_prefix` calls and reports unbounded limits
   such as `None` and `Some(u32::MAX)`, including unbounded locals that reach a
-  call without being overwritten, only when the owner is a FRAME storage
+  call without an unconditional bounded overwrite. It retains the unbounded
+  evidence when an `if` or `match` leaves another path unbounded, only when the
+  owner is a FRAME storage
   collection reachable from a public or hook entry point, including direct
   local helper calls.
 - `SEC013`: unbounded storage aliases. The rustc-backed implementation reads

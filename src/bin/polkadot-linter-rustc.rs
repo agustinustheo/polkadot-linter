@@ -22,8 +22,8 @@ use rustc_hir::{
     def::Res,
     def_id::{DefId, LocalDefId},
     intravisit::{self, Visitor},
-    Arm, BinOpKind, Block, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat, PatKind,
-    QPath, StmtKind,
+    Arm, BinOpKind, Block, BodyOwnerKind, Expr, ExprKind, HirId, ItemKind, LetStmt, Pat,
+    PatExprKind, PatKind, QPath, StmtKind,
 };
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
@@ -1109,60 +1109,85 @@ fn has_initial_terminating_vec_length_bound(
     let ExprKind::Block(block, _) = body.value.kind else {
         return false;
     };
-    let Some(StmtKind::Expr(first) | StmtKind::Semi(first)) =
-        block.stmts.first().map(|stmt| stmt.kind)
-    else {
-        return false;
-    };
-    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(first).kind else {
-        return false;
-    };
-    expression_exits_current_function(then_branch)
-        && condition_rejects_oversized_vec(typeck, condition, binding)
+    let mut literal_bindings = HashSet::new();
+    for statement in block.stmts {
+        match statement.kind {
+            StmtKind::Let(local) if local.init.is_some_and(integer_literal) => {
+                literal_bindings.extend(pattern_binding_ids(local.pat));
+            }
+            StmtKind::Expr(first) | StmtKind::Semi(first) => {
+                let ExprKind::If(condition, then_branch, None) = strip_drop_temps(first).kind
+                else {
+                    return false;
+                };
+                return expression_exits_current_function(then_branch)
+                    && condition_rejects_oversized_vec(
+                        typeck,
+                        condition,
+                        binding,
+                        &literal_bindings,
+                    );
+            }
+            StmtKind::Let(_) | StmtKind::Item(_) => return false,
+        }
+    }
+    false
 }
 
 fn condition_rejects_oversized_vec(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
     binding: HirId,
+    literal_bindings: &HashSet<HirId>,
 ) -> bool {
     let condition = strip_drop_temps(condition);
     if let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
-        return vec_length_is_within_bound(typeck, inner, binding);
+        return vec_length_is_within_bound(typeck, inner, binding, literal_bindings);
     }
-    vec_length_exceeds_bound(typeck, condition, binding)
+    vec_length_exceeds_bound(typeck, condition, binding, literal_bindings)
 }
 
 fn vec_length_is_within_bound(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
     binding: HirId,
+    literal_bindings: &HashSet<HirId>,
 ) -> bool {
     let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
         return false;
     };
     (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
         && expr_is_vec_length_of_binding(typeck, lhs, binding)
-        && integer_literal(rhs))
+        && integer_literal_or_bound_binding(typeck, rhs, literal_bindings))
         || (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
             && expr_is_vec_length_of_binding(typeck, rhs, binding)
-            && integer_literal(lhs))
+            && integer_literal_or_bound_binding(typeck, lhs, literal_bindings))
 }
 
 fn vec_length_exceeds_bound(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
     binding: HirId,
+    literal_bindings: &HashSet<HirId>,
 ) -> bool {
     let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
         return false;
     };
     (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
         && expr_is_vec_length_of_binding(typeck, lhs, binding)
-        && integer_literal(rhs))
+        && integer_literal_or_bound_binding(typeck, rhs, literal_bindings))
         || (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
             && expr_is_vec_length_of_binding(typeck, rhs, binding)
-            && integer_literal(lhs))
+            && integer_literal_or_bound_binding(typeck, lhs, literal_bindings))
+}
+
+fn integer_literal_or_bound_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    literal_bindings: &HashSet<HirId>,
+) -> bool {
+    integer_literal(expr)
+        || local_binding_id(typeck, expr).is_some_and(|binding| literal_bindings.contains(&binding))
 }
 
 fn expr_is_vec_length_of_binding(
@@ -2327,6 +2352,25 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
             }
         }
 
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            if let Some(nonzero_binding) = local_binding_id(self.typeck, scrutinee).filter(|_| {
+                arms.iter()
+                    .any(|arm| pattern_is_positive_integer_literal(arm.pat))
+            }) {
+                self.visit_expr(scrutinee);
+                for arm in arms {
+                    let inserted_nonzero_binding = pattern_is_positive_integer_literal(arm.pat)
+                        .then(|| nonzero_binding)
+                        .filter(|binding| self.nonzero_bindings.insert(*binding));
+                    self.visit_arm(arm);
+                    if let Some(binding) = inserted_nonzero_binding {
+                        self.nonzero_bindings.remove(&binding);
+                    }
+                }
+                return;
+            }
+        }
+
         if let ExprKind::Binary(op, lhs, rhs) = expr.kind {
             let (file, line, column) = span_location(self.source_map, expr.span);
             if !span_line_starts_with_attribute(self.source_map, expr.span)
@@ -2358,6 +2402,18 @@ impl<'tcx> Visitor<'tcx> for Sec009Visitor<'_, 'tcx> {
 
         intravisit::walk_expr(self, expr);
     }
+}
+
+fn pattern_is_positive_integer_literal(pattern: &Pat<'_>) -> bool {
+    matches!(
+        pattern.kind,
+        PatKind::Expr(pattern_expression)
+            if matches!(
+                pattern_expression.kind,
+                PatExprKind::Lit { lit, negated: false }
+                    if matches!(lit.node, rustc_ast::LitKind::Int(value, _) if value.get() > 0)
+            )
+    )
 }
 
 fn nonzero_guard_bindings(
@@ -2616,9 +2672,44 @@ impl<'tcx> Visitor<'tcx> for Sec011Visitor<'_, 'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::Assign(target, _, _) = expr.kind {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming = self.statically_bounded_bindings.clone();
+            self.visit_expr(then_branch);
+            let then_bindings = self.statically_bounded_bindings.clone();
+            self.statically_bounded_bindings = incoming;
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.statically_bounded_bindings
+                .retain(|binding| then_bindings.contains(binding));
+            return;
+        }
+
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            let incoming = self.statically_bounded_bindings.clone();
+            let mut arm_bindings: Option<HashSet<HirId>> = None;
+            for arm in arms {
+                self.statically_bounded_bindings = incoming.clone();
+                self.visit_arm(arm);
+                let current_bindings = self.statically_bounded_bindings.clone();
+                arm_bindings = Some(match arm_bindings {
+                    Some(bindings) => bindings.intersection(&current_bindings).copied().collect(),
+                    None => current_bindings,
+                });
+            }
+            self.statically_bounded_bindings = arm_bindings.unwrap_or(incoming);
+            return;
+        }
+
+        if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
-                self.statically_bounded_bindings.remove(&binding);
+                if is_literal_iteration_limit(value) {
+                    self.statically_bounded_bindings.insert(binding);
+                } else {
+                    self.statically_bounded_bindings.remove(&binding);
+                }
             }
         }
 
@@ -2698,6 +2789,32 @@ impl<'tcx> Visitor<'tcx> for Sec012Visitor<'_, 'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming = self.unbounded_limit_bindings.clone();
+            self.visit_expr(then_branch);
+            let then_bindings = self.unbounded_limit_bindings.clone();
+            self.unbounded_limit_bindings = incoming;
+            if let Some(else_branch) = else_branch {
+                self.visit_expr(else_branch);
+            }
+            self.unbounded_limit_bindings.extend(then_bindings);
+            return;
+        }
+
+        if let ExprKind::Match(scrutinee, arms, _) = expr.kind {
+            self.visit_expr(scrutinee);
+            let incoming = self.unbounded_limit_bindings.clone();
+            let mut arm_bindings = HashSet::new();
+            for arm in arms {
+                self.unbounded_limit_bindings = incoming.clone();
+                self.visit_arm(arm);
+                arm_bindings.extend(self.unbounded_limit_bindings.iter().copied());
+            }
+            self.unbounded_limit_bindings = arm_bindings;
+            return;
+        }
+
         if let ExprKind::Assign(target, value, _) = expr.kind {
             if let Some(binding) = local_binding_id(self.typeck, target) {
                 if is_unbounded_clear_prefix_limit(value) {
