@@ -321,6 +321,45 @@ pub fn dispatch(origin: OriginFor<T>, sub: AccountId) -> Result<(), Error> {
     );
 }
 
+#[test]
+fn val001_tracks_multiline_storage_bindings() {
+    let code = r#"
+pub fn dispatch(origin: OriginFor<T>, username: Username) -> Result<(), Error> {
+    let who = ensure_signed(origin)?;
+    let account_of_username =
+        UsernameInfoOf::<T>::get(&username).ok_or(Error::<T>::NoUsername)?.owner;
+    ensure!(who == account_of_username, Error::<T>::InvalidUsername);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/identity/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "a guard consuming a multiline storage binding is not an independent precondition: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_storage_reads_that_select_a_guarded_branch() {
+    let code = r#"
+pub fn chill(stash: AccountId) -> Result<(), Error> {
+    let min_active_bond = if Nominators::<T>::contains_key(&stash) {
+        ensure!(Self::within_nominator_limit(), Error::<T>::CannotChillOther);
+        Self::min_nominator_bond()
+    } else {
+        Zero::zero()
+    };
+    ensure!(ledger.active < min_active_bond, Error::<T>::CannotChillOther);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/staking-async/src/pallet/mod.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "a storage read selecting a guarded branch is not an independent precondition: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================
