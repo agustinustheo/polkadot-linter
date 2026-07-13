@@ -6,13 +6,9 @@ use std::{
 };
 
 use polkadot_linter::{
-    config::Config, diagnostics, engine::LintEngine, rustc_pipeline, rustdoc_analysis,
+    config::Config, diagnostics, engine::LintEngine, rules::COMPILER_BACKED_RULE_IDS,
+    rustc_pipeline,
 };
-
-const COMPILER_BACKED_SECURITY_RULES: &[&str] = &[
-    "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009",
-    "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
-];
 
 #[derive(Parser, Debug)]
 #[command(
@@ -57,19 +53,15 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
-    /// rustdoc JSON files to analyze with the experimental rustc-backed path
-    #[arg(long = "rustdoc-json")]
-    rustdoc_json: Vec<PathBuf>,
-
-    /// Source root used to resolve relative rustdoc JSON spans
-    #[arg(long = "rustdoc-source-root")]
-    rustdoc_source_root: Option<PathBuf>,
+    /// Hide Cargo compiler progress for the compiler-backed analysis phase
+    #[arg(long = "no-rustc-progress")]
+    no_rustc_progress: bool,
 
     /// Skip syntax/token scanning and emit only auxiliary analysis results
     #[arg(long)]
     no_syntax: bool,
 
-    /// Disable compiler-backed analysis and retain syntax/token findings
+    /// Disable compiler-backed analysis; compiler-backed SEC rules are not run
     #[arg(long)]
     no_rustc: bool,
 
@@ -166,17 +158,10 @@ fn main() {
 
     let mut results = Vec::new();
     let compiler_backed_rules =
-        selected_compiler_backed_rules(cli.rules.as_deref(), &cli.compiler_backed_rules);
+        selected_compiler_backed_rules(cli.rules.as_deref(), &cli.compiler_backed_rules, &config);
     if !cli.no_syntax {
         for path in &cli.paths {
             results.extend(engine.scan(path));
-        }
-        if manifest_path.is_some() && !cli.no_rustc && !compiler_backed_rules.is_empty() {
-            results.retain(|diagnostic| {
-                !compiler_backed_rules
-                    .iter()
-                    .any(|rule_id| rule_id == diagnostic.rule_id.as_str())
-            });
         }
     }
 
@@ -184,7 +169,7 @@ fn main() {
         if let Some(manifest_path) = &manifest_path {
             if !cli.rustc_driver.is_file() {
                 eprintln!(
-                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-rustc`, or pass --no-rustc for an explicitly syntax-only scan.",
+                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-rustc`.",
                     cli.rustc_driver.display()
                 );
                 process::exit(2);
@@ -203,44 +188,12 @@ fn main() {
                 },
                 lib: cli.rustc_lib,
                 no_default_features: cli.rustc_no_default_features,
+                show_cargo_progress: !cli.no_rustc_progress,
             };
             match rustc_pipeline::run_cargo_check(&options) {
                 Ok(mut diagnostics) => results.append(&mut diagnostics),
                 Err(e) => {
                     eprintln!("Error running compiler-backed analysis: {e}");
-                    process::exit(2);
-                }
-            }
-        }
-    }
-
-    let run_rustdoc_sec013 = cli
-        .rules
-        .as_ref()
-        .is_none_or(|rules| rules.iter().any(|rule| rule == "SEC" || rule == "SEC013"));
-    if run_rustdoc_sec013 {
-        for rustdoc_json_path in &cli.rustdoc_json {
-            let content = match std::fs::read_to_string(rustdoc_json_path) {
-                Ok(content) => content,
-                Err(e) => {
-                    eprintln!(
-                        "Error loading rustdoc JSON {}: {e}",
-                        rustdoc_json_path.display()
-                    );
-                    process::exit(2);
-                }
-            };
-            match rustdoc_analysis::analyze_rustdoc_json_str(
-                &content,
-                cli.rustdoc_source_root.as_deref(),
-                &config,
-            ) {
-                Ok(mut diagnostics) => results.append(&mut diagnostics),
-                Err(e) => {
-                    eprintln!(
-                        "Error analyzing rustdoc JSON {}: {e}",
-                        rustdoc_json_path.display()
-                    );
                     process::exit(2);
                 }
             }
@@ -372,6 +325,7 @@ fn rustc_source_filters_for_paths(paths: &[PathBuf]) -> Vec<String> {
 fn selected_compiler_backed_rules(
     cli_rules: Option<&[String]>,
     explicit_compiler_rules: &[String],
+    config: &Config,
 ) -> Vec<String> {
     let selectors = if explicit_compiler_rules.is_empty() {
         cli_rules.unwrap_or_default()
@@ -380,19 +334,23 @@ fn selected_compiler_backed_rules(
     };
 
     if selectors.is_empty() {
-        return COMPILER_BACKED_SECURITY_RULES
+        return COMPILER_BACKED_RULE_IDS
             .iter()
+            .filter(|rule| config.rule_enabled(rule))
             .map(|rule| (*rule).to_string())
             .collect();
     }
 
-    COMPILER_BACKED_SECURITY_RULES
+    COMPILER_BACKED_RULE_IDS
         .iter()
         .filter(|rule_id| {
             selectors.iter().any(|selector| {
-                selector == "SEC" || *rule_id == selector || rule_id.starts_with(selector)
+                *rule_id == selector
+                    || (selector == "SEC" && rule_id.starts_with("SEC"))
+                    || (selector == "VAL" && rule_id.starts_with("VAL"))
             })
         })
+        .filter(|rule_id| config.rule_enabled(rule_id))
         .map(|rule| (*rule).to_string())
         .collect()
 }
@@ -401,6 +359,8 @@ fn selected_compiler_backed_rules(
 mod tests {
     use std::fs;
 
+    use polkadot_linter::config::Config;
+
     use super::{discover_cargo_manifest, selected_compiler_backed_rules};
 
     fn strings(values: &[&str]) -> Vec<String> {
@@ -408,13 +368,13 @@ mod tests {
     }
 
     #[test]
-    fn default_compiler_backed_rules_cover_migrated_security_rules() {
+    fn default_compiler_backed_rules_cover_migrated_rules() {
         assert_eq!(
-            selected_compiler_backed_rules(None, &[]),
+            selected_compiler_backed_rules(None, &[], &Config::default()),
             strings(&[
-                "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
-                "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016",
-                "SEC017", "SEC018",
+                "VAL003", "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007",
+                "SEC008", "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015",
+                "SEC016", "SEC017", "SEC018",
             ])
         );
     }
@@ -424,7 +384,7 @@ mod tests {
         let cli_rules = strings(&["SEC"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[]),
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
             strings(&[
                 "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
                 "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016",
@@ -438,8 +398,8 @@ mod tests {
         let cli_rules = strings(&["SEC003", "SEC014", "VAL"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[]),
-            strings(&["SEC003", "SEC014"])
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
+            strings(&["VAL003", "SEC003", "SEC014"])
         );
     }
 
@@ -449,9 +409,19 @@ mod tests {
         let compiler_rules = strings(&["SEC009"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &compiler_rules),
+            selected_compiler_backed_rules(Some(&cli_rules), &compiler_rules, &Config::default()),
             strings(&["SEC009"])
         );
+    }
+
+    #[test]
+    fn disabled_compiler_backed_rules_are_not_sent_to_the_driver() {
+        let mut config = Config::default();
+        config.rules.enabled.insert("SEC009".to_string(), false);
+
+        assert!(!selected_compiler_backed_rules(None, &[], &config)
+            .iter()
+            .any(|rule| rule == "SEC009"));
     }
 
     #[test]

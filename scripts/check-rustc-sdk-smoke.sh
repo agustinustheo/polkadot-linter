@@ -39,6 +39,7 @@ cargo +1.93.0 run \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --bin polkadot-linter \
   -- \
+  --config "$ROOT_DIR/config/default.toml" \
   --format json \
   --rules SEC001,SEC008 \
   --rustc-package "$PACKAGE" \

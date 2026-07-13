@@ -4,7 +4,7 @@ This repository now follows a phased plan for improving security-rule quality.
 The phases are intentionally sequential. We do not mix architecture work for
 later phases into the current one.
 
-## Phase 1: Stabilize
+## Phase 1: Stabilize (Complete)
 
 Goal: make the current `syn`-based tool usable without changing its core
 architecture.
@@ -30,29 +30,28 @@ Non-goals:
 - macro expansion or call-target resolution
 - a new rule engine or domain IR
 
-## Phase 2: Add Semantic Infrastructure
+## Phase 2: Add Semantic Infrastructure (Complete for Public SEC Rules)
 
 Goal: move important rules off pure syntax matching and onto a typed semantic
 layer.
 
 Current implementation:
 
-- an opt-in rustdoc JSON backend can be supplied with `--rustdoc-json`
-- the first prototype migrates `SEC013` storage value-shape detection onto
-  compiler-resolved type aliases
-- the default fast scanner remains unchanged while typed rules are validated
-  rule by rule
+- the public CLI routes `SEC001` through `SEC018` and `VAL003` through the rustc driver
+  when scanning a Cargo project
+- the syntax engine no longer registers any migrated rule, so it cannot
+  produce an alternate diagnostic for the same rule ID
+- pinned SDK packages have per-rule rustc baselines in CI
 
 Expected work:
 
-- add a cargo/rustc-backed project model so scans understand declared target
-  roles even when file paths do not follow `tests/` or `benches/` conventions
-- evaluate `rustc`/Clippy-style analysis as the backend for hard rules
-- resolve types, cfg gates, macro expansion, and call targets where needed
-- reimplement high-noise rules that cannot be fixed reliably with `syn` alone
+- deepen interprocedural dataflow and FRAME-domain modeling where the current
+  compiler rules document coverage limits
+- retain syntax only for non-security rules that are inherently text, style, or
+  source-attribute checks
 
-See [`rustdoc-analysis.md`](rustdoc-analysis.md) for the current backend,
-migration plan, and compatibility story.
+See [`rustc-driver-analysis.md`](rustc-driver-analysis.md) for the current
+backend and coverage matrix.
 
 ## Phase 3: Rebuild as a Focused FRAME Security Analyzer
 
@@ -70,33 +69,16 @@ Expected work:
 
 ## Benchmark Harness
 
-Use the phase-1 benchmark harness to collect SEC finding volume against the
-pinned SDK checkout:
-
-```bash
-scripts/benchmark-sec-rules.sh
-scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks
-```
-
-The script writes:
-
-- raw JSON findings
-- a text summary with counts by rule and top files
+Use the per-rule rustc SDK baseline scripts to collect reproducible security
+findings against the pinned checkout. CI runs these scripts directly.
 
 Current pinned-corpus policy:
 
 - `.repos/polkadot-sdk` is a recorded git submodule pinned to
   `b18fb34a8ae348df5866e4b718d82871d744e60d`
-- CI checks out the submodule, verifies that exact commit, runs this benchmark,
-  and fails if the SEC finding count rises above the curated ceiling
-- CI also compares the raw benchmark output against
-  `benchmarks/polkadot-sdk-sec018-baseline.tsv`, so a different finding set
-  fails even if the count stays unchanged
-- `SEC012` and `SEC013` remain implemented and unit-tested, but are disabled in
-  the project config because the SDK benchmark report showed they are still too
-  noisy for default audit output
-- the default SEC benchmark is currently focused on `SEC018`, with obvious
-  non-findings filtered out before diagnostics are emitted
+- CI checks out the submodule, verifies that exact commit, and compares each
+  compiler-backed rule's normalized SDK output to its pinned baseline
+- rules disabled in a project configuration are not sent to the rustc driver
 - `SEC018` recognizes narrow accepted-path validators such as fixed-size
   signature verification, static statement equality, session-key decoding, and
   `OpaqueKeys::ownership_proof_is_valid` proof tuple validation

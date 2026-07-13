@@ -13,7 +13,7 @@ trap 'rm -rf "$TARGET_DIR"' EXIT
 cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-rustc
 
 OUTPUT="$(cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --format json --rules SEC004 --rustc-cargo-manifest "$PACKAGE_DIR/Cargo.toml" \
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC004 --rustc-cargo-manifest "$PACKAGE_DIR/Cargo.toml" \
   --rustc-package pallet-collective --rustc-lib --rustc-no-default-features \
   --rustc-driver "$DRIVER" --rustc-toolchain nightly-2025-06-10 \
   --rustc-target-dir "$TARGET_DIR" --rustc-source-filter substrate/frame/collective/src/lib.rs \

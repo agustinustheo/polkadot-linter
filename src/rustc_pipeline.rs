@@ -22,6 +22,7 @@ pub struct RustcPipelineOptions {
     pub file_filters: Vec<String>,
     pub lib: bool,
     pub no_default_features: bool,
+    pub show_cargo_progress: bool,
 }
 
 #[derive(Debug)]
@@ -134,8 +135,7 @@ pub fn run_cargo_check(
             "POLKADOT_LINTER_RUSTC_MANIFEST_ROOT",
             manifest_path.parent().unwrap_or_else(|| Path::new(".")),
         )
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::null());
     prepend_dynamic_library_path(&mut command, &rustc_library_dir);
     if !options.rules.is_empty() {
         command.env("POLKADOT_LINTER_RUSTC_RULES", options.rules.join(","));
@@ -150,12 +150,23 @@ pub fn run_cargo_check(
         command.env("CARGO_TARGET_DIR", target_dir);
     }
 
-    let output = command.output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let (status, stderr) = if options.show_cargo_progress {
+        // Cargo writes its build progress and compiler diagnostics to stderr. Keep it
+        // attached to the caller so compiler-backed scans have normal Cargo feedback.
+        command.stderr(Stdio::inherit());
+        (command.status()?, String::new())
+    } else {
+        command.stderr(Stdio::piped());
+        let output = command.output()?;
+        (
+            output.status,
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    };
+    if !status.success() {
         let _ = fs::remove_file(&jsonl_path);
         return Err(RustcPipelineError::CargoFailed {
-            status: output.status.code(),
+            status: status.code(),
             stderr,
         });
     }

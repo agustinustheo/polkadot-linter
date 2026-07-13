@@ -165,6 +165,13 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("VAL003") {
+            report_storage_write_before_validation(
+                tcx,
+                tcx.sess.source_map(),
+                &mut self.diagnostics,
+            );
+        }
         if self.rule_enabled("SEC006") {
             report_unchecked_repatriate_reserved(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
@@ -972,6 +979,30 @@ fn report_missing_storage_version_checks<'tcx>(
     }
 }
 
+fn report_storage_write_before_validation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Val003Visitor {
+            tcx,
+            typeck: tcx.typeck(def_id),
+            source_map,
+            diagnostics,
+            first_storage_write: None,
+            reported: false,
+        };
+        visitor.visit_body(body);
+    }
+}
+
 fn has_transactional_hook_attribute(
     tcx: TyCtxt<'_>,
     def_id: LocalDefId,
@@ -1005,6 +1036,57 @@ struct Sec016Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     has_resolved_storage_version_check: bool,
     has_resolved_storage_write: bool,
+}
+
+struct Val003Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    source_map: &'a SourceMap,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    first_storage_write: Option<Span>,
+    reported: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for Val003Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if self.reported {
+            return;
+        }
+
+        if let ExprKind::Call(callee, _) = expr.kind {
+            if is_frame_storage_write_call(self.tcx, self.typeck, callee) {
+                self.first_storage_write.get_or_insert(expr.span);
+            }
+        }
+
+        if self.first_storage_write.is_some()
+            && matches!(
+                expr.kind,
+                ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_))
+            )
+        {
+            let (file, line, column) = span_location(
+                self.source_map,
+                self.first_storage_write.expect("checked above"),
+            );
+            self.diagnostics.push(RustcDiagnostic {
+                rule_id: "VAL003",
+                rule_name: "storage-write-before-validation",
+                file,
+                line,
+                column,
+                message: "Resolved FRAME storage write occurs before a fallible validation edge"
+                    .to_string(),
+            });
+            self.reported = true;
+            return;
+        }
+
+        if matches!(expr.kind, ExprKind::Closure(_)) {
+            return;
+        }
+        intravisit::walk_expr(self, expr);
+    }
 }
 
 impl<'tcx> Visitor<'tcx> for Sec016Visitor<'_, 'tcx> {

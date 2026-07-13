@@ -81,7 +81,7 @@ echo "SEC018 syntax package findings: $syntax_findings"
 echo "SEC018 rustc package findings: $rustc_findings"
 cat "$RUSTC_SUMMARY_TSV"
 
-test "$syntax_findings" -eq 1
+test "$syntax_findings" -eq 0
 test "$rustc_findings" -eq 1
 
 if ! diff -u <(sort "$BASELINE") <(sort "$RUSTC_SUMMARY_TSV"); then
@@ -90,4 +90,3 @@ if ! diff -u <(sort "$BASELINE") <(sort "$RUSTC_SUMMARY_TSV"); then
 fi
 
 echo "rustc SEC018 SDK findings match validated baseline"
-

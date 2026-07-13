@@ -6,6 +6,23 @@ pub mod test_smells;
 
 use crate::{config::Config, diagnostics::Diagnostic, engine::FileContext};
 
+/// Security rules whose public implementation is the rustc-backed driver.
+///
+/// They deliberately do not appear in [`all_rules`]. Keeping a `syn` rule
+/// registered for the same ID would create a second, lower-fidelity authority
+/// for a compiler-backed diagnostic.
+pub const COMPILER_BACKED_SECURITY_RULE_IDS: &[&str] = &[
+    "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009",
+    "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
+];
+
+/// All public rules implemented by the rustc driver.
+pub const COMPILER_BACKED_RULE_IDS: &[&str] = &[
+    "VAL003", "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
+    "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017",
+    "SEC018",
+];
+
 /// Trait that all lint rules implement
 pub trait LintRule: Send + Sync {
     /// Unique rule identifier (e.g., "VAL001")
@@ -57,26 +74,6 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(benchmarking::ExtrinsicWithoutBenchmark),
         // Terminology rules
         Box::new(terminology::SpellingConventions),
-        // Security rules (from security review findings)
-        Box::new(semantic::UnboundedVecInExtrinsic),
-        Box::new(semantic::DebugAssertInProduction),
-        Box::new(semantic::MissingDecodeDepthLimit),
-        Box::new(semantic::UnsafeWeightArithmetic),
-        Box::new(semantic::ExpensiveWeightCalculation),
-        Box::new(semantic::UncheckedRepatriateReserved),
-        Box::new(semantic::LetUnderscoreResult),
-        Box::new(semantic::PanicInProduction),
-        Box::new(semantic::RawArithmeticInFallible),
-        Box::new(semantic::StorageWriteBeforeValidation),
-        Box::new(semantic::MissingTransactionalInHook),
-        Box::new(semantic::StorageIterationInDispatchables),
-        Box::new(semantic::UnboundedClearPrefix),
-        Box::new(semantic::UnboundedStorageCollections),
-        Box::new(semantic::IdentityHasherOnCommonKeys),
-        Box::new(semantic::DispatchBypassFilterInProduction),
-        Box::new(semantic::MissingStorageVersionCheckInRuntimeUpgrade),
-        Box::new(semantic::VecInEvents),
-        Box::new(semantic::MissingWeightForUnboundedInput),
     ];
 
     // Filter disabled rules

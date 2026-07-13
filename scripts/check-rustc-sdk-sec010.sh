@@ -31,10 +31,10 @@ fi
 cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-rustc
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --format json --rules SEC010 --no-rustc "$PACKAGE_DIR" > "$SYNTAX_JSON"
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC010 --no-rustc "$PACKAGE_DIR" > "$SYNTAX_JSON"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --format json --rules SEC010 --rustc-package "$PACKAGE" --rustc-lib \
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC010 --rustc-package "$PACKAGE" --rustc-lib \
   --rustc-no-default-features --rustc-driver "$DRIVER" \
   --rustc-toolchain nightly-2025-06-10 --rustc-target-dir "$SDK_TARGET_DIR" \
   --rustc-source-filter "$PACKAGE_FILE" "$PACKAGE_DIR" > "$RUSTC_JSON"

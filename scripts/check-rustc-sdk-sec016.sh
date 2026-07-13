@@ -60,7 +60,7 @@ echo "SEC016 syntax package findings: $syntax_findings"
 echo "SEC016 rustc package findings: $rustc_findings"
 cat "$SUMMARY"
 
-test "$syntax_findings" -eq 1
+test "$syntax_findings" -eq 0
 test "$rustc_findings" -eq 1
 
 if ! diff -u <(sort "$BASELINE") <(sort "$SUMMARY"); then

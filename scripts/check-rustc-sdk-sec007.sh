@@ -57,7 +57,7 @@ rustc_findings="$(wc -l < "$SUMMARY" | tr -d '[:space:]')"
 echo "SEC007 syntax package findings: $syntax_findings"
 echo "SEC007 rustc package findings: $rustc_findings"
 
-test "$syntax_findings" -eq 1
+test "$syntax_findings" -eq 0
 test "$rustc_findings" -eq 0
 
 if ! diff -u <(grep -v '^#' "$BASELINE") "$SUMMARY"; then

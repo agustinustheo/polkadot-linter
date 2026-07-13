@@ -16,7 +16,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       POLKADOT_SDK_COMMIT: b18fb34a8ae348df5866e4b718d82871d744e60d
-      MAX_SEC_BENCHMARK_FINDINGS: "13"
     steps:
       - name: Checkout repository and SDK submodule
         uses: actions/checkout@v4
@@ -69,6 +68,9 @@ jobs:
 
       - name: Check default compiler-backed CLI routing
         run: scripts/check-rustc-cli-default.sh
+
+      - name: Check rustc-backed VAL003 validation ordering
+        run: scripts/check-rustc-val003.sh
 
       - name: Check rustc-backed SDK baseline
         run: scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
@@ -123,21 +125,6 @@ jobs:
 
       - name: Check rustc-backed SDK SEC018 baseline
         run: scripts/check-rustc-sdk-sec018.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Benchmark SEC rules against Polkadot SDK
-        run: scripts/benchmark-sec-rules.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Enforce SEC benchmark finding ceiling
-        run: |
-          latest="$(ls -t .benchmarks/sec-rules-*.json | head -n1)"
-          count="$(jq 'length' "$latest")"
-          echo "SEC benchmark findings: $count"
-          test "$count" -le "$MAX_SEC_BENCHMARK_FINDINGS"
-
-      - name: Check SEC benchmark validated baseline
-        run: |
-          latest="$(ls -t .benchmarks/sec-rules-*.json | head -n1)"
-          scripts/check-sec-benchmark-baseline.sh "$latest"
 
       - name: Upload SEC benchmark output
         uses: actions/upload-artifact@v4
