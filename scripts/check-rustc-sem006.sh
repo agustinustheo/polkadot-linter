@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 FIXTURE_DIR="$WORK_DIR/sem006-fixture"
-DRIVER="$ROOT_DIR/target/debug/polkadot-linter-rustc"
+DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 
 mkdir -p "$FIXTURE_DIR/src"
 cat > "$FIXTURE_DIR/Cargo.toml" <<'TOML'
@@ -37,8 +37,8 @@ pub fn generated_weight() -> u64 {
 RS
 printf '\npub mod weights;\n' >> "$FIXTURE_DIR/src/lib.rs"
 
-cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-rustc
-OUTPUT="$(cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- --config "$ROOT_DIR/config/default.toml" --format json --rules SEM006 --rustc-driver "$DRIVER" "$FIXTURE_DIR")"
+cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-driver
+OUTPUT="$(cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- --config "$ROOT_DIR/config/default.toml" --format json --rules SEM006 --driver-path "$DRIVER" "$FIXTURE_DIR")"
 printf '%s\n' "$OUTPUT"
 test "$(jq '[.[] | select(.rule_id == "SEM006" and .file == "src/lib.rs" and .line == 13)] | length' <<<"$OUTPUT")" -eq 1
 test "$(jq '[.[] | select(.rule_id == "SEM006" and .file == "src/weights.rs")] | length' <<<"$OUTPUT")" -eq 0

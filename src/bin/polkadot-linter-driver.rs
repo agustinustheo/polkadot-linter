@@ -351,7 +351,7 @@ fn source_matches_filters(source: &str, filters: &[String]) -> bool {
         return true;
     }
 
-    let manifest_root = env::var_os("POLKADOT_LINTER_RUSTC_MANIFEST_ROOT").map(PathBuf::from);
+    let manifest_root = env::var_os("POLKADOT_LINTER_DRIVER_MANIFEST_ROOT").map(PathBuf::from);
     filters.iter().any(|filter| {
         source.contains(filter)
             || filter.ends_with(source)
@@ -5388,7 +5388,7 @@ fn append_jsonl_diagnostics(path: &str, diagnostics: &[RustcDiagnostic]) {
 }
 
 fn output_file_filters() -> Vec<String> {
-    env::var("POLKADOT_LINTER_RUSTC_FILE_CONTAINS")
+    env::var("POLKADOT_LINTER_DRIVER_FILE_CONTAINS")
         .ok()
         .into_iter()
         .flat_map(|value| {
@@ -5403,7 +5403,7 @@ fn output_file_filters() -> Vec<String> {
 }
 
 fn enabled_rule_filters() -> HashSet<String> {
-    env::var("POLKADOT_LINTER_RUSTC_RULES")
+    env::var("POLKADOT_LINTER_DRIVER_RULES")
         .ok()
         .into_iter()
         .flat_map(|value| {
@@ -5448,7 +5448,7 @@ fn filtered_unique_diagnostics(
 fn main() {
     let mut rustc_args = env::args().skip(1).collect::<Vec<_>>();
     if rustc_args.is_empty() {
-        eprintln!("usage: polkadot-linter-rustc <rustc args>");
+        eprintln!("usage: polkadot-linter-driver <rustc args>");
         process::exit(2);
     }
     let wrapper_mode = first_arg_is_rustc(&rustc_args);
@@ -5473,7 +5473,7 @@ fn main() {
     });
     let diagnostics = filtered_unique_diagnostics(&callbacks.diagnostics, &output_file_filters());
 
-    if let Ok(path) = env::var("POLKADOT_LINTER_RUSTC_JSONL") {
+    if let Ok(path) = env::var("POLKADOT_LINTER_DRIVER_JSONL") {
         append_jsonl_diagnostics(&path, &diagnostics);
     } else if !wrapper_mode {
         println!(

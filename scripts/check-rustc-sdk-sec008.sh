@@ -22,7 +22,7 @@ mkdir -p "$OUTPUT_DIR"
 SYNTAX_JSON="$OUTPUT_DIR/rustc-sdk-sec008-syntax-$TIMESTAMP.json"
 RUSTC_JSON="$OUTPUT_DIR/rustc-sdk-sec008-$TIMESTAMP.json"
 SUMMARY="$OUTPUT_DIR/rustc-sdk-sec008-$TIMESTAMP-summary.tsv"
-DRIVER="$ROOT_DIR/target/debug/polkadot-linter-rustc"
+DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 if [[ -n "${POLKADOT_LINTER_SDK_RUSTC_TARGET_DIR:-}" ]]; then
   SDK_TARGET_DIR="$POLKADOT_LINTER_SDK_RUSTC_TARGET_DIR"
 else
@@ -30,16 +30,16 @@ else
   trap 'rm -rf "$SDK_TARGET_DIR"' EXIT
 fi
 
-cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-rustc
+cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-driver
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC008 --no-rustc "$PACKAGE_DIR" > "$SYNTAX_JSON"
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC008 --syntax-only "$PACKAGE_DIR" > "$SYNTAX_JSON"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC008 --rustc-package "$PACKAGE" --rustc-lib \
-  --rustc-no-default-features --rustc-driver "$DRIVER" \
-  --rustc-toolchain nightly-2025-06-10 --rustc-target-dir "$SDK_TARGET_DIR" \
-  --rustc-source-filter "$PACKAGE_FILE" "$PACKAGE_DIR" > "$RUSTC_JSON"
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC008 --package "$PACKAGE" --lib \
+  --no-default-features --driver-path "$DRIVER" \
+  --toolchain nightly-2025-06-10 --target-dir "$SDK_TARGET_DIR" \
+  --source-filter "$PACKAGE_FILE" "$PACKAGE_DIR" > "$RUSTC_JSON"
 
 jq -r --arg package_file "$PACKAGE_FILE" '
   [.[] | select(.file | contains($package_file))]

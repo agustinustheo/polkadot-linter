@@ -12,7 +12,7 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FIXTURE_DIR="$WORK_DIR/sem009-fixture"
-DRIVER="$ROOT_DIR/target/debug/polkadot-linter-rustc"
+DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 OUTPUT="$WORK_DIR/diagnostics.json"
 
 mkdir -p "$FIXTURE_DIR/src"
@@ -61,13 +61,13 @@ RS
 cargo +nightly-2025-06-10 build \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
-  --bin polkadot-linter-rustc
+  --bin polkadot-linter-driver
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/default.toml" \
   --format json \
   --rules SEM009 \
-  --rustc-driver "$DRIVER" \
+  --driver-path "$DRIVER" \
   "$FIXTURE_DIR" > "$OUTPUT"
 
 cat "$OUTPUT"

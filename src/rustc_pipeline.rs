@@ -130,19 +130,19 @@ pub fn run_cargo_check(
 
     command
         .env("RUSTC_WORKSPACE_WRAPPER", &driver_path)
-        .env("POLKADOT_LINTER_RUSTC_JSONL", &jsonl_path)
+        .env("POLKADOT_LINTER_DRIVER_JSONL", &jsonl_path)
         .env(
-            "POLKADOT_LINTER_RUSTC_MANIFEST_ROOT",
+            "POLKADOT_LINTER_DRIVER_MANIFEST_ROOT",
             manifest_path.parent().unwrap_or_else(|| Path::new(".")),
         )
         .stdout(Stdio::null());
     prepend_dynamic_library_path(&mut command, &rustc_library_dir);
     if !options.rules.is_empty() {
-        command.env("POLKADOT_LINTER_RUSTC_RULES", options.rules.join(","));
+        command.env("POLKADOT_LINTER_DRIVER_RULES", options.rules.join(","));
     }
     if !options.file_filters.is_empty() {
         command.env(
-            "POLKADOT_LINTER_RUSTC_FILE_CONTAINS",
+            "POLKADOT_LINTER_DRIVER_FILE_CONTAINS",
             options.file_filters.join(","),
         );
     }
@@ -248,7 +248,7 @@ fn temporary_jsonl_path() -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     env::temp_dir().join(format!(
-        "polkadot-linter-rustc-{}-{nanos}.jsonl",
+        "polkadot-linter-driver-{}-{nanos}.jsonl",
         std::process::id()
     ))
 }

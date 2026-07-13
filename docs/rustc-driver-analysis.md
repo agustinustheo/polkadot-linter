@@ -1,6 +1,6 @@
 # Rustc-driver analysis
 
-`polkadot-linter-rustc` is the compiler-backed analysis entry point. It is
+`polkadot-linter-driver` is the compiler-backed analysis entry point. It is
 gated behind the `rustc-driver` feature because it depends on nightly
 `rustc_private` APIs plus the `rustc-dev` and `llvm-tools-preview`
 components.
@@ -24,7 +24,7 @@ The default syntax-based CLI still builds on the stable project toolchain. The
 compiler-backed driver is built and checked separately:
 
 ```sh
-cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-rustc
+cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-driver
 ```
 
 ## Typed hard-rule checks
@@ -279,22 +279,22 @@ discovers the nearest `Cargo.toml`, uses `nightly-2025-06-10` unless overridden,
 and supplies that toolchain's compiler-library directory to the rustc wrapper.
 For selected migrated rules, the syntax engine has no registered implementation;
 the rustc-backed diagnostics are the normal public diagnostic format.
-`--no-rustc` skips migrated SEC rules while leaving syntax/text families enabled:
+`--syntax-only` skips migrated SEC rules while leaving syntax/text families enabled:
 
 ```sh
 polkadot-linter \
   --format json \
   --rules SEC001,SEC008 \
-  --rustc-package pallet-multisig \
-  --rustc-lib \
-  --rustc-no-default-features \
-  --rustc-driver target/debug/polkadot-linter-rustc \
-  --rustc-toolchain nightly-2025-06-10 \
-  --rustc-source-filter substrate/frame/multisig/src/lib.rs \
+  --package pallet-multisig \
+  --lib \
+  --no-default-features \
+  --driver-path target/debug/polkadot-linter-driver \
+  --toolchain nightly-2025-06-10 \
+  --source-filter substrate/frame/multisig/src/lib.rs \
   .repos/polkadot-sdk/substrate/frame/multisig
 ```
 
-Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
+Internally, `polkadot-linter` runs Cargo with `polkadot-linter-driver` as
 `RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
 back into the public diagnostic format. When `--compiler-backed-rules` is not
 specified, the CLI expands the requested rule filters to the migrated
@@ -302,17 +302,17 @@ compiler-backed rules (`VAL003`, `SEC001`, `SEC002`, `SEC003`, `SEC004`, `SEC005
 `SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC014`, `SEC015`, `SEC016`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
 passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
-JSONL file named by `POLKADOT_LINTER_RUSTC_JSONL`. Diagnostics are sorted and
-deduplicated before JSON/JSONL output. `POLKADOT_LINTER_RUSTC_FILE_CONTAINS`
+JSONL file named by `POLKADOT_LINTER_DRIVER_JSONL`. Diagnostics are sorted and
+deduplicated before JSON/JSONL output. `POLKADOT_LINTER_DRIVER_FILE_CONTAINS`
 can be set to a comma-separated list of file substrings to capture only
 package-local benchmark output while Cargo still compiles dependencies
-normally. `POLKADOT_LINTER_RUSTC_RULES` can be set to a comma-separated list
+normally. `POLKADOT_LINTER_DRIVER_RULES` can be set to a comma-separated list
 of rule families or IDs, such as `SEC` or `SEC008,SEC009`, so migrated rules
 can be benchmarked and wired independently.
 
 Cargo's normal `Compiling`/`Checking` output and interactive progress are shown
 on stderr during compiler-backed analysis; structured linter output remains on
-stdout. Pass `--no-rustc-progress` when a quiet Cargo invocation is required.
+stdout. Pass `--no-progress` when a quiet Cargo invocation is required.
 
 Run the SDK smoke check with:
 
@@ -320,8 +320,8 @@ Run the SDK smoke check with:
 scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
 ```
 
-That script builds `polkadot-linter-rustc`, invokes the stable
-`polkadot-linter` CLI without `--rustc-cargo-manifest`, `--no-syntax`, or
+That script builds `polkadot-linter-driver`, invokes the stable
+`polkadot-linter` CLI without `--manifest-path`, `--no-syntax`, or
 `--compiler-backed-rules`, and verifies package-local
 compiler-backed findings are captured from the pinned SDK
 `pallet-multisig` package. The raw smoke artifact is filtered to the
