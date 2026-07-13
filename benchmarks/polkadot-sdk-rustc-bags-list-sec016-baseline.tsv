@@ -1,1 +1,0 @@
-SEC016	substrate/frame/bags-list/src/migrations.rs	105	Resolved FRAME runtime upgrade writes storage without a StorageVersion check

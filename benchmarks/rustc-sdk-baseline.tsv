@@ -1,0 +1,31 @@
+SEC001	substrate/frame/multisig/src/lib.rs	324	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	423	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	488	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	530	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	578	Public callable accepts an unbounded Vec parameter after type resolution
+SEC002	substrate/frame/multisig/src/lib.rs	548	`debug_assert!` expands into a debug-only panic path
+SEC003	polkadot/xcm/pallet-xcm/src/lib.rs	4111	Recursive runtime type is decoded without a depth limit
+SEC005	substrate/frame/collective/src/lib.rs	633	Resolved expensive operation inside #[pallet::weight(...)]
+SEC005	substrate/frame/collective/src/lib.rs	685	Resolved expensive operation inside #[pallet::weight(...)]
+SEC006	substrate/frame/identity/src/lib.rs	1085	Resolved repatriate_reserved return value is discarded
+SEC008	substrate/frame/multisig/src/lib.rs	141	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/multisig/src/lib.rs	647	`.expect()` can panic on a reachable error path
+SEC009	substrate/frame/collective/src/lib.rs	961	Fallible function uses raw arithmetic on resolved integer operands
+SEC009	substrate/frame/collective/src/lib.rs	1088	Fallible function uses raw arithmetic on resolved integer operands
+SEC011	substrate/frame/multisig/src/migrations.rs	56	Callable iterates a resolved FRAME storage collection
+SEC012	substrate/frame/honzon/oracle/src/lib.rs	440	Resolved FRAME storage clear_prefix uses an unbounded deletion limit
+SEC013	substrate/frame/session/src/lib.rs	595	Storage alias resolves to an unbounded collection value
+SEC013	substrate/frame/session/src/lib.rs	609	Storage alias resolves to an unbounded collection value
+SEC013	substrate/frame/session/src/lib.rs	617	Storage alias resolves to an unbounded collection value
+SEC016	substrate/frame/bags-list/src/migrations.rs	105	Resolved FRAME runtime upgrade writes storage without a StorageVersion check
+SEC017	substrate/frame/root-offences/src/lib.rs	116	Event field resolves to an unbounded Vec payload
+SEC018	substrate/frame/contracts/src/lib.rs	944	Weight attribute does not account for resolved unbounded `data` input
+VAL002	substrate/frame/aura/src/lib.rs	137	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/babe/src/equivocation.rs	180	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/broker/src/tick_impls.rs	102	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/broker/src/utility_impls.rs	37	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/broker/src/utility_impls.rs	44	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/collective/src/lib.rs	276	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/revive/src/evm/call.rs	201	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/sassafras/src/lib.rs	593	Resolved config, storage, or collection divisor lacks a nonzero proof
+VAL002	substrate/frame/staking-async/src/lib.rs	721	Resolved config, storage, or collection divisor lacks a nonzero proof

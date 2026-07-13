@@ -1,0 +1,26 @@
+# mode	rule_id	package	package_dir	source_filter	syntax_count	rustc_count
+cli	SEC001	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	5
+cli	SEC002	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	1
+cli	SEC003	pallet-xcm	polkadot/xcm/pallet-xcm	polkadot/xcm/pallet-xcm/src/lib.rs	0	1
+cli	SEC004	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
+cli	SEC005	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	2
+cli	SEC006	pallet-identity	substrate/frame/identity	substrate/frame/identity/src/lib.rs	0	1
+cli	SEC007	pallet-elections-phragmen	substrate/frame/elections-phragmen	substrate/frame/elections-phragmen/src/lib.rs	0	0
+cli	SEC008	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	2
+cli	SEC009	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	2
+cli	SEC010	pallet-people	substrate/frame/people	substrate/frame/people/src/lib.rs	0	0
+cli	SEC011	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/migrations.rs	0	1
+cli	SEC012	pallet-oracle	substrate/frame/honzon/oracle	substrate/frame/honzon/oracle/src/lib.rs	0	1
+cli	SEC013	pallet-session	substrate/frame/session	substrate/frame/session/src/lib.rs	0	3
+cli	SEC014	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
+cli	SEC015	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
+cli	SEC016	pallet-bags-list	substrate/frame/bags-list	substrate/frame/bags-list/src/migrations.rs	0	1
+cli	SEC017	pallet-root-offences	substrate/frame/root-offences	substrate/frame/root-offences/src/lib.rs	0	1
+cli	SEC018	pallet-contracts	substrate/frame/contracts	substrate/frame/contracts/src/lib.rs	0	1
+wrapper	VAL002	pallet-aura	substrate/frame/aura	substrate/frame/aura/	-	1
+wrapper	VAL002	pallet-babe	substrate/frame/babe	substrate/frame/babe/	-	1
+wrapper	VAL002	pallet-broker	substrate/frame/broker	substrate/frame/broker/	-	3
+wrapper	VAL002	pallet-collective	substrate/frame/collective	substrate/frame/collective/	-	1
+wrapper	VAL002	pallet-revive	substrate/frame/revive	substrate/frame/revive/	-	1
+wrapper	VAL002	pallet-sassafras	substrate/frame/sassafras	substrate/frame/sassafras/	-	1
+wrapper	VAL002	pallet-staking-async	substrate/frame/staking-async	substrate/frame/staking-async/	-	1

@@ -62,20 +62,14 @@ jobs:
       - name: Run rustc-backed hard-rule precision checks
         run: scripts/check-rustc-hard-rules.sh
 
-      - name: Check rustc-backed SEC004 weight attribute
-        run: scripts/check-rustc-sec004-weight-attribute.sh
-
-      - name: Check rustc-backed SEC005 weight attribute
-        run: scripts/check-rustc-sec005-weight-attribute.sh
+      - name: Check rustc-backed weight attributes
+        run: scripts/check-rustc-weight-attributes.sh
 
       - name: Check default compiler-backed CLI routing
         run: scripts/check-rustc-cli-default.sh
 
       - name: Check rustc-backed VAL003 validation ordering
         run: scripts/check-rustc-val003.sh
-
-      - name: Check rustc-backed VAL002 SDK baseline
-        run: scripts/check-rustc-sdk-val002.sh .repos/polkadot-sdk .benchmarks
 
       - name: Check rustc-backed SEM010 XOR detection
         run: scripts/check-rustc-sem010.sh
@@ -89,59 +83,8 @@ jobs:
       - name: Check rustc-backed SEM016 authorized-transaction detection
         run: scripts/check-rustc-sem016.sh
 
-      - name: Check rustc-backed SDK baseline
-        run: scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC002 baseline
-        run: scripts/check-rustc-sdk-sec002.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC003 baseline
-        run: scripts/check-rustc-sdk-sec003.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC004 baseline
-        run: scripts/check-rustc-sdk-sec004.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC005 baseline
-        run: scripts/check-rustc-sdk-sec005.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC006 baseline
-        run: scripts/check-rustc-sdk-sec006.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC007 baseline
-        run: scripts/check-rustc-sdk-sec007.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC009 baseline
-        run: scripts/check-rustc-sdk-sec009.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC010 baseline
-        run: scripts/check-rustc-sdk-sec010.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC011 baseline
-        run: scripts/check-rustc-sdk-sec011.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC012 baseline
-        run: scripts/check-rustc-sdk-sec012.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC013 baseline
-        run: scripts/check-rustc-sdk-sec013.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC014 baseline
-        run: scripts/check-rustc-sdk-sec014.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC015 baseline
-        run: scripts/check-rustc-sdk-sec015.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC016 baseline
-        run: scripts/check-rustc-sdk-sec016.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC017 baseline
-        run: scripts/check-rustc-sdk-sec017.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC008 baseline
-        run: scripts/check-rustc-sdk-sec008.sh .repos/polkadot-sdk .benchmarks
-
-      - name: Check rustc-backed SDK SEC018 baseline
-        run: scripts/check-rustc-sdk-sec018.sh .repos/polkadot-sdk .benchmarks
+      - name: Check rustc-backed SDK benchmarks
+        run: scripts/check-sdk-benchmarks.sh .repos/polkadot-sdk .benchmarks
 
       - name: Check source-rule FRAME corpus baseline
         run: scripts/check-source-rule-corpus.sh .repos/polkadot-sdk

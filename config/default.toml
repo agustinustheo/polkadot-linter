@@ -1,5 +1,4 @@
 # polkadot-linter — Polkadot SDK-specific linter configuration
-# See docs/rules_traceability.md for the mapping from reviewer complaints to rules.
 
 [general]
 exclude = ["*.lock", ".git/**", "target/**"]

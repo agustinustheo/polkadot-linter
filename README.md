@@ -134,16 +134,10 @@ The security rules and `VAL003` now route through the rustc-backed pipeline by
 default when the scan path is inside a single Cargo project; the CLI discovers
 the nearest `Cargo.toml` and the syntax engine does not register those rule
 IDs. `--syntax-only` skips compiler-backed rules and is appropriate only when
-running the remaining syntax/text rule families. See
-[`docs/rustc-driver-analysis.md`](docs/rustc-driver-analysis.md) and
-[`docs/security-linter-phases.md`](docs/security-linter-phases.md). The
-rustdoc-backed analysis path is documented in
-[`docs/rustdoc-analysis.md`](docs/rustdoc-analysis.md). The current authority
-and migration criteria for every rule family are in
-[`docs/rule-backend-matrix.md`](docs/rule-backend-matrix.md).
+running the remaining syntax/text rule families.
 
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
-per-rule `scripts/check-rustc-sdk-sec*.sh` baselines used by CI.
+data-driven `scripts/check-sdk-benchmarks.sh` baseline used by CI.
 
 ## Output Formats
 
