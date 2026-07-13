@@ -16,18 +16,22 @@ Current branch:
 
 Validation evidence used for this matrix:
 
-- `cargo +1.93.0 test`: 301 tests passed
+- `cargo +1.93.0 test`: 303 tests passed
 - `cargo +1.93.0 clippy --all-targets -- -D warnings`: passed
 - `cargo +1.93.0 build`: passed
 - `scripts/check-source-rule-corpus.sh .repos/polkadot-sdk`: checks all
   public source-authority rules against the pinned full-FRAME baseline. The
-  current baseline has 10 `VAL001` findings; it is checked in
+  current baseline has 4 `VAL001` findings; it is checked in
   CI and is not a claim that all source findings are audit-validated.
-- `VAL001` compiler migration evaluation: a rustc prototype suppressed
-  storage-derived identity ownership checks and retained the bounties candidate,
-  but missed `BondedPool::<T>::get` before an independent guard in pinned
-  `pallet-nomination-pools`. It was removed rather than promoted; source
-  authority remains until that alias-resolution gap is closed.
+- `VAL001` source precision: AST-derived multiline pattern bindings, exact
+  identifier matching, and branch-condition exclusion reduced the pinned FRAME
+  corpus from 52 to 4 findings. A rustc prototype still missed
+  `BondedPool::<T>::get` before an independent guard in pinned
+  `pallet-nomination-pools`. A pinned compiler probe found no named `chill`
+  function body after FRAME expansion, so the current driver cannot associate
+  that authored storage read and guard. It was removed rather than promoted;
+  source authority remains until the expansion mapping and alias-resolution
+  gaps are closed.
 - `VAL002` compiler migration: rustc is the sole public authority. The driver
   resolves direct, generic, and associated `Get::get` calls, tracks local
   aliases and casts, and proves local or collection-length nonzero guards.

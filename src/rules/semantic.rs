@@ -1609,9 +1609,16 @@ impl LintRule for ValidationBeforeHeavyRead {
 
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.content.lines().collect();
-        let validation_guard_tokens = ast_file(ctx)
+        let ast = ast_file(ctx);
+        let validation_guard_tokens = ast
             .map(|ast| val001_ensure_guard_tokens(ast, lines.len()))
             .unwrap_or_else(|| vec![String::new(); lines.len()]);
+        let heavy_read_bindings = ast
+            .map(|ast| val001_heavy_read_bindings(ast, lines.len()))
+            .unwrap_or_else(|| vec![Vec::new(); lines.len()]);
+        let conditional_read_mask = ast
+            .map(|ast| val001_if_condition_mask(ast, lines.len()))
+            .unwrap_or_else(|| vec![false; lines.len()]);
         // Validation order is a production-dispatch concern. Inline test and
         // try-runtime items share source files with production code, so the
         // file-level test check above is not sufficient here.
@@ -1658,10 +1665,26 @@ impl LintRule for ValidationBeforeHeavyRead {
                         if validation_guard_tokens.get(i).is_none_or(String::is_empty)
                             && trimmed.contains(pattern.as_str())
                         {
+                            if conditional_read_mask.get(i).copied().unwrap_or(false) {
+                                break;
+                            }
                             // Track every local introduced by the read so destructuring patterns
                             // such as `let (owner, _) = Storage::get(...)` remain data-dependent.
-                            let lhs = trimmed.split('=').next().unwrap_or("").trim().to_string();
-                            heavy_op_bindings = Some(val001_binding_names(&lhs));
+                            heavy_op_bindings = Some(
+                                heavy_read_bindings
+                                    .get(i)
+                                    .cloned()
+                                    .filter(|bindings| !bindings.is_empty())
+                                    .unwrap_or_else(|| {
+                                        let lhs = trimmed
+                                            .split('=')
+                                            .next()
+                                            .unwrap_or("")
+                                            .trim()
+                                            .to_string();
+                                        val001_binding_names(&lhs)
+                                    }),
+                            );
                             first_heavy_op = Some((i, pattern.clone()));
                             break;
                         }
@@ -1688,7 +1711,8 @@ impl LintRule for ValidationBeforeHeavyRead {
                                     .map(String::as_str)
                                     .unwrap_or("");
                                 if bindings.iter().any(|binding| {
-                                    trimmed.contains(binding) || guard_tokens.contains(binding)
+                                    val001_references_binding(trimmed, binding)
+                                        || val001_references_binding(guard_tokens, binding)
                                 }) {
                                     consumed_heavy_read = true;
                                     break;
@@ -1730,7 +1754,9 @@ impl LintRule for ValidationBeforeHeavyRead {
                     if !consumed_heavy_read {
                         if let Some(ref bindings) = heavy_op_bindings {
                             consumed_heavy_read = i > heavy_line
-                                && bindings.iter().any(|binding| trimmed.contains(binding));
+                                && bindings
+                                    .iter()
+                                    .any(|binding| val001_references_binding(trimmed, binding));
                         }
                     }
                     if consumed_heavy_read {
@@ -1774,6 +1800,104 @@ fn val001_binding_names(lhs: &str) -> Vec<String> {
         .filter(|name| !name.is_empty() && !matches!(*name, "let" | "mut" | "ref" | "_" | "else"))
         .map(str::to_string)
         .collect()
+}
+
+fn val001_heavy_read_bindings(ast: &SynFile, line_count: usize) -> Vec<Vec<String>> {
+    struct BindingVisitor {
+        bindings_by_line: Vec<Vec<String>>,
+    }
+
+    impl<'ast> Visit<'ast> for BindingVisitor {
+        fn visit_local(&mut self, local: &'ast Local) {
+            if let Some(init) = &local.init {
+                let bindings = val001_pat_binding_names(&local.pat);
+                if !bindings.is_empty() {
+                    let start = span_line(init.expr.span()).saturating_sub(1);
+                    let end = init.expr.span().end().line.saturating_sub(1);
+                    for line in start..=end.min(self.bindings_by_line.len().saturating_sub(1)) {
+                        self.bindings_by_line[line] = bindings.clone();
+                    }
+                }
+            }
+            visit::visit_local(self, local);
+        }
+    }
+
+    let mut visitor = BindingVisitor {
+        bindings_by_line: vec![Vec::new(); line_count],
+    };
+    visitor.visit_file(ast);
+    visitor.bindings_by_line
+}
+
+fn val001_if_condition_mask(ast: &SynFile, line_count: usize) -> Vec<bool> {
+    struct ConditionVisitor {
+        mask: Vec<bool>,
+    }
+
+    impl<'ast> Visit<'ast> for ConditionVisitor {
+        fn visit_expr_if(&mut self, expression: &'ast syn::ExprIf) {
+            let start = span_line(expression.cond.span()).saturating_sub(1);
+            let end = expression.cond.span().end().line.saturating_sub(1);
+            for line in start..=end.min(self.mask.len().saturating_sub(1)) {
+                self.mask[line] = true;
+            }
+            visit::visit_expr_if(self, expression);
+        }
+    }
+
+    let mut visitor = ConditionVisitor {
+        mask: vec![false; line_count],
+    };
+    visitor.visit_file(ast);
+    visitor.mask
+}
+
+fn val001_pat_binding_names(pat: &Pat) -> Vec<String> {
+    fn collect(pat: &Pat, bindings: &mut Vec<String>) {
+        match pat {
+            Pat::Ident(ident) => bindings.push(ident.ident.to_string()),
+            Pat::Or(or) => {
+                for case in &or.cases {
+                    collect(case, bindings);
+                }
+            }
+            Pat::Paren(paren) => collect(&paren.pat, bindings),
+            Pat::Reference(reference) => collect(&reference.pat, bindings),
+            Pat::Slice(slice) => {
+                for element in &slice.elems {
+                    collect(element, bindings);
+                }
+            }
+            Pat::Struct(structure) => {
+                for field in &structure.fields {
+                    collect(&field.pat, bindings);
+                }
+            }
+            Pat::Tuple(tuple) => {
+                for element in &tuple.elems {
+                    collect(element, bindings);
+                }
+            }
+            Pat::TupleStruct(tuple_struct) => {
+                for element in &tuple_struct.elems {
+                    collect(element, bindings);
+                }
+            }
+            Pat::Type(typed) => collect(&typed.pat, bindings),
+            _ => {}
+        }
+    }
+
+    let mut bindings = Vec::new();
+    collect(pat, &mut bindings);
+    bindings
+}
+
+fn val001_references_binding(source: &str, binding: &str) -> bool {
+    source
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .any(|token| token == binding)
 }
 
 fn val001_ensure_guard_tokens(ast: &SynFile, line_count: usize) -> Vec<String> {
