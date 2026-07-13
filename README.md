@@ -179,4 +179,4 @@ cargo fmt -> cargo clippy -> polkadot-linter
 
 ## License
 
-This project is licensed under [The Unlicense](LICENSE).
+This project is licensed under the [Apache License, Version 2.0](LICENSE).
