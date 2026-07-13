@@ -2,8 +2,10 @@
 name = "rustc-weight-attribute-fixture"
 version = "0.1.0"
 edition = "2021"
+description = "Test fixture for compiler-backed pallet weight attribute checks"
+publish = false
 
 [workspace]
 
 [dependencies]
-pallet = { path = "pallet" }
+pallet = { package = "rustc-weight-attribute-pallet", path = "pallet" }

@@ -3,15 +3,6 @@
 version = 4
 
 [[package]]
-name = "pallet"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -33,7 +24,16 @@ dependencies = [
 name = "rustc-weight-attribute-fixture"
 version = "0.1.0"
 dependencies = [
- "pallet",
+ "rustc-weight-attribute-pallet",
+]
+
+[[package]]
+name = "rustc-weight-attribute-pallet"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
