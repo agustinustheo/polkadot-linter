@@ -54,7 +54,7 @@ pub fn validate_before_write(origin: bool) -> Result<(), ()> {
 }
 RS
 
-cargo +nightly-2025-06-10 build \
+cargo +nightly-2025-09-01 build \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
   --bin polkadot-linter-driver

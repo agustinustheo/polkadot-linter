@@ -30,7 +30,7 @@ else
   trap 'rm -rf "$SDK_TARGET_DIR"' EXIT
 fi
 
-cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-driver
+cargo +nightly-2025-09-01 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-driver
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/default.toml" --format json --rules SEC015 --syntax-only "$PACKAGE_DIR" > "$SYNTAX_JSON"
@@ -39,7 +39,7 @@ cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-
   --config "$ROOT_DIR/config/default.toml" --format json --rules SEC015 \
   --manifest-path "$PACKAGE_DIR/Cargo.toml" \
   --package "$PACKAGE" --lib --no-default-features \
-  --driver-path "$DRIVER" --toolchain nightly-2025-06-10 \
+  --driver-path "$DRIVER" --toolchain nightly-2025-09-01 \
   --target-dir "$SDK_TARGET_DIR" --source-filter "$PACKAGE_FILE" \
   "$PACKAGE_DIR" > "$RUSTC_JSON"
 

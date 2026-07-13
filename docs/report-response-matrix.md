@@ -16,22 +16,25 @@ Current branch:
 
 Validation evidence used for this matrix:
 
-- `cargo +1.93.0 test`: 303 tests passed
+- `cargo +1.93.0 test`: 301 tests passed
 - `cargo +1.93.0 clippy --all-targets -- -D warnings`: passed
 - `cargo +1.93.0 build`: passed
 - `scripts/check-source-rule-corpus.sh .repos/polkadot-sdk`: checks all
   public source-authority rules against the pinned full-FRAME baseline. The
-  current baseline has 10 `VAL001` and 10 `VAL002` findings; it is checked in
+  current baseline has 10 `VAL001` findings; it is checked in
   CI and is not a claim that all source findings are audit-validated.
 - `VAL001` compiler migration evaluation: a rustc prototype suppressed
   storage-derived identity ownership checks and retained the bounties candidate,
   but missed `BondedPool::<T>::get` before an independent guard in pinned
   `pallet-nomination-pools`. It was removed rather than promoted; source
   authority remains until that alias-resolution gap is closed.
-- `VAL002` compiler migration evaluation: a rustc prototype resolved direct
-  `Get` calls and local zero guards but missed the generic
-  `Period: Get<u32>` division in pinned `pallet-collective`. It was removed
-  rather than promoted; generic trait-bound denominator provenance remains.
+- `VAL002` compiler migration: rustc is the sole public authority. The driver
+  resolves direct, generic, and associated `Get::get` calls, tracks local
+  aliases and casts, and proves local or collection-length nonzero guards.
+  `scripts/check-rustc-sdk-val002.sh` pins nine active FRAME findings under
+  Rust 1.91; it excludes the guarded `pallet-example-offchain-worker` source
+  false positive. The benchmark caps dependency lints so pinned sassafras code
+  can be analyzed without modifying the SDK checkout.
 - `scripts/check-rustc-hard-rules.sh`: the syntax CLI emits zero public SEC
   diagnostics; rustc emits fixture-backed findings for every SEC rule, including
   macro-consumed FRAME attributes and filtered `SEC008,SEC009` output

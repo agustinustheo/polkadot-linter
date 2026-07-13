@@ -22,9 +22,9 @@ pub const COMPILER_BACKED_SECURITY_RULE_IDS: &[&str] = &[
 
 /// All public rules implemented by the rustc driver.
 pub const COMPILER_BACKED_RULE_IDS: &[&str] = &[
-    "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003", "SEC004",
-    "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012", "SEC013",
-    "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
+    "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003",
+    "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012",
+    "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
 ];
 
 /// Default severity for a compiler-backed rule before configuration overrides.
@@ -63,7 +63,6 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::RuntimeDebugDeprecated),
         Box::new(semantic::SpStdDeprecated),
         Box::new(semantic::WeightZeroPlaceholder),
-        Box::new(semantic::DivisionWithoutZeroGuard),
         Box::new(semantic::AllowDeadCodeInPallet),
         Box::new(semantic::CustomInvalidityReprU8),
         Box::new(semantic::SubmitTransactionLogTarget),

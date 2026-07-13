@@ -85,6 +85,7 @@ cat > "$FIXTURE" <<'RS'
 use std::ops::Add;
 use std::convert::Infallible;
 use crate::frame_support::dispatch::Dispatchable;
+use crate::frame_support::traits::Get;
 use crate::frame_support::traits::EnsureOrigin;
 
 pub type Payload = Vec<u8>;
@@ -408,6 +409,10 @@ pub mod frame_support {
 
     pub mod traits {
         use super::super::Origin;
+
+        pub trait Get<T> {
+            fn get() -> T;
+        }
 
         pub struct Balance(u32);
 
@@ -1442,6 +1447,45 @@ pub fn nonzero_remainder(a: u32, b: std::num::NonZeroU32) -> Result<u32, ()> {
     Ok(a % b.get())
 }
 
+pub fn generic_get_divisor<Period: frame_support::traits::Get<u32>>(value: u32) -> u32 {
+    value / Period::get()
+}
+
+pub trait GetConfig {
+    type Period: frame_support::traits::Get<u32>;
+}
+
+pub fn associated_get_divisor<T: GetConfig>(value: u32) -> u32 {
+    value / T::Period::get()
+}
+
+pub fn guarded_get_divisor<Period: frame_support::traits::Get<u32>>(value: u32) -> u32 {
+    let period = Period::get();
+    if period == 0 {
+        return 0;
+    }
+    value / period
+}
+
+pub fn collection_length_divisor(values: Vec<u32>, value: u32) -> u32 {
+    value / values.len() as u32
+}
+
+pub fn nonempty_collection_length_divisor(values: Vec<u32>, value: u32) -> Option<u32> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(value / values.len() as u32)
+}
+
+pub fn else_nonempty_collection_length_divisor(values: Vec<u32>, value: u32) -> Option<u32> {
+    if values.is_empty() {
+        None
+    } else {
+        Some(value / values.len() as u32)
+    }
+}
+
 pub fn raw_integer_via_private_helper(a: u32, b: u32) -> Result<u32, ()> {
     Ok(reachable_private_raw_integer(a, b))
 }
@@ -1591,6 +1635,7 @@ RUSTC_JSON="$WORK_DIR/rustc-hard-rules.json"
 RUSTC_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-filtered.json"
 RUSTC_FILTERED_EMPTY_JSON="$WORK_DIR/rustc-hard-rules-filtered-empty.json"
 RUSTC_RULE_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-rule-filtered.json"
+RUSTC_VAL002_JSON="$WORK_DIR/rustc-hard-rules-val002.json"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
@@ -1598,7 +1643,7 @@ cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-
   --rules SEC001,SEC002,SEC003,SEC006,SEC007,SEC008,SEC009,SEC010,SEC011,SEC012,SEC013,SEC014,SEC015,SEC016,SEC017,SEC018 \
   -f json > "$SYN_JSON"
 
-cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
   --bin polkadot-linter-driver -- \
   "$FIXTURE" \
@@ -1608,7 +1653,7 @@ cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_JSON"
 
 POLKADOT_LINTER_DRIVER_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
-  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+  cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
     "$FIXTURE" \
@@ -1618,7 +1663,7 @@ POLKADOT_LINTER_DRIVER_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_JSON"
 
 POLKADOT_LINTER_DRIVER_FILE_CONTAINS="does-not-match.rs" \
-  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+  cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
     "$FIXTURE" \
@@ -1628,7 +1673,7 @@ POLKADOT_LINTER_DRIVER_FILE_CONTAINS="does-not-match.rs" \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_EMPTY_JSON"
 
 POLKADOT_LINTER_DRIVER_RULES="SEC008,SEC009" \
-  cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+  cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
     "$FIXTURE" \
@@ -1636,6 +1681,16 @@ POLKADOT_LINTER_DRIVER_RULES="SEC008,SEC009" \
     --edition 2021 \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_RULE_FILTERED_JSON"
+
+POLKADOT_LINTER_DRIVER_RULES="VAL002" \
+  cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+    --features rustc-driver \
+    --bin polkadot-linter-driver -- \
+    "$FIXTURE" \
+    --crate-type lib \
+    --edition 2021 \
+    --emit metadata \
+    --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_VAL002_JSON"
 
 syn_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$SYN_JSON")"
 syn_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$SYN_JSON")"
@@ -1709,6 +1764,18 @@ nonzero_division_line="$(grep -n 'pub fn nonzero_division' "$FIXTURE" | cut -d: 
 nonzero_remainder_line="$(grep -n 'pub fn nonzero_remainder' "$FIXTURE" | cut -d: -f1)"
 rustc_sec009_nonzero_division_count="$(jq --argjson line "$nonzero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec009_nonzero_remainder_count="$(jq --argjson line "$nonzero_remainder_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+generic_get_divisor_line="$(grep -n 'pub fn generic_get_divisor' "$FIXTURE" | cut -d: -f1)"
+associated_get_divisor_line="$(grep -n 'pub fn associated_get_divisor' "$FIXTURE" | cut -d: -f1)"
+guarded_get_divisor_line="$(grep -n 'pub fn guarded_get_divisor' "$FIXTURE" | cut -d: -f1)"
+collection_length_divisor_line="$(grep -n 'pub fn collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
+nonempty_collection_length_divisor_line="$(grep -n 'pub fn nonempty_collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
+else_nonempty_collection_length_divisor_line="$(grep -n 'pub fn else_nonempty_collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
+rustc_val002_generic_get_count="$(jq --argjson line "$generic_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
+rustc_val002_associated_get_count="$(jq --argjson line "$associated_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
+rustc_val002_guarded_get_count="$(jq --argjson line "$guarded_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
+rustc_val002_collection_length_count="$(jq --argjson line "$collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
+rustc_val002_nonempty_collection_length_count="$(jq --argjson line "$nonempty_collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
+rustc_val002_else_nonempty_collection_length_count="$(jq --argjson line "$else_nonempty_collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
 known_ok_line="$(grep -n 'known_ok.unwrap' "$FIXTURE" | cut -d: -f1)"
 known_some_line="$(grep -n 'known_some.expect' "$FIXTURE" | cut -d: -f1)"
 unknown_overwrite_line="$(grep -n 'value.expect("unknown overwrite can fail")' "$FIXTURE" | cut -d: -f1)"
@@ -2002,6 +2069,12 @@ test "$rustc_sec009_match_nonzero_division_count" = "0"
 test "$rustc_sec009_match_zero_division_count" = "1"
 test "$rustc_sec009_nonzero_division_count" = "0"
 test "$rustc_sec009_nonzero_remainder_count" = "0"
+test "$rustc_val002_generic_get_count" = "1"
+test "$rustc_val002_associated_get_count" = "1"
+test "$rustc_val002_guarded_get_count" = "0"
+test "$rustc_val002_collection_length_count" = "1"
+test "$rustc_val002_nonempty_collection_length_count" = "0"
+test "$rustc_val002_else_nonempty_collection_length_count" = "0"
 test "$syn_sec010_count" = "0"
 test "$rustc_sec010_count" = "1"
 test "$rustc_sec010_unprotected_count" = "1"
@@ -2069,7 +2142,7 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "82"
+test "$rustc_filtered_count" = "85"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"

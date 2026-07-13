@@ -172,6 +172,9 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("VAL002") {
+            report_division_without_zero_guard(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
         if self.rule_enabled("SEM010") {
             report_xor_as_exponentiation(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
@@ -344,6 +347,15 @@ fn crate_matches_source_filters(tcx: TyCtxt<'_>, filters: &[String]) -> bool {
     let location = source_map.lookup_char_pos(tcx.hir_root_module().spans.inner_span.lo());
     let crate_source = location.file.name.prefer_local().to_string();
     source_matches_filters(&crate_source, filters)
+        || env::var_os("POLKADOT_LINTER_DRIVER_MANIFEST_ROOT").is_some_and(|root| {
+            let root = PathBuf::from(root);
+            let crate_source = PathBuf::from(crate_source);
+            let crate_source = crate_source
+                .is_relative()
+                .then(|| root.join(&crate_source))
+                .unwrap_or(crate_source);
+            crate_source.starts_with(root)
+        })
 }
 
 fn source_matches_filters(source: &str, filters: &[String]) -> bool {
@@ -869,6 +881,32 @@ fn report_reachable_raw_arithmetic<'tcx>(
             reported_lines: &mut reported_lines,
             non_underflow_pairs: HashSet::new(),
             nonzero_bindings: HashSet::new(),
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_division_without_zero_guard<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let body = tcx.hir_body_owned_by(def_id);
+        let mut visitor = Val002Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+            risky_divisor_bindings: HashSet::new(),
+            nonzero_bindings: HashSet::new(),
+            nonempty_collection_bindings: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -1561,10 +1599,7 @@ fn report_missing_authorize_call_in_create_authorized_transaction<'tcx>(
         if tcx.item_name(def_id.to_def_id()).as_str() != "create_extension" {
             continue;
         }
-        let Some(trait_id) = tcx
-            .impl_of_method(def_id.to_def_id())
-            .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
-        else {
+        let Some(trait_id) = implemented_trait_id(tcx, def_id.to_def_id()) else {
             continue;
         };
         let trait_path = tcx.def_path_str(trait_id);
@@ -3952,6 +3987,160 @@ impl TaintedLocalCallVisitor<'_, '_> {
     }
 }
 
+struct Val002Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+    risky_divisor_bindings: HashSet<HirId>,
+    nonzero_bindings: HashSet<HirId>,
+    nonempty_collection_bindings: HashSet<HirId>,
+}
+
+impl<'tcx> Visitor<'tcx> for Val002Visitor<'_, 'tcx> {
+    fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
+        let mut exiting_nonzero_guards = Vec::new();
+        let mut exiting_nonempty_guards = Vec::new();
+
+        for statement in block.stmts {
+            self.visit_stmt(statement);
+            if let Some(binding) = exiting_nonzero_guard_binding(self.typeck, statement) {
+                if self.nonzero_bindings.insert(binding) {
+                    exiting_nonzero_guards.push(binding);
+                }
+            }
+            if let Some(binding) = exiting_nonempty_collection_guard_binding(self.typeck, statement)
+            {
+                if self.nonempty_collection_bindings.insert(binding) {
+                    exiting_nonempty_guards.push(binding);
+                }
+            }
+        }
+        if let Some(expr) = block.expr {
+            self.visit_expr(expr);
+        }
+
+        for binding in exiting_nonzero_guards {
+            self.nonzero_bindings.remove(&binding);
+        }
+        for binding in exiting_nonempty_guards {
+            self.nonempty_collection_bindings.remove(&binding);
+        }
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        let bindings = pattern_binding_ids(local.pat);
+        if local.init.is_some_and(|init| {
+            is_val002_risky_divisor(self.tcx, self.typeck, init, &self.risky_divisor_bindings)
+        }) {
+            self.risky_divisor_bindings.extend(bindings);
+        } else {
+            self.risky_divisor_bindings
+                .retain(|binding| !bindings.contains(binding));
+        }
+
+        intravisit::walk_local(self, local);
+    }
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let nonzero_guards = nonzero_guard_bindings(self.typeck, condition);
+            let nonempty_guards = nonempty_collection_guard_bindings(self.typeck, condition);
+            let else_nonzero_guard =
+                else_branch.and_then(|_| failed_nonzero_guard_binding(self.typeck, condition));
+            let else_nonempty_guard = else_branch
+                .and_then(|_| failed_nonempty_collection_guard_binding(self.typeck, condition));
+            if !nonzero_guards.is_empty()
+                || !nonempty_guards.is_empty()
+                || else_nonzero_guard.is_some()
+                || else_nonempty_guard.is_some()
+            {
+                let inserted_nonzero_guards = nonzero_guards
+                    .into_iter()
+                    .filter(|binding| self.nonzero_bindings.insert(*binding))
+                    .collect::<Vec<_>>();
+                let inserted_nonempty_guards = nonempty_guards
+                    .into_iter()
+                    .filter(|binding| self.nonempty_collection_bindings.insert(*binding))
+                    .collect::<Vec<_>>();
+                self.visit_expr(then_branch);
+                for binding in inserted_nonzero_guards {
+                    self.nonzero_bindings.remove(&binding);
+                }
+                for binding in inserted_nonempty_guards {
+                    self.nonempty_collection_bindings.remove(&binding);
+                }
+                if let Some(else_branch) = else_branch {
+                    if let Some(binding) = else_nonzero_guard {
+                        self.nonzero_bindings.insert(binding);
+                    }
+                    if let Some(binding) = else_nonempty_guard {
+                        self.nonempty_collection_bindings.insert(binding);
+                    }
+                    self.visit_expr(else_branch);
+                    if let Some(binding) = else_nonzero_guard {
+                        self.nonzero_bindings.remove(&binding);
+                    }
+                    if let Some(binding) = else_nonempty_guard {
+                        self.nonempty_collection_bindings.remove(&binding);
+                    }
+                }
+                return;
+            }
+        }
+
+        if let ExprKind::Assign(target, value, _) = expr.kind {
+            if let Some(binding) = local_binding_id(self.typeck, target) {
+                if is_val002_risky_divisor(
+                    self.tcx,
+                    self.typeck,
+                    value,
+                    &self.risky_divisor_bindings,
+                ) {
+                    self.risky_divisor_bindings.insert(binding);
+                } else {
+                    self.risky_divisor_bindings.remove(&binding);
+                }
+            }
+        }
+
+        if let ExprKind::Binary(operator, _, divisor) = expr.kind {
+            let (file, line, column) = span_location(self.source_map, expr.span);
+            if operator.node == BinOpKind::Div
+                && is_val002_risky_divisor(
+                    self.tcx,
+                    self.typeck,
+                    divisor,
+                    &self.risky_divisor_bindings,
+                )
+                && !val002_divisor_is_proven_nonzero(
+                    self.tcx,
+                    self.typeck,
+                    divisor,
+                    &self.nonzero_bindings,
+                    &self.nonempty_collection_bindings,
+                )
+                && self.reported_lines.insert((file.clone(), line))
+            {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "VAL002",
+                    rule_name: "division-without-zero-guard",
+                    file,
+                    line,
+                    column,
+                    message:
+                        "Resolved config, storage, or collection divisor lacks a nonzero proof"
+                            .to_string(),
+                });
+            }
+        }
+
+        intravisit::walk_expr(self, expr);
+    }
+}
+
 struct Sec009Visitor<'a, 'tcx> {
     source_map: &'a SourceMap,
     tcx: TyCtxt<'tcx>,
@@ -4139,6 +4328,45 @@ fn nonzero_guard_binding(
     }
 }
 
+fn nonempty_collection_guard_bindings(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Vec<HirId> {
+    let condition = strip_drop_temps(condition);
+    if let ExprKind::Binary(operator, lhs, rhs) = condition.kind {
+        if operator.node == BinOpKind::And {
+            let mut bindings = nonempty_collection_guard_bindings(typeck, lhs);
+            bindings.extend(nonempty_collection_guard_bindings(typeck, rhs));
+            return bindings;
+        }
+    }
+    nonempty_collection_guard_binding(typeck, condition)
+        .into_iter()
+        .collect()
+}
+
+fn nonempty_collection_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    empty_collection_guard_binding(typeck, inner)
+}
+
+fn empty_collection_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    let ExprKind::MethodCall(segment, receiver, args, _) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    (args.is_empty() && segment.ident.name.as_str() == "is_empty")
+        .then(|| local_binding_id(typeck, receiver))
+        .flatten()
+}
+
 fn non_underflow_guard_pairs(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
@@ -4203,6 +4431,21 @@ fn exiting_nonzero_guard_binding(
         .flatten()
 }
 
+fn exiting_nonempty_collection_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    statement: &rustc_hir::Stmt<'_>,
+) -> Option<HirId> {
+    let (StmtKind::Expr(expr) | StmtKind::Semi(expr)) = statement.kind else {
+        return None;
+    };
+    let ExprKind::If(condition, then_branch, None) = strip_drop_temps(expr).kind else {
+        return None;
+    };
+    expression_exits_current_function(then_branch)
+        .then(|| empty_collection_guard_binding(typeck, condition))
+        .flatten()
+}
+
 fn failed_non_underflow_guard_pair(
     typeck: &rustc_middle::ty::TypeckResults<'_>,
     condition: &Expr<'_>,
@@ -4245,6 +4488,13 @@ fn failed_nonzero_guard_binding(
     zero_integer_literal(lhs)
         .then(|| local_binding_id(typeck, rhs))
         .flatten()
+}
+
+fn failed_nonempty_collection_guard_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    condition: &Expr<'_>,
+) -> Option<HirId> {
+    empty_collection_guard_binding(typeck, condition)
 }
 
 fn expression_exits_current_function(expr: &Expr<'_>) -> bool {
@@ -4294,6 +4544,111 @@ fn divisor_is_proven_nonzero(
 ) -> bool {
     local_binding_id(typeck, divisor).is_some_and(|binding| nonzero_bindings.contains(&binding))
         || divisor_is_nonzero_integer_get(tcx, typeck, divisor)
+}
+
+fn is_val002_risky_divisor<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+    risky_bindings: &HashSet<HirId>,
+) -> bool {
+    if let ExprKind::Cast(inner, _) = strip_drop_temps(expr).kind {
+        return is_val002_risky_divisor(tcx, typeck, inner, risky_bindings);
+    }
+    local_binding_id(typeck, expr).is_some_and(|binding| risky_bindings.contains(&binding))
+        || is_frame_get_call(tcx, typeck, expr)
+        || is_resolved_collection_length_call(tcx, typeck, expr)
+}
+
+fn is_frame_get_call(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    let ExprKind::Call(callee, args) = strip_drop_temps(expr).kind else {
+        return false;
+    };
+    args.is_empty()
+        && resolved_call_def_id(typeck, callee).is_some_and(|def_id| {
+            let path = tcx.def_path_str(def_id);
+            path.ends_with("::Get::get")
+                && (path.contains("sp_core")
+                    || path.contains("sp_runtime")
+                    || path.contains("frame_support"))
+        })
+}
+
+fn is_resolved_collection_length_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+) -> bool {
+    let ExprKind::MethodCall(segment, receiver, args, _) = strip_drop_temps(expr).kind else {
+        return false;
+    };
+    if !args.is_empty() || !matches!(segment.ident.name.as_str(), "len" | "count") {
+        return false;
+    }
+    type_is_countable_collection(tcx, typeck.expr_ty(receiver))
+}
+
+fn type_is_countable_collection<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Slice(_) | TyKind::Array(_, _) => true,
+        TyKind::Ref(_, inner, _) => type_is_countable_collection(tcx, *inner),
+        TyKind::Adt(adt, _) => {
+            let path = tcx.def_path_str(adt.did());
+            path.ends_with("::Vec")
+                || path.ends_with("::VecDeque")
+                || path.ends_with("::BTreeMap")
+                || path.ends_with("::BTreeSet")
+                || path.ends_with("::HashMap")
+                || path.ends_with("::HashSet")
+        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_countable_collection(tcx, expanded)),
+        _ => false,
+    }
+}
+
+fn resolved_call_def_id(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    callee: &Expr<'_>,
+) -> Option<DefId> {
+    typeck
+        .type_dependent_def_id(callee.hir_id)
+        .or_else(|| match callee.kind {
+            ExprKind::Path(qpath) => typeck.qpath_res(&qpath, callee.hir_id).opt_def_id(),
+            _ => None,
+        })
+}
+
+fn val002_divisor_is_proven_nonzero(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    divisor: &Expr<'_>,
+    nonzero_bindings: &HashSet<HirId>,
+    nonempty_collection_bindings: &HashSet<HirId>,
+) -> bool {
+    local_binding_id(typeck, divisor).is_some_and(|binding| nonzero_bindings.contains(&binding))
+        || divisor_is_nonzero_integer_get(tcx, typeck, divisor)
+        || collection_length_receiver_binding(typeck, divisor)
+            .is_some_and(|binding| nonempty_collection_bindings.contains(&binding))
+}
+
+fn collection_length_receiver_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> Option<HirId> {
+    if let ExprKind::Cast(inner, _) = strip_drop_temps(expr).kind {
+        return collection_length_receiver_binding(typeck, inner);
+    }
+    let ExprKind::MethodCall(segment, receiver, args, _) = strip_drop_temps(expr).kind else {
+        return None;
+    };
+    (args.is_empty() && matches!(segment.ident.name.as_str(), "len" | "count"))
+        .then(|| local_binding_id(typeck, receiver))
+        .flatten()
 }
 
 fn divisor_is_nonzero_integer_get(
@@ -4563,13 +4918,18 @@ fn returns_fallible<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> bool {
     type_is_fallible(tcx, sig.output())
 }
 
+fn implemented_trait_id(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<DefId> {
+    tcx.def_kind(method_def_id)
+        .is_assoc()
+        .then(|| tcx.associated_item(method_def_id).impl_container(tcx))
+        .flatten()
+        .and_then(|impl_def_id| tcx.trait_id_of_impl(impl_def_id))
+}
+
 fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     let method_name = tcx.item_name(def_id.to_def_id());
     let name = method_name.as_str();
-    if let Some(trait_id) = tcx
-        .impl_of_method(def_id.to_def_id())
-        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
-    {
+    if let Some(trait_id) = implemented_trait_id(tcx, def_id.to_def_id()) {
         let trait_path = tcx.def_path_str(trait_id);
         return (is_frame_support_path(&trait_path)
             && trait_path.ends_with("::Hooks")
@@ -4595,10 +4955,7 @@ fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
 }
 
 fn is_frame_lifecycle_hook(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
-    let Some(trait_id) = tcx
-        .impl_of_method(def_id.to_def_id())
-        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
-    else {
+    let Some(trait_id) = implemented_trait_id(tcx, def_id.to_def_id()) else {
         return false;
     };
     let trait_path = tcx.def_path_str(trait_id);
@@ -4614,10 +4971,7 @@ fn is_frame_runtime_upgrade(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     if tcx.item_name(def_id.to_def_id()).as_str() != "on_runtime_upgrade" {
         return false;
     }
-    let Some(trait_id) = tcx
-        .impl_of_method(def_id.to_def_id())
-        .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
-    else {
+    let Some(trait_id) = implemented_trait_id(tcx, def_id.to_def_id()) else {
         return false;
     };
     let trait_path = tcx.def_path_str(trait_id);

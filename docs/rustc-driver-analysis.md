@@ -10,21 +10,21 @@ components.
 The supported toolchain for the current driver is:
 
 ```sh
-nightly-2025-06-10
+nightly-2025-09-01
 ```
 
 Install the required components with:
 
 ```sh
-rustup component add rustc-dev --toolchain nightly-2025-06-10
-rustup component add llvm-tools-preview --toolchain nightly-2025-06-10
+rustup component add rustc-dev --toolchain nightly-2025-09-01
+rustup component add llvm-tools-preview --toolchain nightly-2025-09-01
 ```
 
 The default syntax-based CLI still builds on the stable project toolchain. The
 compiler-backed driver is built and checked separately:
 
 ```sh
-cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-driver
+cargo +nightly-2025-09-01 build --features rustc-driver --bin polkadot-linter-driver
 ```
 
 ## Typed hard-rule checks
@@ -275,7 +275,7 @@ driver:
 
 The stable `polkadot-linter` CLI now treats the migrated SEC rules as
 compiler-backed by default when scan paths resolve to one Cargo project. It
-discovers the nearest `Cargo.toml`, uses `nightly-2025-06-10` unless overridden,
+discovers the nearest `Cargo.toml`, uses `nightly-2025-09-01` unless overridden,
 and supplies that toolchain's compiler-library directory to the rustc wrapper.
 For selected migrated rules, the syntax engine has no registered implementation;
 the rustc-backed diagnostics are the normal public diagnostic format.
@@ -289,7 +289,7 @@ polkadot-linter \
   --lib \
   --no-default-features \
   --driver-path target/debug/polkadot-linter-driver \
-  --toolchain nightly-2025-06-10 \
+  --toolchain nightly-2025-09-01 \
   --source-filter substrate/frame/multisig/src/lib.rs \
   .repos/polkadot-sdk/substrate/frame/multisig
 ```
