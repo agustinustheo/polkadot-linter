@@ -6,17 +6,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDK_DIR="${1:-$ROOT_DIR/.repos/polkadot-sdk}"
 [[ "$SDK_DIR" = /* ]] || SDK_DIR="$ROOT_DIR/$SDK_DIR"
 PACKAGE_DIR="$SDK_DIR/substrate/frame/collective"
-DRIVER="$ROOT_DIR/target/debug/polkadot-linter-rustc"
+DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 TARGET_DIR="$(mktemp -d)"
 trap 'rm -rf "$TARGET_DIR"' EXIT
 
-cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-rustc
+cargo +nightly-2025-06-10 build --manifest-path "$ROOT_DIR/Cargo.toml" --features rustc-driver --bin polkadot-linter-driver
 
 OUTPUT="$(cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC004 --rustc-cargo-manifest "$PACKAGE_DIR/Cargo.toml" \
-  --rustc-package pallet-collective --rustc-lib --rustc-no-default-features \
-  --rustc-driver "$DRIVER" --rustc-toolchain nightly-2025-06-10 \
-  --rustc-target-dir "$TARGET_DIR" --rustc-source-filter substrate/frame/collective/src/lib.rs \
+  --config "$ROOT_DIR/config/default.toml" --format json --rules SEC004 --manifest-path "$PACKAGE_DIR/Cargo.toml" \
+  --package pallet-collective --lib --no-default-features \
+  --driver-path "$DRIVER" --toolchain nightly-2025-06-10 \
+  --target-dir "$TARGET_DIR" --source-filter substrate/frame/collective/src/lib.rs \
   "$PACKAGE_DIR")"
 
 [[ -n "$OUTPUT" ]] || OUTPUT='[]'

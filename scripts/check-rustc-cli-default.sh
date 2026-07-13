@@ -12,7 +12,7 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FIXTURE_DIR="$WORK_DIR/default-routing-fixture"
-DRIVER="$ROOT_DIR/target/debug/polkadot-linter-rustc"
+DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 SYNTAX_JSON="$WORK_DIR/syntax.json"
 DEFAULT_JSON="$WORK_DIR/default.json"
 
@@ -46,20 +46,20 @@ RS
 cargo +nightly-2025-06-10 build \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
-  --bin polkadot-linter-rustc
+  --bin polkadot-linter-driver
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/default.toml" \
   --format json \
   --rules SEC013 \
-  --no-rustc \
+  --syntax-only \
   "$FIXTURE_DIR" > "$SYNTAX_JSON"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/default.toml" \
   --format json \
   --rules SEC013 \
-  --rustc-driver "$DRIVER" \
+  --driver-path "$DRIVER" \
   "$FIXTURE_DIR" > "$DEFAULT_JSON"
 
 syntax_findings="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYNTAX_JSON")"

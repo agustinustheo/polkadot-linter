@@ -25,8 +25,8 @@ cargo run -- ../pallets -s warning --fail-on-warning
 # The manifest is discovered from the scan path.
 cargo run -- \
   --rules SEC003 \
-  --rustc-package pallet-xcm \
-  --rustc-lib \
+  --package pallet-xcm \
+  --lib \
   ../polkadot-sdk/polkadot/xcm/pallet-xcm
 ```
 
@@ -133,7 +133,7 @@ The full schema and defaults remain in [`config/default.toml`](config/default.to
 The security rules and `VAL003` now route through the rustc-backed pipeline by
 default when the scan path is inside a single Cargo project; the CLI discovers
 the nearest `Cargo.toml` and the syntax engine does not register those rule
-IDs. `--no-rustc` skips compiler-backed rules and is appropriate only when
+IDs. `--syntax-only` skips compiler-backed rules and is appropriate only when
 running the remaining syntax/text rule families. See
 [`docs/rustc-driver-analysis.md`](docs/rustc-driver-analysis.md) and
 [`docs/security-linter-phases.md`](docs/security-linter-phases.md). The

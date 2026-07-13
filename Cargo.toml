@@ -39,8 +39,8 @@ cargo_metadata = "0.20"
 rustc-driver = []
 
 [[bin]]
-name = "polkadot-linter-rustc"
-path = "src/bin/polkadot-linter-rustc.rs"
+name = "polkadot-linter-driver"
+path = "src/bin/polkadot-linter-driver.rs"
 required-features = ["rustc-driver"]
 
 [dev-dependencies]

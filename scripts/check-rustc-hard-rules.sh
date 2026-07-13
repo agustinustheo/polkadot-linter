@@ -1600,37 +1600,37 @@ cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-
 
 cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
-  --bin polkadot-linter-rustc -- \
+  --bin polkadot-linter-driver -- \
   "$FIXTURE" \
   --crate-type lib \
   --edition 2021 \
   --emit metadata \
   --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_JSON"
 
-POLKADOT_LINTER_RUSTC_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
+POLKADOT_LINTER_DRIVER_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
   cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
-    --bin polkadot-linter-rustc -- \
+    --bin polkadot-linter-driver -- \
     "$FIXTURE" \
     --crate-type lib \
     --edition 2021 \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_JSON"
 
-POLKADOT_LINTER_RUSTC_FILE_CONTAINS="does-not-match.rs" \
+POLKADOT_LINTER_DRIVER_FILE_CONTAINS="does-not-match.rs" \
   cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
-    --bin polkadot-linter-rustc -- \
+    --bin polkadot-linter-driver -- \
     "$FIXTURE" \
     --crate-type lib \
     --edition 2021 \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_EMPTY_JSON"
 
-POLKADOT_LINTER_RUSTC_RULES="SEC008,SEC009" \
+POLKADOT_LINTER_DRIVER_RULES="SEC008,SEC009" \
   cargo +nightly-2025-06-10 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
-    --bin polkadot-linter-rustc -- \
+    --bin polkadot-linter-driver -- \
     "$FIXTURE" \
     --crate-type lib \
     --edition 2021 \

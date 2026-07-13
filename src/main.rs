@@ -54,55 +54,55 @@ struct Cli {
     verbose: bool,
 
     /// Hide Cargo compiler progress for the compiler-backed analysis phase
-    #[arg(long = "no-rustc-progress")]
-    no_rustc_progress: bool,
+    #[arg(long = "no-progress")]
+    no_progress: bool,
 
     /// Skip syntax/token scanning and emit only auxiliary analysis results
     #[arg(long)]
     no_syntax: bool,
 
-    /// Disable compiler-backed analysis; compiler-backed SEC rules are not run
+    /// Run only the syntax/token pass; skip compiler-backed analysis
     #[arg(long)]
-    no_rustc: bool,
+    syntax_only: bool,
 
     /// Cargo manifest to analyze through the compiler-backed rustc driver
-    #[arg(long = "rustc-cargo-manifest")]
-    rustc_cargo_manifest: Option<PathBuf>,
+    #[arg(long = "manifest-path")]
+    manifest_path: Option<PathBuf>,
 
     /// Package to pass to compiler-backed cargo check; may be repeated
-    #[arg(long = "rustc-package")]
-    rustc_packages: Vec<String>,
+    #[arg(long = "package")]
+    packages: Vec<String>,
 
     /// Analyze only the library target for compiler-backed cargo check
-    #[arg(long = "rustc-lib")]
-    rustc_lib: bool,
+    #[arg(long = "lib")]
+    lib_only: bool,
 
     /// Pass --no-default-features to compiler-backed cargo check
-    #[arg(long = "rustc-no-default-features")]
-    rustc_no_default_features: bool,
+    #[arg(long = "no-default-features")]
+    no_default_features: bool,
 
     /// Cargo target directory for compiler-backed cargo check
-    #[arg(long = "rustc-target-dir")]
-    rustc_target_dir: Option<PathBuf>,
+    #[arg(long = "target-dir")]
+    target_dir: Option<PathBuf>,
 
     /// rust toolchain passed to cargo for compiler-backed analysis
-    #[arg(long = "rustc-toolchain", default_value = "nightly-2025-06-10")]
-    rustc_toolchain: String,
+    #[arg(long = "toolchain", default_value = "nightly-2025-06-10")]
+    toolchain: String,
 
-    /// Path to the polkadot-linter-rustc driver binary
+    /// Path to the polkadot-linter-driver binary
     #[arg(
-        long = "rustc-driver",
-        default_value = "target/debug/polkadot-linter-rustc"
+        long = "driver-path",
+        default_value = "target/debug/polkadot-linter-driver"
     )]
-    rustc_driver: PathBuf,
+    driver_path: PathBuf,
 
     /// Rule IDs to run through the compiler-backed rustc driver
     #[arg(long = "compiler-backed-rules", value_delimiter = ',')]
     compiler_backed_rules: Vec<String>,
 
     /// File substring filters for compiler-backed diagnostics
-    #[arg(long = "rustc-source-filter", value_delimiter = ',')]
-    rustc_source_filters: Vec<String>,
+    #[arg(long = "source-filter", value_delimiter = ',')]
+    source_filters: Vec<String>,
 }
 
 fn main() {
@@ -140,18 +140,18 @@ fn main() {
         engine.set_exclude_patterns(exclude);
     }
 
-    let manifest_path = match effective_rustc_manifest(&cli) {
+    let manifest_path = match effective_manifest_path(&cli) {
         Ok(manifest_path) => manifest_path,
         Err(error) => {
             eprintln!("Error discovering Cargo project: {error}");
             process::exit(2);
         }
     };
-    let auto_source_filters = if cli.rustc_source_filters.is_empty()
-        && cli.rustc_cargo_manifest.is_none()
+    let auto_source_filters = if cli.source_filters.is_empty()
+        && cli.manifest_path.is_none()
         && manifest_path.is_some()
     {
-        rustc_source_filters_for_paths(&cli.paths)
+        source_filters_for_paths(&cli.paths)
     } else {
         Vec::new()
     };
@@ -165,30 +165,30 @@ fn main() {
         }
     }
 
-    if !cli.no_rustc && !compiler_backed_rules.is_empty() {
+    if !cli.syntax_only && !compiler_backed_rules.is_empty() {
         if let Some(manifest_path) = &manifest_path {
-            if !cli.rustc_driver.is_file() {
+            if !cli.driver_path.is_file() {
                 eprintln!(
-                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-rustc`.",
-                    cli.rustc_driver.display()
+                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-driver`.",
+                    cli.driver_path.display()
                 );
                 process::exit(2);
             }
             let options = rustc_pipeline::RustcPipelineOptions {
                 manifest_path: manifest_path.clone(),
-                packages: cli.rustc_packages.clone(),
-                driver_path: cli.rustc_driver.clone(),
-                toolchain: cli.rustc_toolchain.clone(),
-                target_dir: cli.rustc_target_dir.clone(),
+                packages: cli.packages.clone(),
+                driver_path: cli.driver_path.clone(),
+                toolchain: cli.toolchain.clone(),
+                target_dir: cli.target_dir.clone(),
                 rules: compiler_backed_rules.clone(),
-                file_filters: if cli.rustc_source_filters.is_empty() {
+                file_filters: if cli.source_filters.is_empty() {
                     auto_source_filters
                 } else {
-                    cli.rustc_source_filters.clone()
+                    cli.source_filters.clone()
                 },
-                lib: cli.rustc_lib,
-                no_default_features: cli.rustc_no_default_features,
-                show_cargo_progress: !cli.no_rustc_progress,
+                lib: cli.lib_only,
+                no_default_features: cli.no_default_features,
+                show_cargo_progress: !cli.no_progress,
             };
             match rustc_pipeline::run_cargo_check(&options) {
                 Ok(mut diagnostics) => {
@@ -262,11 +262,11 @@ fn main() {
     }
 }
 
-fn effective_rustc_manifest(cli: &Cli) -> Result<Option<PathBuf>, String> {
-    if cli.no_rustc {
+fn effective_manifest_path(cli: &Cli) -> Result<Option<PathBuf>, String> {
+    if cli.syntax_only {
         return Ok(None);
     }
-    if let Some(manifest_path) = &cli.rustc_cargo_manifest {
+    if let Some(manifest_path) = &cli.manifest_path {
         return Ok(Some(manifest_path.clone()));
     }
     discover_cargo_manifest(&cli.paths)
@@ -282,7 +282,7 @@ fn discover_cargo_manifest(paths: &[PathBuf]) -> Result<Option<PathBuf>, String>
         0 => Ok(None),
         1 => Ok(manifests.into_iter().next()),
         _ => Err(format!(
-            "scan paths belong to multiple Cargo projects ({}); pass --rustc-cargo-manifest explicitly",
+            "scan paths belong to multiple Cargo projects ({}); pass --manifest-path explicitly",
             manifests
                 .iter()
                 .map(|path| path.display().to_string())
@@ -320,7 +320,7 @@ fn nearest_cargo_manifest(path: &Path) -> Result<Option<PathBuf>, String> {
     Ok(None)
 }
 
-fn rustc_source_filters_for_paths(paths: &[PathBuf]) -> Vec<String> {
+fn source_filters_for_paths(paths: &[PathBuf]) -> Vec<String> {
     paths
         .iter()
         .filter_map(|path| path.canonicalize().ok())
