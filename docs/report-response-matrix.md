@@ -16,9 +16,22 @@ Current branch:
 
 Validation evidence used for this matrix:
 
-- `cargo +1.93.0 test`: 298 tests passed
+- `cargo +1.93.0 test`: 303 tests passed
 - `cargo +1.93.0 clippy --all-targets -- -D warnings`: passed
 - `cargo +1.93.0 build`: passed
+- `scripts/check-source-rule-corpus.sh .repos/polkadot-sdk`: checks all
+  public source-authority rules against the pinned full-FRAME baseline. The
+  current baseline has 10 `VAL001` and 10 `VAL002` findings; it is checked in
+  CI and is not a claim that all source findings are audit-validated.
+- `VAL001` compiler migration evaluation: a rustc prototype suppressed
+  storage-derived identity ownership checks and retained the bounties candidate,
+  but missed `BondedPool::<T>::get` before an independent guard in pinned
+  `pallet-nomination-pools`. It was removed rather than promoted; source
+  authority remains until that alias-resolution gap is closed.
+- `VAL002` compiler migration evaluation: a rustc prototype resolved direct
+  `Get` calls and local zero guards but missed the generic
+  `Period: Get<u32>` division in pinned `pallet-collective`. It was removed
+  rather than promoted; generic trait-bound denominator provenance remains.
 - `scripts/check-rustc-hard-rules.sh`: the syntax CLI emits zero public SEC
   diagnostics; rustc emits fixture-backed findings for every SEC rule, including
   macro-consumed FRAME attributes and filtered `SEC008,SEC009` output

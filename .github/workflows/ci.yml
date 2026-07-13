@@ -138,6 +138,9 @@ jobs:
       - name: Check rustc-backed SDK SEC018 baseline
         run: scripts/check-rustc-sdk-sec018.sh .repos/polkadot-sdk .benchmarks
 
+      - name: Check source-rule FRAME corpus baseline
+        run: scripts/check-source-rule-corpus.sh .repos/polkadot-sdk
+
       - name: Upload SEC benchmark output
         uses: actions/upload-artifact@v4
         if: always()
