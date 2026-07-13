@@ -1609,15 +1609,25 @@ impl LintRule for ValidationBeforeHeavyRead {
 
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.content.lines().collect();
+        let validation_guard_tokens = ast_file(ctx)
+            .map(|ast| val001_ensure_guard_tokens(ast, lines.len()))
+            .unwrap_or_else(|| vec![String::new(); lines.len()]);
+        // Validation order is a production-dispatch concern. Inline test and
+        // try-runtime items share source files with production code, so the
+        // file-level test check above is not sufficient here.
+        let non_production_mask = item_mask_by_attr(ctx.content, is_masked_cfg_attribute);
 
         // Track function boundaries
         let mut in_fn = false;
         let mut fn_start = 0;
         let mut brace_depth: i32 = 0;
         let mut first_heavy_op: Option<(usize, String)> = None;
-        let mut heavy_op_lhs: Option<String> = None;
+        let mut heavy_op_bindings: Option<Vec<String>> = None;
 
         for (i, line) in lines.iter().enumerate() {
+            if non_production_mask.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             let trimmed = line.trim();
 
             // Skip comments and attributes
@@ -1634,7 +1644,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                 in_fn = true;
                 fn_start = i;
                 first_heavy_op = None;
-                heavy_op_lhs = None;
+                heavy_op_bindings = None;
                 brace_depth = 0;
             }
 
@@ -1645,11 +1655,13 @@ impl LintRule for ValidationBeforeHeavyRead {
                 // Check for heavy operations
                 if first_heavy_op.is_none() {
                     for pattern in &config.validation_order.heavy_operations {
-                        if trimmed.contains(pattern.as_str()) {
-                            // FIX #5: Extract the LHS variable name to avoid false positives
-                            // when the validation depends on the read result.
+                        if validation_guard_tokens.get(i).is_none_or(String::is_empty)
+                            && trimmed.contains(pattern.as_str())
+                        {
+                            // Track every local introduced by the read so destructuring patterns
+                            // such as `let (owner, _) = Storage::get(...)` remain data-dependent.
                             let lhs = trimmed.split('=').next().unwrap_or("").trim().to_string();
-                            heavy_op_lhs = Some(lhs);
+                            heavy_op_bindings = Some(val001_binding_names(&lhs));
                             first_heavy_op = Some((i, pattern.clone()));
                             break;
                         }
@@ -1658,14 +1670,28 @@ impl LintRule for ValidationBeforeHeavyRead {
 
                 // If we already saw a heavy op, check for cheap validations after it
                 if let Some((heavy_line, ref heavy_pattern)) = first_heavy_op {
+                    let mut consumed_heavy_read = false;
                     for pattern in &config.validation_order.cheap_validations {
                         if trimmed.contains(pattern.as_str()) && i > heavy_line {
+                            // A predicate by itself is not a validation. It becomes one when a
+                            // fallible FRAME guard consumes it; otherwise post-operation checks
+                            // such as `if !remaining.is_zero()` are not reorderable
+                            // preconditions.
+                            if !is_val001_predicate_validation(pattern, trimmed) {
+                                continue;
+                            }
                             // FIX #5: Skip if the validation references the variable
                             // assigned from the heavy read (data-dependent validation).
-                            if let Some(ref lhs) = heavy_op_lhs {
-                                let var_name = lhs.split_whitespace().last().unwrap_or("");
-                                if !var_name.is_empty() && trimmed.contains(var_name) {
-                                    continue;
+                            if let Some(ref bindings) = heavy_op_bindings {
+                                let guard_tokens = validation_guard_tokens
+                                    .get(i)
+                                    .map(String::as_str)
+                                    .unwrap_or("");
+                                if bindings.iter().any(|binding| {
+                                    trimmed.contains(binding) || guard_tokens.contains(binding)
+                                }) {
+                                    consumed_heavy_read = true;
+                                    break;
                                 }
                             }
 
@@ -1693,9 +1719,23 @@ impl LintRule for ValidationBeforeHeavyRead {
                             });
                             // Only report once per function per heavy op
                             first_heavy_op = None;
-                            heavy_op_lhs = None;
+                            heavy_op_bindings = None;
                             break;
                         }
+                    }
+
+                    // Once an intervening statement consumes the read result, a later guard is
+                    // part of the state-dependent control flow rather than an independent
+                    // precondition that can be moved before the read.
+                    if !consumed_heavy_read {
+                        if let Some(ref bindings) = heavy_op_bindings {
+                            consumed_heavy_read = i > heavy_line
+                                && bindings.iter().any(|binding| trimmed.contains(binding));
+                        }
+                    }
+                    if consumed_heavy_read {
+                        first_heavy_op = None;
+                        heavy_op_bindings = None;
                     }
                 }
 
@@ -1703,7 +1743,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                 if brace_depth <= 0 && i > fn_start {
                     in_fn = false;
                     first_heavy_op = None;
-                    heavy_op_lhs = None;
+                    heavy_op_bindings = None;
                 }
             }
         }
@@ -1714,6 +1754,51 @@ impl LintRule for ValidationBeforeHeavyRead {
             Some(diagnostics)
         }
     }
+}
+
+fn is_val001_predicate_validation(pattern: &str, line: &str) -> bool {
+    !pattern.starts_with('.') || line.contains("ensure!") || line.contains("ensure_none")
+}
+
+fn val001_binding_names(lhs: &str) -> Vec<String> {
+    let pattern = lhs
+        .trim()
+        .strip_prefix("let ")
+        .unwrap_or(lhs)
+        .split(':')
+        .next()
+        .unwrap_or(lhs);
+
+    pattern
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|name| !name.is_empty() && !matches!(*name, "let" | "mut" | "ref" | "_" | "else"))
+        .map(str::to_string)
+        .collect()
+}
+
+fn val001_ensure_guard_tokens(ast: &SynFile, line_count: usize) -> Vec<String> {
+    struct EnsureGuardVisitor {
+        tokens_by_line: Vec<String>,
+    }
+
+    impl<'ast> Visit<'ast> for EnsureGuardVisitor {
+        fn visit_macro(&mut self, mac: &'ast Macro) {
+            if macro_name(mac).as_deref() == Some("ensure") {
+                let start = span_line(mac.span()).saturating_sub(1);
+                let end = mac.span().end().line.saturating_sub(1);
+                for line in start..=end.min(self.tokens_by_line.len().saturating_sub(1)) {
+                    self.tokens_by_line[line] = mac.tokens.to_string();
+                }
+            }
+            visit::visit_macro(self, mac);
+        }
+    }
+
+    let mut visitor = EnsureGuardVisitor {
+        tokens_by_line: vec![String::new(); line_count],
+    };
+    visitor.visit_file(ast);
+    visitor.tokens_by_line
 }
 
 // ---------------------------------------------------------------------------

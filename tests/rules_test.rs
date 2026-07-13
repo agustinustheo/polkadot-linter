@@ -220,6 +220,107 @@ fn val001_skips_benchmark_files() {
     );
 }
 
+#[test]
+fn val001_skips_try_runtime_storage_integrity_checks() {
+    let code = r#"
+#[cfg(any(feature = "try-runtime", test))]
+fn do_try_state() -> Result<(), Error> {
+    Proposals::<T>::get().into_iter().try_for_each(|proposal| {
+        ensure!(ProposalOf::<T>::get(proposal).is_some(), "proposal must exist");
+        Ok(())
+    })?;
+    Ok(())
+}
+
+pub fn dispatch(origin: OriginFor<T>, proposal: Hash) -> Result<(), Error> {
+    let proposal = ProposalOf::<T>::get(proposal);
+    ensure_signed(origin)?;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    let val001 = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "VAL001")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        val001.len(),
+        1,
+        "try-runtime-only integrity checks must be ignored while production validation-order findings remain visible: {val001:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_post_operation_predicate_checks() {
+    let code = r#"
+pub fn migrate() -> Result<(), Error> {
+    let mut iter = Contracts::<T>::iter();
+    let remaining = iter.next();
+    if !remaining.is_none() {
+        log::warn!("migration has more work");
+    }
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/contracts/src/migration.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "post-operation predicate checks are not validation-order findings: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_storage_reads_inside_ensure_guards() {
+    let code = r#"
+pub fn update(commission: u32) -> Result<(), Error> {
+    ensure!(
+        commission <= GlobalMaxCommission::<T>::get().unwrap_or(u32::MAX),
+        Error::<T>::CommissionExceedsGlobalMaximum
+    );
+    ensure!(commission <= 10, Error::<T>::CommissionExceedsMaximum);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "storage reads inside validation guards do not precede those guards: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_does_not_pair_consumed_reads_with_later_guards() {
+    let code = r#"
+pub fn dispatch(origin: OriginFor<T>, candidate: AccountId) -> Result<(), Error> {
+    let existing = Members::<T>::get(&candidate);
+    ensure!(existing.is_none(), Error::<T>::AlreadyMember);
+    ensure_signed(origin)?;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "a validation that consumes a storage result closes the validation-order window: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_tracks_destructured_storage_bindings() {
+    let code = r#"
+pub fn dispatch(origin: OriginFor<T>, sub: AccountId) -> Result<(), Error> {
+    let (owner, _) = SuperOf::<T>::get(&sub).ok_or(Error::<T>::NotSub)?;
+    ensure!(owner == ensure_signed(origin)?, Error::<T>::NotOwned);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "destructured storage values used by a guard are not independent preconditions: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================
