@@ -1,9 +1,0 @@
-VAL002	substrate/frame/aura/src/lib.rs	137	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/babe/src/equivocation.rs	180	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/broker/src/tick_impls.rs	102	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/broker/src/utility_impls.rs	37	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/broker/src/utility_impls.rs	44	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/collective/src/lib.rs	276	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/revive/src/evm/call.rs	201	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/sassafras/src/lib.rs	593	Resolved config, storage, or collection divisor lacks a nonzero proof
-VAL002	substrate/frame/staking-async/src/lib.rs	721	Resolved config, storage, or collection divisor lacks a nonzero proof
