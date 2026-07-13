@@ -4,7 +4,11 @@ pub mod semantic;
 pub mod terminology;
 pub mod test_smells;
 
-use crate::{config::Config, diagnostics::Diagnostic, engine::FileContext};
+use crate::{
+    config::Config,
+    diagnostics::{Diagnostic, Severity},
+    engine::FileContext,
+};
 
 /// Security rules whose public implementation is the rustc-backed driver.
 ///
@@ -18,10 +22,19 @@ pub const COMPILER_BACKED_SECURITY_RULE_IDS: &[&str] = &[
 
 /// All public rules implemented by the rustc driver.
 pub const COMPILER_BACKED_RULE_IDS: &[&str] = &[
-    "VAL003", "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
-    "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017",
-    "SEC018",
+    "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003", "SEC004",
+    "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012", "SEC013",
+    "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
 ];
+
+/// Default severity for a compiler-backed rule before configuration overrides.
+pub fn compiler_backed_rule_default_severity(rule_id: &str) -> Severity {
+    match rule_id {
+        "SEM009" => Severity::Advisory,
+        "SEM010" => Severity::Error,
+        _ => Severity::Warning,
+    }
+}
 
 /// Trait that all lint rules implement
 pub trait LintRule: Send + Sync {
@@ -47,18 +60,14 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::PreferRefIteration),
         Box::new(semantic::NoWildcardImports),
         Box::new(semantic::ParameteriseWeightFunctions),
-        Box::new(semantic::DbWeightMissingPov),
         Box::new(semantic::RuntimeDebugDeprecated),
         Box::new(semantic::SpStdDeprecated),
-        Box::new(semantic::RedundantContainsKeyBeforeRemove),
-        Box::new(semantic::XorAsExponentiation),
         Box::new(semantic::WeightZeroPlaceholder),
         Box::new(semantic::DivisionWithoutZeroGuard),
         Box::new(semantic::AllowDeadCodeInPallet),
         Box::new(semantic::CustomInvalidityReprU8),
         Box::new(semantic::SubmitTransactionLogTarget),
         Box::new(semantic::MissingWeightOfAuthorize),
-        Box::new(semantic::MissingAuthorizeCallInCreateAuthorizedTransaction),
         // Test smell rules
         Box::new(test_smells::AssertNoop),
         Box::new(test_smells::ApplyExtrinsicAssertOk),

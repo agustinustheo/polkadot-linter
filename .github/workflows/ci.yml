@@ -72,6 +72,18 @@ jobs:
       - name: Check rustc-backed VAL003 validation ordering
         run: scripts/check-rustc-val003.sh
 
+      - name: Check rustc-backed SEM010 XOR detection
+        run: scripts/check-rustc-sem010.sh
+
+      - name: Check rustc-backed SEM009 storage cleanup detection
+        run: scripts/check-rustc-sem009.sh
+
+      - name: Check rustc-backed SEM006 DbWeight detection
+        run: scripts/check-rustc-sem006.sh
+
+      - name: Check rustc-backed SEM016 authorized-transaction detection
+        run: scripts/check-rustc-sem016.sh
+
       - name: Check rustc-backed SDK baseline
         run: scripts/check-rustc-sdk-smoke.sh .repos/polkadot-sdk .benchmarks
 

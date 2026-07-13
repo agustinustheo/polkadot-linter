@@ -172,6 +172,26 @@ impl Callbacks for PolkadotCallbacks {
                 &mut self.diagnostics,
             );
         }
+        if self.rule_enabled("SEM010") {
+            report_xor_as_exponentiation(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
+        if self.rule_enabled("SEM009") {
+            report_redundant_storage_contains_key(
+                tcx,
+                tcx.sess.source_map(),
+                &mut self.diagnostics,
+            );
+        }
+        if self.rule_enabled("SEM006") {
+            report_dbweight_missing_pov(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+        }
+        if self.rule_enabled("SEM016") {
+            report_missing_authorize_call_in_create_authorized_transaction(
+                tcx,
+                tcx.sess.source_map(),
+                &mut self.diagnostics,
+            );
+        }
         if self.rule_enabled("SEC006") {
             report_unchecked_repatriate_reserved(tcx, tcx.sess.source_map(), &mut self.diagnostics);
         }
@@ -1460,6 +1480,339 @@ fn report_raw_weight_arithmetic<'tcx>(
             reported_lines: &mut reported_lines,
         };
         visitor.visit_body(body);
+    }
+}
+
+fn report_xor_as_exponentiation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in tcx.hir_body_owners() {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sem010Visitor {
+            source_map,
+            typeck: tcx.typeck(def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_redundant_storage_contains_key<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in tcx.hir_body_owners() {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sem009Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_dbweight_missing_pov<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+    for def_id in tcx.hir_body_owners() {
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+        let mut visitor = Sem006Visitor {
+            source_map,
+            tcx,
+            typeck: tcx.typeck(def_id),
+            diagnostics,
+            reported_lines: &mut reported_lines,
+        };
+        visitor.visit_body(body);
+    }
+}
+
+fn report_missing_authorize_call_in_create_authorized_transaction<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    source_map: &SourceMap,
+    diagnostics: &mut Vec<RustcDiagnostic>,
+) {
+    let mut reported_lines = HashSet::new();
+
+    for def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        if tcx.item_name(def_id.to_def_id()).as_str() != "create_extension" {
+            continue;
+        }
+        let Some(trait_id) = tcx
+            .impl_of_method(def_id.to_def_id())
+            .and_then(|impl_id| tcx.trait_id_of_impl(impl_id))
+        else {
+            continue;
+        };
+        let trait_path = tcx.def_path_str(trait_id);
+        if !trait_path.contains("frame_system::offchain::CreateAuthorizedTransaction") {
+            continue;
+        }
+        let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
+            continue;
+        };
+
+        let mut visitor = Sem016Visitor {
+            tcx,
+            typeck: tcx.typeck(def_id),
+            found_authorize_call: false,
+        };
+        visitor.visit_body(body);
+        if visitor.found_authorize_call {
+            continue;
+        }
+
+        let (file, line, column) = span_location(source_map, tcx.def_span(def_id));
+        if reported_lines.insert((file.clone(), line)) {
+            diagnostics.push(RustcDiagnostic {
+                rule_id: "SEM016",
+                rule_name: "missing-authorizecall-in-create-authorized-transaction",
+                file,
+                line,
+                column,
+                message: "Resolved frame_system::offchain::CreateAuthorizedTransaction::create_extension() does not construct frame_system::AuthorizeCall::new()".to_string(),
+            });
+        }
+    }
+}
+
+struct Sem016Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    found_authorize_call: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for Sem016Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, _) = expr.kind {
+            let def_id = match callee.kind {
+                ExprKind::Path(qpath) => self
+                    .typeck
+                    .type_dependent_def_id(callee.hir_id)
+                    .or_else(|| self.typeck.qpath_res(&qpath, callee.hir_id).opt_def_id()),
+                _ => None,
+            };
+            if def_id.is_some_and(|def_id| {
+                let path = self.tcx.def_path_str(def_id);
+                path.contains("frame_system::AuthorizeCall") && path.ends_with("::new")
+            }) {
+                self.found_authorize_call = true;
+                return;
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+struct Sem006Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sem006Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::MethodCall(segment, receiver, _, _) = expr.kind {
+            let (file, line, column) = span_location(self.source_map, expr.span.source_callsite());
+            if matches!(
+                segment.ident.name.as_str(),
+                "reads" | "writes" | "reads_writes"
+            ) && !is_generated_weights_file(&file)
+                && type_is_runtime_db_weight(self.tcx, self.typeck.expr_ty(receiver))
+                && self.reported_lines.insert((file.clone(), line))
+            {
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEM006",
+                    rule_name: "dbweight-missing-pov",
+                    file,
+                    line,
+                    column,
+                    message: "Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)".to_string(),
+                });
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+struct Sem009Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sem009Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, _) = expr.kind {
+            if let Some((storage_owner, keys)) = resolved_storage_call(
+                self.source_map,
+                self.tcx,
+                self.typeck,
+                condition,
+                "contains_key",
+            ) {
+                let mut finder = Sem009RemoveTakeFinder {
+                    source_map: self.source_map,
+                    tcx: self.tcx,
+                    typeck: self.typeck,
+                    storage_owner,
+                    keys,
+                    found: false,
+                };
+                finder.visit_expr(then_branch);
+
+                if finder.found {
+                    let (file, line, column) =
+                        span_location(self.source_map, condition.span.source_callsite());
+                    if self.reported_lines.insert((file.clone(), line)) {
+                        self.diagnostics.push(RustcDiagnostic {
+                            rule_id: "SEM009",
+                            rule_name: "redundant-contains-key-before-remove",
+                            file,
+                            line,
+                            column,
+                            message: "Resolved FRAME contains_key() before remove()/take() on the same key is a wasted storage read".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+struct Sem009RemoveTakeFinder<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    storage_owner: String,
+    keys: Vec<HirId>,
+    found: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for Sem009RemoveTakeFinder<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if self.found || matches!(expr.kind, ExprKind::Closure(_)) {
+            return;
+        }
+        if matches!(expr.kind, ExprKind::Call(..)) {
+            for method in ["remove", "take"] {
+                if let Some((storage_owner, keys)) =
+                    resolved_storage_call(self.source_map, self.tcx, self.typeck, expr, method)
+                {
+                    if storage_owner == self.storage_owner && keys == self.keys {
+                        self.found = true;
+                        return;
+                    }
+                }
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn resolved_storage_call<'tcx>(
+    source_map: &SourceMap,
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
+    expected_method: &str,
+) -> Option<(String, Vec<HirId>)> {
+    let expr = strip_drop_temps(expr);
+    let ExprKind::Call(callee, arguments) = expr.kind else {
+        return None;
+    };
+    if associated_call_name(callee).as_deref() != Some(expected_method) {
+        return None;
+    }
+    if !is_frame_storage_associated_call(tcx, typeck, callee) {
+        return None;
+    }
+    let callee_source = source_map
+        .span_to_snippet(callee.span.source_callsite())
+        .ok()?;
+    let (storage_owner, _) = callee_source.rsplit_once("::")?;
+    let keys = arguments
+        .iter()
+        .map(|argument| storage_key_binding(typeck, argument))
+        .collect::<Option<Vec<_>>>()?;
+    (!keys.is_empty()).then_some((storage_owner.trim().to_string(), keys))
+}
+
+fn storage_key_binding(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> Option<HirId> {
+    let expr = strip_drop_temps(expr);
+    match expr.kind {
+        ExprKind::AddrOf(_, _, inner) => storage_key_binding(typeck, inner),
+        _ => local_binding_id(typeck, expr),
+    }
+}
+
+struct Sem010Visitor<'a, 'tcx> {
+    source_map: &'a SourceMap,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+    reported_lines: &'a mut HashSet<(String, usize)>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sem010Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Binary(operator, lhs, rhs) = expr.kind {
+            if operator.node == BinOpKind::BitXor && is_integral(self.typeck.expr_ty(expr)) {
+                if let (Some(base), Some(exponent)) = (
+                    decimal_integer_literal_value(self.source_map, lhs),
+                    decimal_integer_literal_value(self.source_map, rhs),
+                ) {
+                    if matches!(base, 2 | 10 | 100) && exponent > 3 {
+                        let (file, line, column) =
+                            span_location(self.source_map, expr.span.source_callsite());
+                        if self.reported_lines.insert((file.clone(), line)) {
+                            self.diagnostics.push(RustcDiagnostic {
+                                rule_id: "SEM010",
+                                rule_name: "xor-as-exponentiation",
+                                file,
+                                line,
+                                column,
+                                message: format!(
+                                    "`{base} ^ {exponent}` is bitwise XOR (= {}), not exponentiation",
+                                    base ^ exponent
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        intravisit::walk_expr(self, expr);
     }
 }
 
@@ -3966,6 +4319,25 @@ fn integer_literal(expr: &Expr<'_>) -> bool {
     )
 }
 
+fn decimal_integer_literal_value(source_map: &SourceMap, expr: &Expr<'_>) -> Option<u128> {
+    let expr = strip_drop_temps(expr);
+    let snippet = source_map
+        .span_to_snippet(expr.span.source_callsite())
+        .ok()?;
+    let literal = snippet.trim_start();
+    if literal.starts_with("0b") || literal.starts_with("0o") || literal.starts_with("0x") {
+        return None;
+    }
+
+    match expr.kind {
+        ExprKind::Lit(literal) => match literal.node {
+            rustc_ast::LitKind::Int(value, _) => Some(value.get()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn zero_integer_literal(expr: &Expr<'_>) -> bool {
     matches!(
         strip_drop_temps(expr).kind,
@@ -4959,6 +5331,23 @@ fn is_integral(ty: Ty<'_>) -> bool {
         ty.kind(),
         TyKind::Int(_) | TyKind::Uint(_) | TyKind::Infer(rustc_middle::ty::IntVar(_))
     )
+}
+
+fn type_is_runtime_db_weight<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Adt(adt, _) => {
+            let path = tcx.def_path_str(adt.did());
+            path.ends_with("::RuntimeDbWeight")
+                && (path.contains("sp_weights::") || is_frame_support_path(&path))
+        }
+        TyKind::Alias(kind, alias_ty) => expand_alias_type(tcx, *kind, *alias_ty)
+            .is_some_and(|expanded| type_is_runtime_db_weight(tcx, expanded)),
+        _ => false,
+    }
+}
+
+fn is_generated_weights_file(path: &str) -> bool {
+    path.ends_with("weights.rs") || path.contains("/weights/") || path.contains("\\weights\\")
 }
 
 fn span_location(source_map: &SourceMap, span: Span) -> (String, usize, usize) {

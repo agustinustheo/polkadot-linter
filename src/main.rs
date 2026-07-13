@@ -191,7 +191,13 @@ fn main() {
                 show_cargo_progress: !cli.no_rustc_progress,
             };
             match rustc_pipeline::run_cargo_check(&options) {
-                Ok(mut diagnostics) => results.append(&mut diagnostics),
+                Ok(mut diagnostics) => {
+                    for diagnostic in &mut diagnostics {
+                        diagnostic.severity =
+                            config.rule_severity(&diagnostic.rule_id, diagnostic.severity);
+                    }
+                    results.append(&mut diagnostics);
+                }
                 Err(e) => {
                     eprintln!("Error running compiler-backed analysis: {e}");
                     process::exit(2);
@@ -344,11 +350,9 @@ fn selected_compiler_backed_rules(
     COMPILER_BACKED_RULE_IDS
         .iter()
         .filter(|rule_id| {
-            selectors.iter().any(|selector| {
-                *rule_id == selector
-                    || (selector == "SEC" && rule_id.starts_with("SEC"))
-                    || (selector == "VAL" && rule_id.starts_with("VAL"))
-            })
+            selectors
+                .iter()
+                .any(|selector| *rule_id == selector || rule_id.starts_with(selector))
         })
         .filter(|rule_id| config.rule_enabled(rule_id))
         .map(|rule| (*rule).to_string())
@@ -372,9 +376,9 @@ mod tests {
         assert_eq!(
             selected_compiler_backed_rules(None, &[], &Config::default()),
             strings(&[
-                "VAL003", "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007",
-                "SEC008", "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015",
-                "SEC016", "SEC017", "SEC018",
+                "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003",
+                "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011",
+                "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
             ])
         );
     }
@@ -394,12 +398,22 @@ mod tests {
     }
 
     #[test]
-    fn cli_specific_rules_select_only_migrated_matches() {
-        let cli_rules = strings(&["SEC003", "SEC014", "VAL"]);
+    fn cli_semantic_family_expands_to_migrated_rules_only() {
+        let cli_rules = strings(&["SEM"]);
 
         assert_eq!(
             selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
-            strings(&["VAL003", "SEC003", "SEC014"])
+            strings(&["SEM006", "SEM009", "SEM010", "SEM016"])
+        );
+    }
+
+    #[test]
+    fn cli_specific_rules_select_only_migrated_matches() {
+        let cli_rules = strings(&["SEC003", "SEC014", "VAL", "SEM010"]);
+
+        assert_eq!(
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
+            strings(&["VAL003", "SEM010", "SEC003", "SEC014"])
         );
     }
 
