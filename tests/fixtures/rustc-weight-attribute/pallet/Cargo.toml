@@ -1,7 +1,9 @@
 [package]
-name = "pallet"
+name = "rustc-weight-attribute-pallet"
 version = "0.1.0"
 edition = "2021"
+description = "Test-only proc-macro pallet attribute fixture"
+publish = false
 
 [lib]
 proc-macro = true
