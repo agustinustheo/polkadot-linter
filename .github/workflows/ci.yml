@@ -30,11 +30,13 @@ jobs:
           test -d .repos/polkadot-sdk
           test "$(git -C .repos/polkadot-sdk rev-parse HEAD)" = "$POLKADOT_SDK_COMMIT"
 
-      - name: Install nightly formatter toolchain
+      - name: Install Rust 1.91 driver toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-06-10
-          components: rustfmt,rustc-dev,llvm-tools-preview
+          toolchain: nightly-2025-09-01
+
+      - name: Install rustc driver components
+        run: rustup component add --toolchain nightly-2025-09-01 rustfmt rustc-dev llvm-tools-preview
 
       - name: Install build and test toolchain
         uses: dtolnay/rust-toolchain@master
@@ -46,7 +48,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo +nightly-2025-06-10 fmt --all -- --check
+        run: cargo +nightly-2025-09-01 fmt --all -- --check
 
       - name: Run Polkadot Linter tests
         run: cargo +1.93.0 test
@@ -71,6 +73,9 @@ jobs:
 
       - name: Check rustc-backed VAL003 validation ordering
         run: scripts/check-rustc-val003.sh
+
+      - name: Check rustc-backed VAL002 SDK baseline
+        run: scripts/check-rustc-sdk-val002.sh .repos/polkadot-sdk .benchmarks
 
       - name: Check rustc-backed SEM010 XOR detection
         run: scripts/check-rustc-sem010.sh

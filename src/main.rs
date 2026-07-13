@@ -86,7 +86,7 @@ struct Cli {
     target_dir: Option<PathBuf>,
 
     /// rust toolchain passed to cargo for compiler-backed analysis
-    #[arg(long = "toolchain", default_value = "nightly-2025-06-10")]
+    #[arg(long = "toolchain", default_value = "nightly-2025-09-01")]
     toolchain: String,
 
     /// Path to the polkadot-linter-driver binary
@@ -169,7 +169,7 @@ fn main() {
         if let Some(manifest_path) = &manifest_path {
             if !cli.driver_path.is_file() {
                 eprintln!(
-                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-06-10 build --features rustc-driver --bin polkadot-linter-driver`.",
+                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-09-01 build --features rustc-driver --bin polkadot-linter-driver`.",
                     cli.driver_path.display()
                 );
                 process::exit(2);
@@ -376,9 +376,9 @@ mod tests {
         assert_eq!(
             selected_compiler_backed_rules(None, &[], &Config::default()),
             strings(&[
-                "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003",
-                "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011",
-                "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
+                "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002",
+                "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010",
+                "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
             ])
         );
     }
@@ -413,7 +413,7 @@ mod tests {
 
         assert_eq!(
             selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
-            strings(&["VAL003", "SEM010", "SEC003", "SEC014"])
+            strings(&["VAL002", "VAL003", "SEM010", "SEC003", "SEC014"])
         );
     }
 

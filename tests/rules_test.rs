@@ -1000,29 +1000,6 @@ fn sem011_allows_benchmarked_weight_in_attribute() {
 }
 
 // ==========================================================================
-// VAL002: Division without zero guard
-// ==========================================================================
-#[test]
-fn val002_detects_division_by_config_value() {
-    let bad = include_str!("fixtures/bad_val002.rs");
-    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
-    assert!(
-        has_rule(&diags, "VAL002"),
-        "VAL002 should fire on division by config/storage value without guard"
-    );
-}
-
-#[test]
-fn val002_allows_guarded_division() {
-    let good = include_str!("fixtures/good_val002.rs");
-    let diags = check_fixture("pallets/foo/src/lib.rs", good);
-    assert!(
-        !has_rule(&diags, "VAL002"),
-        "VAL002 should NOT fire when zero guard or checked_div is present"
-    );
-}
-
-// ==========================================================================
 // SEM012: #[allow(dead_code)] in production code
 // ==========================================================================
 #[test]

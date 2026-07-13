@@ -83,7 +83,7 @@ impl unrelated::CreateAuthorizedTransaction<LocalCall> for UnrelatedRuntime {
 }
 RS
 
-cargo +nightly-2025-06-10 build \
+cargo +nightly-2025-09-01 build \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
   --bin polkadot-linter-driver

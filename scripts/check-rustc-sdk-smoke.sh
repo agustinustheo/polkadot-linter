@@ -30,7 +30,7 @@ else
   trap 'rm -rf "$SDK_TARGET_DIR"' EXIT
 fi
 
-cargo +nightly-2025-06-10 build \
+cargo +nightly-2025-09-01 build \
   --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver \
   --bin polkadot-linter-driver
@@ -46,7 +46,7 @@ cargo +1.93.0 run \
   --lib \
   --no-default-features \
   --driver-path "$DRIVER" \
-  --toolchain nightly-2025-06-10 \
+  --toolchain nightly-2025-09-01 \
   --target-dir "$SDK_TARGET_DIR" \
   --source-filter "$PACKAGE_FILE" \
   "$PACKAGE_DIR" \
