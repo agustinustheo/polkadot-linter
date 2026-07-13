@@ -26,7 +26,7 @@ regressions and pinned SDK baselines validate the public implementation.
 | `SEM002`, `SEM003`, `SEM004`, `SEM007`, `SEM008`, `SEM012`, `SEM013` | Source style, import, derive, attribute, or representation conventions. Resolved types do not add decision-quality evidence. |
 | `SEM005`, `SEM011`, `SEM014`, `SEM015` | FRAME source conventions that are currently source-attribute or local-style checks. They remain syntax-backed until a compiler model can improve the finding contract and has a benchmark. |
 | `VAL001` | Requires a cost model that distinguishes resolved storage reads from cheap operations and proves whether a later guard is data-dependent on that read. |
-| `VAL002` | Requires denominator provenance through configuration/storage reads plus path-sensitive zero-proof and cross-function integrity-test evidence. |
+| `VAL002` | Requires denominator provenance through configuration/storage reads plus path-sensitive zero-proof and cross-function integrity-test evidence. A prototype resolved `Get` and local guards but missed the generic `Period: Get<u32>` division in pinned `pallet-collective`; it must not replace the parser until that SDK case is covered. |
 | `TST*`, `MOK*`, `BEN*`, `TRM*` | Test quality, mock/benchmark conventions, and text terminology are inherently source- or text-oriented. |
 
 ## Migration Gate
