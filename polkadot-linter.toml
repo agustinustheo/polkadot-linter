@@ -1,40 +1,9 @@
-# Example project-level configuration for polkadot-linter.
+# Project-level configuration for polkadot-linter.
 
 [general]
 exclude = ["*.lock", ".git/**", "target/**"]
 include = []
 default_severity = "warning"
-
-[rules]
-[rules.enabled]
-BEN002 = false
-VAL001 = false
-SEC008 = false
-TST004 = false
-BEN003 = false
-BEN001 = false
-SEM011 = false
-SEM013 = false
-TST006 = false
-SEC003 = false
-SEC014 = false
-TST005 = false
-SEC001 = false
-SEC005 = false
-SEC009 = false
-SEM006 = false
-SEC011 = false
-SEC007 = false
-SEC010 = false
-SEC017 = false
-SEM016 = false
-TST003 = false
-SEC002 = false
-SEC006 = false
-SEC015 = false
-SEC016 = false
-SEC012 = false
-SEC013 = false
 
 [rules.severity]
 TST002 = "error"
