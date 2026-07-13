@@ -20,7 +20,8 @@ fn fixture_is_test_file(path: &str) -> bool {
 }
 
 /// Keeps the retired parser implementations covered without registering them
-/// in the production lint engine. Public SEC diagnostics come only from rustc.
+/// in the production lint engine. Public compiler-backed diagnostics come only
+/// from rustc.
 fn test_rules(
     config: &polkadot_linter::config::Config,
 ) -> Vec<Box<dyn polkadot_linter::rules::LintRule>> {
@@ -47,6 +48,10 @@ fn test_rules(
         Box::new(semantic::MissingStorageVersionCheckInRuntimeUpgrade),
         Box::new(semantic::VecInEvents),
         Box::new(semantic::MissingWeightForUnboundedInput),
+        Box::new(semantic::RedundantContainsKeyBeforeRemove),
+        Box::new(semantic::DbWeightMissingPov),
+        Box::new(semantic::XorAsExponentiation),
+        Box::new(semantic::MissingAuthorizeCallInCreateAuthorizedTransaction),
     ]);
     rules.retain(|rule| config.rule_enabled(rule.id()));
     rules
@@ -159,14 +164,14 @@ fn has_rule(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -
 }
 
 #[test]
-fn syntax_engine_does_not_register_compiler_backed_security_rules() {
+fn syntax_engine_does_not_register_compiler_backed_rules() {
     let config = polkadot_linter::config::Config::default();
     let registered = polkadot_linter::rules::all_rules(&config)
         .into_iter()
         .map(|rule| rule.id().to_string())
         .collect::<Vec<_>>();
 
-    for rule_id in polkadot_linter::rules::COMPILER_BACKED_SECURITY_RULE_IDS {
+    for rule_id in polkadot_linter::rules::COMPILER_BACKED_RULE_IDS {
         assert!(
             !registered
                 .iter()
@@ -174,17 +179,6 @@ fn syntax_engine_does_not_register_compiler_backed_security_rules() {
             "{rule_id} must have exactly one public implementation authority"
         );
     }
-}
-
-#[test]
-fn syntax_engine_does_not_register_compiler_backed_validation_rules() {
-    let config = polkadot_linter::config::Config::default();
-    let registered = polkadot_linter::rules::all_rules(&config);
-
-    assert!(
-        !registered.iter().any(|rule| rule.id() == "VAL003"),
-        "VAL003 must have exactly one public implementation authority"
-    );
 }
 
 // ==========================================================================

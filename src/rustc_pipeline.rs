@@ -9,7 +9,7 @@ use std::{
 
 use serde::Deserialize;
 
-use crate::diagnostics::{Diagnostic, RuleCategory, Severity};
+use crate::diagnostics::{Diagnostic, RuleCategory};
 
 #[derive(Debug)]
 pub struct RustcPipelineOptions {
@@ -263,11 +263,12 @@ fn absolutize(path: &Path) -> Result<PathBuf, RustcPipelineError> {
 
 impl From<RustcDiagnostic> for Diagnostic {
     fn from(value: RustcDiagnostic) -> Self {
+        let severity = crate::rules::compiler_backed_rule_default_severity(&value.rule_id);
         Diagnostic {
             rule_id: value.rule_id,
             rule_name: value.rule_name,
             category: RuleCategory::Semantic,
-            severity: Severity::Warning,
+            severity,
             file: PathBuf::from(value.file),
             line: value.line,
             column: Some(value.column),
@@ -342,5 +343,19 @@ mod tests {
             std::path::PathBuf::from("runtime/src/lib.rs")
         );
         assert_eq!(diagnostic.column, Some(3));
+    }
+
+    #[test]
+    fn preserves_compiler_rule_default_severity() {
+        let diagnostic = Diagnostic::from(RustcDiagnostic {
+            rule_id: "SEM010".to_string(),
+            rule_name: "xor-as-exponentiation".to_string(),
+            file: "runtime/src/lib.rs".to_string(),
+            line: 7,
+            column: 3,
+            message: "integer XOR looks like exponentiation".to_string(),
+        });
+
+        assert_eq!(diagnostic.severity, Severity::Error);
     }
 }
