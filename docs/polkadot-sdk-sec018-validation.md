@@ -2,12 +2,11 @@
 
 Target: `.repos/polkadot-sdk` at `b18fb34a8ae348df5866e4b718d82871d744e60d`.
 
-The current benchmark intentionally emits only the `SEC018` findings listed in
-`benchmarks/polkadot-sdk-sec018-baseline.tsv`. Each remaining diagnostic was
-kept because the dispatchable accepts a variable-length input and the declared
-weight does not include that input length, while the accepted execution path
-does length-sensitive work such as decoding, hashing, iteration, storage/event
-encoding, XCM call construction, or contract execution.
+This is an archived validation record for the 13 findings produced by the
+retired syntax benchmark. The public `SEC018` implementation now runs through
+the rustc driver and CI validates its pinned package baselines directly. The
+findings below remain useful audit context: each dispatchable accepts a
+variable-length input while its declared weight omits that input length.
 
 Suppressed candidates are not silently ignored: they are encoded as regression
 tests for accepted-path validators, bounded conversions, max-block

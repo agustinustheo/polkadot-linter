@@ -21,9 +21,6 @@ cargo run -- ../pallets -f sarif > polkadot-linter.sarif
 # Tighten CI behaviour
 cargo run -- ../pallets -s warning --fail-on-warning
 
-# Add compiler-resolved rustdoc JSON evidence for typed prototype rules
-cargo run -- ../pallets --rules SEC013 --rustdoc-json target/doc/my_pallet.json
-
 # Route migrated SEC rules through the rustc-backed pipeline for a Cargo package.
 # The manifest is discovered from the scan path.
 cargo run -- \
@@ -133,21 +130,20 @@ The full schema and defaults remain in [`config/default.toml`](config/default.to
 
 ## Security Roadmap
 
-The security rules are being improved in explicit phases. Migrated SEC rules
-now route through the rustc-backed pipeline by default when the scan path is
-inside a single Cargo project; the CLI discovers the nearest `Cargo.toml` and
-syntax findings for those migrated rule IDs are demoted to fallback behavior.
-Use `--no-rustc` only for an explicitly syntax-only scan. See
+The security rules and `VAL003` now route through the rustc-backed pipeline by
+default when the scan path is inside a single Cargo project; the CLI discovers
+the nearest `Cargo.toml` and the syntax engine does not register those rule
+IDs. `--no-rustc` skips compiler-backed rules and is appropriate only when
+running the remaining syntax/text rule families. See
 [`docs/rustc-driver-analysis.md`](docs/rustc-driver-analysis.md) and
 [`docs/security-linter-phases.md`](docs/security-linter-phases.md). The
 rustdoc-backed analysis path is documented in
-[`docs/rustdoc-analysis.md`](docs/rustdoc-analysis.md).
+[`docs/rustdoc-analysis.md`](docs/rustdoc-analysis.md). The current authority
+and migration criteria for every rule family are in
+[`docs/rule-backend-matrix.md`](docs/rule-backend-matrix.md).
 
-For repeatable SEC-rule corpus runs against the pinned SDK checkout, use:
-
-```bash
-scripts/benchmark-sec-rules.sh
-```
+For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
+per-rule `scripts/check-rustc-sdk-sec*.sh` baselines used by CI.
 
 ## Output Formats
 

@@ -277,10 +277,9 @@ The stable `polkadot-linter` CLI now treats the migrated SEC rules as
 compiler-backed by default when scan paths resolve to one Cargo project. It
 discovers the nearest `Cargo.toml`, uses `nightly-2025-06-10` unless overridden,
 and supplies that toolchain's compiler-library directory to the rustc wrapper.
-For selected migrated rules, syntax findings are demoted and removed from the
-final output, then the rustc-backed diagnostics are emitted in the normal
-public diagnostic format. Use `--no-rustc` only to request a legacy syntax-only
-scan:
+For selected migrated rules, the syntax engine has no registered implementation;
+the rustc-backed diagnostics are the normal public diagnostic format.
+`--no-rustc` skips migrated SEC rules while leaving syntax/text families enabled:
 
 ```sh
 polkadot-linter \
@@ -299,7 +298,7 @@ Internally, `polkadot-linter` runs Cargo with `polkadot-linter-rustc` as
 `RUSTC_WORKSPACE_WRAPPER`, parses the driver's JSONL output, and converts it
 back into the public diagnostic format. When `--compiler-backed-rules` is not
 specified, the CLI expands the requested rule filters to the migrated
-compiler-backed SEC rules (`SEC001`, `SEC002`, `SEC003`, `SEC004`, `SEC005`, `SEC006`, `SEC007`, `SEC008`, `SEC009`,
+compiler-backed rules (`VAL003`, `SEC001`, `SEC002`, `SEC003`, `SEC004`, `SEC005`, `SEC006`, `SEC007`, `SEC008`, `SEC009`,
 `SEC010`, `SEC011`, `SEC012`, `SEC013`, `SEC014`, `SEC015`, `SEC016`, `SEC017`, and `SEC018`). In wrapper mode, Cargo
 passes the real rustc path as the first argument; the driver preserves that invocation,
 continues compilation after analysis, and appends linter diagnostics to the
@@ -310,6 +309,10 @@ package-local benchmark output while Cargo still compiles dependencies
 normally. `POLKADOT_LINTER_RUSTC_RULES` can be set to a comma-separated list
 of rule families or IDs, such as `SEC` or `SEC008,SEC009`, so migrated rules
 can be benchmarked and wired independently.
+
+Cargo's normal `Compiling`/`Checking` output and interactive progress are shown
+on stderr during compiler-backed analysis; structured linter output remains on
+stdout. Pass `--no-rustc-progress` when a quiet Cargo invocation is required.
 
 Run the SDK smoke check with:
 
@@ -375,12 +378,11 @@ Run the SDK `SEC009` precision check with:
 scripts/check-rustc-sdk-sec009.sh .repos/polkadot-sdk .benchmarks
 ```
 
-That script compares the current syntax rule against the compiler-backed rule
-on pinned SDK `pallet-collective`. The syntax rule reports 5 package-local
-`SEC009` findings in `substrate/frame/collective/src/lib.rs`; the rustc-backed
-rule reports 2 findings after using resolved integer operand types, ignoring
-macro-generated attribute spans, and deduplicating nested arithmetic to one
-finding per affected source line. The rustc-backed summary is checked against
+The syntax engine deliberately emits no SEC009 result. On pinned SDK
+`pallet-collective`, the rustc-backed rule reports 2 findings after using
+resolved integer operand types, ignoring macro-generated attribute spans, and
+deduplicating nested arithmetic to one finding per affected source line. The
+rustc-backed summary is checked against
 `benchmarks/polkadot-sdk-rustc-collective-sec009-baseline.tsv`, and the public
 CLI run relies on default compiler-backed routing rather than `--no-syntax`.
 

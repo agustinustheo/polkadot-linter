@@ -19,6 +19,39 @@ fn fixture_is_test_file(path: &str) -> bool {
         || path.ends_with("testing_utils.rs")
 }
 
+/// Keeps the retired parser implementations covered without registering them
+/// in the production lint engine. Public SEC diagnostics come only from rustc.
+fn test_rules(
+    config: &polkadot_linter::config::Config,
+) -> Vec<Box<dyn polkadot_linter::rules::LintRule>> {
+    use polkadot_linter::rules::semantic;
+
+    let mut rules = polkadot_linter::rules::all_rules(config);
+    rules.extend([
+        Box::new(semantic::UnboundedVecInExtrinsic) as Box<dyn polkadot_linter::rules::LintRule>,
+        Box::new(semantic::DebugAssertInProduction),
+        Box::new(semantic::MissingDecodeDepthLimit),
+        Box::new(semantic::UnsafeWeightArithmetic),
+        Box::new(semantic::ExpensiveWeightCalculation),
+        Box::new(semantic::UncheckedRepatriateReserved),
+        Box::new(semantic::LetUnderscoreResult),
+        Box::new(semantic::PanicInProduction),
+        Box::new(semantic::RawArithmeticInFallible),
+        Box::new(semantic::StorageWriteBeforeValidation),
+        Box::new(semantic::MissingTransactionalInHook),
+        Box::new(semantic::StorageIterationInDispatchables),
+        Box::new(semantic::UnboundedClearPrefix),
+        Box::new(semantic::UnboundedStorageCollections),
+        Box::new(semantic::IdentityHasherOnCommonKeys),
+        Box::new(semantic::DispatchBypassFilterInProduction),
+        Box::new(semantic::MissingStorageVersionCheckInRuntimeUpgrade),
+        Box::new(semantic::VecInEvents),
+        Box::new(semantic::MissingWeightForUnboundedInput),
+    ]);
+    rules.retain(|rule| config.rule_enabled(rule.id()));
+    rules
+}
+
 /// Helper: create a FileContext and run a specific rule against fixture content.
 fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnostics::Diagnostic> {
     let config = polkadot_linter::config::Config::default();
@@ -43,7 +76,7 @@ fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnost
         },
     };
 
-    let rules = polkadot_linter::rules::all_rules(&config);
+    let rules = test_rules(&config);
     let mut diags = Vec::new();
     for rule in &rules {
         if let Some(mut d) = rule.check(&ctx, &config) {
@@ -78,7 +111,7 @@ fn check_fixture_with_config(
         },
     };
 
-    let rules = polkadot_linter::rules::all_rules(config);
+    let rules = test_rules(config);
     let mut diags = Vec::new();
     for rule in &rules {
         if let Some(mut d) = rule.check(&ctx, config) {
@@ -111,7 +144,7 @@ fn check_fixture_path(
         },
     };
 
-    let rules = polkadot_linter::rules::all_rules(&config);
+    let rules = test_rules(&config);
     let mut diags = Vec::new();
     for rule in &rules {
         if let Some(mut d) = rule.check(&ctx, &config) {
@@ -123,6 +156,35 @@ fn check_fixture_path(
 
 fn has_rule(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -> bool {
     diags.iter().any(|d| d.rule_id == rule_id)
+}
+
+#[test]
+fn syntax_engine_does_not_register_compiler_backed_security_rules() {
+    let config = polkadot_linter::config::Config::default();
+    let registered = polkadot_linter::rules::all_rules(&config)
+        .into_iter()
+        .map(|rule| rule.id().to_string())
+        .collect::<Vec<_>>();
+
+    for rule_id in polkadot_linter::rules::COMPILER_BACKED_SECURITY_RULE_IDS {
+        assert!(
+            !registered
+                .iter()
+                .any(|registered_id| registered_id == rule_id),
+            "{rule_id} must have exactly one public implementation authority"
+        );
+    }
+}
+
+#[test]
+fn syntax_engine_does_not_register_compiler_backed_validation_rules() {
+    let config = polkadot_linter::config::Config::default();
+    let registered = polkadot_linter::rules::all_rules(&config);
+
+    assert!(
+        !registered.iter().any(|rule| rule.id() == "VAL003"),
+        "VAL003 must have exactly one public implementation authority"
+    );
 }
 
 // ==========================================================================
@@ -3528,16 +3590,8 @@ pub fn production_path() {
         .collect::<Vec<_>>();
 
     assert!(
-        sec008_files
-            .iter()
-            .any(|file| file.ends_with("production.rs")),
-        "SEC008 should still report ungated production modules"
-    );
-    assert!(
-        !sec008_files
-            .iter()
-            .any(|file| file.ends_with("try_runtime.rs")),
-        "SEC008 should skip modules gated by a parent try-runtime cfg"
+        sec008_files.is_empty(),
+        "the syntax engine must not emit retired SEC008 diagnostics"
     );
 }
 
