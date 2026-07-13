@@ -105,7 +105,6 @@ The default configuration lives in [`config/default.toml`](config/default.toml).
 ```toml
 [rules.enabled]
 BEN002 = false
-VAL001 = false
 
 [rules.severity]
 TST002 = "error"
@@ -120,8 +119,8 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 
 ### Configuration Notes
 
-- [`polkadot-linter.toml`](polkadot-linter.toml) is intentionally written as a compact project-level example. It shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
-- The disabled entries under `[rules.enabled]` represent accepted technical debt in a target codebase. The expected workflow is to re-enable those rules incrementally as violations are fixed.
+- [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
+- `[rules.enabled]` is optional. Rules without an explicit `false` override remain enabled.
 - `[rules.severity]` lets you promote or demote individual rules without changing the implementation. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
 - `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.
@@ -130,10 +129,10 @@ The full schema and defaults remain in [`config/default.toml`](config/default.to
 
 ## Security Roadmap
 
-The security rules and `VAL003` now route through the rustc-backed pipeline by
-default when the scan path is inside a single Cargo project; the CLI discovers
-the nearest `Cargo.toml` and the syntax engine does not register those rule
-IDs. `--syntax-only` skips compiler-backed rules and is appropriate only when
+Compiler-backed rules route through the rustc pipeline by default when the
+scan path is inside a single Cargo project; the CLI discovers the nearest
+`Cargo.toml` and the syntax engine does not register those rule IDs.
+`--syntax-only` skips compiler-backed rules and is appropriate only when
 running the remaining syntax/text rule families.
 
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
@@ -165,10 +164,10 @@ polkadot-linter.toml
 
 ## Adding a Rule
 
-1. Implement `LintRule` in the appropriate module under `src/rules/`.
-2. Register it in `src/rules/mod.rs`.
-3. Add `bad_*.rs` and `good_*.rs` fixtures under `tests/fixtures/`.
-4. Extend `tests/rules_test.rs`.
+1. Implement source rules under `src/rules/`, or compiler-backed rules in `src/bin/polkadot-linter-driver.rs`.
+2. Register source rules in `src/rules/mod.rs`; add compiler-backed rule IDs there when applicable.
+3. Add focused parser fixtures or compiler integration coverage.
+4. Extend the SDK benchmark manifest when the rule needs pinned SDK coverage.
 
 ## Tooling Relationship
 
