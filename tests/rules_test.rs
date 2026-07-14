@@ -1080,6 +1080,22 @@ fn sem009_allows_direct_remove() {
     );
 }
 
+#[test]
+fn sem009_does_not_match_different_storage_keys() {
+    let code = r#"
+fn cleanup(first: u32, second: u32) {
+    if Entries::<T>::contains_key(first) {
+        Entries::<T>::remove(second);
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEM009"),
+        "a contains_key read only proves redundancy for the same storage key: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM010: ^ used as exponentiation (XOR bug)
 // ==========================================================================
@@ -1566,11 +1582,76 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 }
+
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     assert!(
         !has_rule(&diags, "SEC001"),
         "SEC001 should not report Vec inputs converted to bounded collections in the dispatchable"
+    );
+}
+
+#[test]
+fn sec001_recognizes_cast_length_bounds_for_the_correct_parameter() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>, data: Vec<u8>, metadata: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        ensure!(data.len() as u32 <= T::MaxData::get(), Error::<T>::TooLarge);
+        Metadata::<T>::put(metadata);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec001 = diags
+        .iter()
+        .filter(|diag| diag.rule_id == "SEC001")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sec001.len(),
+        1,
+        "only unbounded metadata should remain: {sec001:?}"
+    );
+}
+
+#[test]
+fn sec001_does_not_treat_similar_identifiers_as_input_bounds() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        ensure!(metadata.len() <= T::MaxData::get(), Error::<T>::TooLarge);
+        Data::<T>::put(data);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC001"),
+        "a bound on metadata must not suppress an unbounded data input: {diags:?}"
+    );
+}
+
+#[test]
+fn sec001_treats_signed_or_root_as_callable_by_signed_origins() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>, data: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed_or_root(origin)?;
+        Data::<T>::put(data);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC001"),
+        "ensure_signed_or_root still permits unprivileged signed callers: {diags:?}"
     );
 }
 
