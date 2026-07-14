@@ -51,15 +51,17 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | TRM001 skips identifiers on lines containing strings or comments | Check sanitized code identifiers alongside configured string and comment text. | `trm001_checks_identifiers_on_lines_with_strings_and_comments` |
 | Test and benchmark path detection assumes POSIX separators | Normalize path separators before applying target-file heuristics. | `target_classification_accepts_windows_path_separators` |
 | Config documents ignored severity, setup, and benchmark options | Remove no-op schema entries and reject unknown configuration keys instead of silently accepting them. | `project_configuration_uses_the_supported_schema`, `deserialization_rejects_unknown_configuration_options` |
+| Overlapping CLI scan paths produce repeated, unsorted diagnostics | Normalize the combined syntax and compiler result set by full location/rule identity before rendering output. | `normalizes_order_and_removes_overlapping_scan_duplicates` |
+| Dynamic-library path joining can erase the caller's library search path | Retain the existing environment value when path joining cannot safely prepend the toolchain directory. | `preserves_existing_library_path_when_joining_fails` |
 
 ## Still Open
 
 The review is not fully resolved. The next implementation work should address:
 
-1. Remaining declared-but-unused heuristic options, especially benchmark paths and
-   patterns plus the test/mock ratio limits.
-2. Remaining source-rule precision issues, particularly bounds/dataflow matching,
-   string/comment stripping, root-guard dominance, and retired parser rules.
+1. Remaining source-rule precision issues, particularly `cfg_attr` handling and the
+   retired parser implementations that are not public production authority.
+2. Lossless compiler-driver file filtering for unusual source paths (the current
+   environment transport is comma-delimited).
 3. Rule-specific compiler-driver regression coverage for public compiler-backed
    SEC/VAL diagnostics. A source-rule test alone does not prove production behavior
    for a rule whose public authority is rustc.
