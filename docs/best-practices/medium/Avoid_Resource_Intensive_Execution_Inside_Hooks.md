@@ -1,0 +1,117 @@
+# Avoid Resource Intensive Execution Inside Hooks
+
+**Severity**: <span style="color:gold;">Medium</span>
+
+> **Linter coverage — Enforced.** Several rules directly report a strong subset — SEC010 (missing transactional layer in a hook), SEC011 (unbounded storage iteration), and SEC012 (unbounded clear_prefix) — though bounded-but-heavy work still needs benchmark review. See [SEC010](../../rules/SEC010.md), [SEC011](../../rules/SEC011.md), [SEC012](../../rules/SEC012.md).
+
+## Description
+
+Performing resource-intensive operations, such as iterating over large data sets, within runtime hooks like `on_finalize` can significantly impact block execution time and lead to performance bottlenecks. Hooks are executed automatically for every block, and if they contain computationally heavy tasks, they can reduce transaction throughput and degrade network performance, especially as on-chain activity scales.
+
+## What should be avoided
+
+Avoid conducting heavy computations or iterating through extensive data in hooks, as this adds unnecessary workload to every block. For example, consider the following inefficient approach in `on_finalize`, which processes votes for each proposal that ends within a block:
+
+```rust
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn on_finalize(block_number: T::BlockNumber) {
+        // Retrieve proposals that have ended at this block number
+        let proposals = EndedProposals::<T>::get(block_number);
+
+        for proposal_id in proposals {
+            let mut ayes = 0;
+            let mut nays = 0;
+
+            // Retrieve all votes for the current proposal
+            let votes = Votes::<T>::get(proposal_id);
+
+            for vote in votes {
+                match vote {
+                    VoteType::Aye => ayes = ayes.saturating_add(1),
+                    VoteType::Nay => nays = nays.saturating_add(1)
+                }
+            }
+
+            // Process `ayes` and `nays` results as needed
+        }
+    }
+}
+```
+
+In this example:
+
+- Counting votes for each finalized proposal during `on_finalize` leads to high resource usage and may exceed block weight limits, especially as the number of proposals and votes grows.
+
+## Best practice
+
+Optimize by performing the calculations within the extrinsics, maintaining incremental counters in storage, or enabling users to trigger the logic explicitly outside the hooks.
+
+### Option 1: Perform the execution within the extrinsic
+
+Track necessary values as they are submitted, distributing the computation workload across each transaction.
+
+```rust
+#[pallet::call_index(0)]
+#[pallet::weight(T::WeightInfo::some_vote())]
+pub fn some_vote(
+    origin: OriginFor<T>,
+    vote: VoteType
+) -> DispatchResult {
+    // Verification logic
+    ProposalVoteAmount::<T>::mutate(id, |item| -> Result<(), Error> {
+        match vote {
+            VoteType::Aye => *item.ayes = item.ayes.saturating_add(1),
+            VoteType::Nay => *item.nays = item.nays.saturating_add(1),
+        }
+    })?;
+
+    Ok(())
+}
+
+fn on_finalize(block_number: T::BlockNumber) {
+    // Retrieve proposals that have ended at this block number
+    let proposals = EndedProposals::<T>::get(block_number);
+
+    for proposal_id in proposals {
+        let (ayes, nays) = ProposalVoteAmount::<T>::get(proposal_id);
+        // Process `ayes` and `nays` results as needed
+    }
+}
+```
+
+### Option 2: Allow users to trigger the logic explicitly
+
+Allow users to close/finalize manually by explicitly calling an extrinsic when necessary, which avoids performing the work automatically in `on_finalize`.
+
+```rust
+#[pallet::call_index(0)]
+#[pallet::weight(T::WeightInfo::close_proposal())]
+pub fn close_proposal(
+    origin: OriginFor<T>,
+    proposal_id: u32
+) -> DispatchResult {
+    let proposal = Proposals::<T>::get(proposal_id);
+    ensure!(proposal.end_block < current_block, Error::<T>::ProposalHasNotEnded);
+
+    let mut ayes = 0;
+    let mut nays = 0;
+
+    let votes = Votes::<T>::get(proposal_id);
+
+    for vote in votes.iter() {
+        match vote {
+            VoteType::Aye => ayes = ayes.saturating_add(1),
+            VoteType::Nay => nays = nays.saturating_add(1),
+        }
+    }
+
+    // Process `ayes` and `nays` results as needed
+    Ok(())
+}
+```
+
+These approaches shift heavy computations away from automatic hooks and ensure more efficient block execution while maintaining network performance.
+
+---
+
+*Adapted from [Libro — Polkadot SDK Best Practices](https://libro.blockdeep.dev/medium/Avoid_Resource_Intensive_Execution_Inside_Hooks.html) by [BlockDeep](https://github.com/blockdeep/libro), used under the Apache-2.0 license. The **Linter coverage** note above is added by the polkadot-linter project.*
