@@ -219,12 +219,10 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
                 if has_attr(&item_impl.attrs, &["pallet", "call"]) {
                     for item in &item_impl.items {
                         if let ImplItem::Fn(item_fn) = item {
-                            if has_attr(&item_fn.attrs, &["pallet", "call_index"]) {
-                                self.names.push((
-                                    item_fn.sig.ident.to_string(),
-                                    span_line(item_fn.span()),
-                                ));
-                            }
+                            // FRAME assigns positional call indices when the attribute is
+                            // omitted, so every method in a pallet call impl is an extrinsic.
+                            self.names
+                                .push((item_fn.sig.ident.to_string(), span_line(item_fn.span())));
                         }
                     }
                 }
