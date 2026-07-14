@@ -11,6 +11,7 @@ use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
+    frame_model::active_cfg_attr_path_matches,
     rules::LintRule,
 };
 
@@ -42,6 +43,7 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
             .zip(segments.iter().rev().copied())
             .all(|(actual, expected)| actual == expected)
             && attr_segments.len() >= segments.len()
+        || active_cfg_attr_path_matches(attr, segments)
 }
 
 fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
