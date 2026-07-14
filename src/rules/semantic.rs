@@ -3235,7 +3235,7 @@ impl LintRule for CustomInvalidityReprU8 {
         }
 
         fn is_custom_invalidity_enum(name: &str) -> bool {
-            name == "CustomInvalidity" || name == "CustomValidity" || name.contains("Invalidity")
+            matches!(name, "CustomInvalidity" | "CustomValidity")
         }
 
         fn has_repr_u8(attrs: &[Attribute]) -> bool {

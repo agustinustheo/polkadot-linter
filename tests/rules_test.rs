@@ -1304,6 +1304,21 @@ fn sem013_allows_repr_u8() {
     );
 }
 
+#[test]
+fn sem013_ignores_unrelated_invalidity_enum_names() {
+    let code = r#"
+enum RuntimeInvalidity {
+    StaleProof,
+    MissingState,
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/extension.rs", code);
+    assert!(
+        !has_rule(&diags, "SEM013"),
+        "SEM013 applies only to the CustomInvalidity/CustomValidity convention: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM014: SubmitTransaction logs should use LOG_TARGET
 // ==========================================================================

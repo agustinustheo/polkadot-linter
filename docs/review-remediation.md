@@ -47,6 +47,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEM014 has narrow line windows for submission and log targets | Associate wrapped signed or unsigned submissions with the full nearby log macro and deduplicate reports by log site. | `sem014_handles_wrapped_unsigned_submission_and_long_log_target` |
 | SARIF omits diagnostic end lines | Serialize `endLine` whenever the diagnostic contains an end span. | `sarif_preserves_end_line_when_available` |
 | SEM002 skips nested local bindings | Recurse from every local binding so closure and nested initializer locals are inspected. | `sem002_detects_typed_collect_inside_closure` |
+| SEM013 treats every `*Invalidity` enum as a custom transaction invalidity code | Restrict the convention to the documented `CustomInvalidity` and `CustomValidity` enum names. | `sem013_ignores_unrelated_invalidity_enum_names` |
 
 ## Still Open
 
