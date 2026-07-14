@@ -39,6 +39,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | VAL001 reads comments, strings, and `Get` constants as storage access | Strip inline non-code before pattern matching and exclude `T::...::get()` type-level constants without removing storage-alias `::get()` coverage. | `val001_ignores_comments_strings_and_get_constants` |
 | VAL003 misses same-line write/validation order | Compare write and validation spans, including standalone macro statements on the same source line. | `val003_detects_validation_after_write_on_the_same_line` |
 | SEC017 chooses an earlier or identifier-internal `let` | Select the latest identifier-bound `let`/`let mut` before the capacity assignment. | `sec017_allows_vec_event_payloads_derived_from_weighted_inputs` |
+| SEC010 treats any matching function name as a hook and misses qualified transactional attributes | Analyze only `Hooks` trait impls and match the terminal `transactional` attribute segment. | `sec010_accepts_qualified_transactional_attributes`, `sec010_ignores_non_hooks_methods_with_hook_names` |
 
 ## Still Open
 

@@ -6700,19 +6700,36 @@ impl LintRule for MissingTransactionalInHook {
             rule_id: &'a str,
             rule_name: &'a str,
             mask: &'a [bool],
+            hooks_impl_depth: usize,
         }
 
         impl<'ast> Visit<'ast> for HookVisitor<'_> {
+            fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                let is_hooks_impl = item_impl
+                    .trait_
+                    .as_ref()
+                    .and_then(|(_, path, _)| path_last_ident(path))
+                    .as_deref()
+                    == Some("Hooks");
+                if is_hooks_impl {
+                    self.hooks_impl_depth += 1;
+                    visit::visit_item_impl(self, item_impl);
+                    self.hooks_impl_depth -= 1;
+                }
+            }
+
             fn visit_impl_item(&mut self, item: &'ast ImplItem) {
                 let ImplItem::Fn(item_fn) = item else {
                     visit::visit_impl_item(self, item);
                     return;
                 };
                 let hook_name = item_fn.sig.ident.to_string();
-                if !matches!(
-                    hook_name.as_str(),
-                    "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
-                ) || is_masked_span(self.mask, item_fn.span())
+                if self.hooks_impl_depth == 0
+                    || !matches!(
+                        hook_name.as_str(),
+                        "on_poll" | "on_idle" | "on_initialize" | "on_finalize"
+                    )
+                    || is_masked_span(self.mask, item_fn.span())
                 {
                     visit::visit_impl_item(self, item);
                     return;
@@ -6720,7 +6737,9 @@ impl LintRule for MissingTransactionalInHook {
 
                 let mut visitor = HookStorageVisitor {
                     write_count: 0,
-                    has_transactional: has_attr(&item_fn.attrs, &["transactional"]),
+                    has_transactional: item_fn.attrs.iter().any(|attr| {
+                        path_last_ident(attr.path()).as_deref() == Some("transactional")
+                    }),
                     has_fallible_path: false,
                 };
                 visitor.visit_block(&item_fn.block);
@@ -6762,6 +6781,7 @@ impl LintRule for MissingTransactionalInHook {
             rule_id: self.id(),
             rule_name: self.name(),
             mask: &test_mask,
+            hooks_impl_depth: 0,
         };
         visitor.visit_file(ast);
 
