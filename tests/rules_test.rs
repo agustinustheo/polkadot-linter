@@ -1014,6 +1014,26 @@ fn trm001_handles_non_ascii_before_inline_comments() {
     );
 }
 
+#[test]
+fn trm001_checks_identifiers_on_lines_with_strings_and_comments() {
+    let mut config = polkadot_linter::config::Config::default();
+    config.terminology.check_identifiers = true;
+    config
+        .terminology
+        .british_english
+        .insert("optimisation".to_string(), "optimization".to_string());
+
+    let diags = check_fixture_with_config(
+        "src/lib.rs",
+        "let optimisation = \"already optimized\"; // keep this value\n",
+        &config,
+    );
+    assert!(
+        has_rule(&diags, "TRM001"),
+        "TRM001 must inspect identifiers even when the line contains strings or comments: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM006: DbWeight missing proof size
 // ==========================================================================

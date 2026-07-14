@@ -1,5 +1,7 @@
 use regex::Regex;
 
+use super::semantic::strip_strings_and_line_comments;
+
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
@@ -58,40 +60,39 @@ impl LintRule for SpellingConventions {
 
             // FIX #8: Extract only the checkable text portions, not the whole line.
             // For code lines, we need to isolate comments and string literals separately.
-            let texts_to_check: Vec<&str> = if is_text_file {
-                vec![trimmed]
+            let texts_to_check: Vec<String> = if is_text_file {
+                vec![trimmed.to_string()]
             } else if is_comment {
                 let content = trimmed
                     .trim_start_matches("///")
                     .trim_start_matches("//!")
                     .trim_start_matches("//")
                     .trim();
-                vec![content]
+                vec![content.to_string()]
             } else if is_doc_attr {
-                vec![trimmed]
+                vec![trimmed.to_string()]
             } else {
                 // For code lines, extract only string literal contents and inline comments
                 let mut parts = Vec::new();
 
                 // Extract inline trailing comment if present
                 if let Some(comment_start) = find_line_comment(trimmed) {
-                    parts.push(&trimmed[comment_start + 2..]);
+                    parts.push(trimmed[comment_start + 2..].to_string());
                 }
 
                 // Extract string literal contents if configured
                 if config.terminology.check_strings {
                     for cap in string_literal_re.captures_iter(trimmed) {
                         if let Some(m) = cap.get(1) {
-                            parts.push(m.as_str());
+                            parts.push(m.as_str().to_string());
                         }
                     }
                 }
 
-                if parts.is_empty() && config.terminology.check_identifiers {
-                    vec![trimmed]
-                } else {
-                    parts
+                if config.terminology.check_identifiers {
+                    parts.push(strip_strings_and_line_comments(trimmed));
                 }
+                parts
             };
 
             if texts_to_check.is_empty() {
@@ -104,7 +105,7 @@ impl LintRule for SpellingConventions {
                 if let Ok(re) = Regex::new(&pattern) {
                     let found = texts_to_check
                         .iter()
-                        .any(|t| re.is_match(&t.to_lowercase()));
+                        .any(|text| re.is_match(&text.to_lowercase()));
                     if found {
                         diagnostics.push(Diagnostic {
                             rule_id: self.id().to_string(),
@@ -136,7 +137,7 @@ impl LintRule for SpellingConventions {
             for (forbidden, preferred) in &config.terminology.forbidden_terms {
                 let pattern = format!(r"\b{}\b", regex::escape(forbidden));
                 if let Ok(re) = Regex::new(&pattern) {
-                    let found = texts_to_check.iter().any(|t| re.is_match(t));
+                    let found = texts_to_check.iter().any(|text| re.is_match(text));
                     if found {
                         diagnostics.push(Diagnostic {
                             rule_id: self.id().to_string(),
