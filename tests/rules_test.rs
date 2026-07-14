@@ -6460,6 +6460,39 @@ pub fn batch(origin: OriginFor<T>, call: T::RuntimeCall, is_root: bool) -> Dispa
     );
 }
 
+#[test]
+fn sec015_does_not_whitelist_bypass_after_sibling_root_guard() {
+    let code = r#"
+pub fn dispatch_as_root(origin: OriginFor<T>, call: Box<T::RuntimeCall>) -> DispatchResult {
+    if call.is_batch() {
+        ensure_root(origin.clone())?;
+    }
+    call.dispatch_bypass_filter(origin)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC015"),
+        "a root guard inside a sibling branch cannot authorize a later bypass: {diags:?}"
+    );
+}
+
+#[test]
+fn sec015_does_not_whitelist_bypass_in_closure_after_root_guard() {
+    let code = r#"
+pub fn dispatch_as_root(origin: OriginFor<T>, call: Box<T::RuntimeCall>) -> DispatchResult {
+    ensure_root(origin.clone())?;
+    let dispatch = || call.dispatch_bypass_filter(origin.clone());
+    dispatch()
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC015"),
+        "a parent block root guard cannot authorize bypasses inside a closure: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEC016: Missing StorageVersion check in runtime upgrade
 // ==========================================================================

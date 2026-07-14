@@ -7614,25 +7614,6 @@ impl LintRule for DispatchBypassFilterInProduction {
             collector.names
         }
 
-        fn strict_root_guard_lines(block: &syn::Block) -> Vec<usize> {
-            struct RootGuardCollector {
-                lines: Vec<usize>,
-            }
-
-            impl<'ast> Visit<'ast> for RootGuardCollector {
-                fn visit_expr_try(&mut self, expr_try: &'ast syn::ExprTry) {
-                    if is_ensure_root_call(&expr_try.expr) {
-                        self.lines.push(span_line(expr_try.span()));
-                    }
-                    visit::visit_expr_try(self, expr_try);
-                }
-            }
-
-            let mut collector = RootGuardCollector { lines: Vec::new() };
-            collector.visit_block(block);
-            collector.lines
-        }
-
         struct DispatchBypassVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -7641,16 +7622,13 @@ impl LintRule for DispatchBypassFilterInProduction {
             rule_name: &'a str,
             mask: &'a [bool],
             root_flags: HashSet<String>,
-            strict_root_guard_lines: Vec<usize>,
+            root_guard_scopes: Vec<bool>,
             root_context_depth: usize,
         }
 
         impl DispatchBypassVisitor<'_> {
-            fn has_prior_strict_root_guard(&self, span: Span) -> bool {
-                let line = span_line(span);
-                self.strict_root_guard_lines
-                    .iter()
-                    .any(|guard_line| *guard_line < line)
+            fn current_scope_has_strict_root_guard(&self) -> bool {
+                self.root_guard_scopes.last().copied().unwrap_or(false)
             }
         }
 
@@ -7658,25 +7636,36 @@ impl LintRule for DispatchBypassFilterInProduction {
             fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
                 let previous_root_flags =
                     std::mem::replace(&mut self.root_flags, root_flag_names(&item_fn.block));
-                let previous_guard_lines = std::mem::replace(
-                    &mut self.strict_root_guard_lines,
-                    strict_root_guard_lines(&item_fn.block),
-                );
                 visit::visit_item_fn(self, item_fn);
                 self.root_flags = previous_root_flags;
-                self.strict_root_guard_lines = previous_guard_lines;
             }
 
             fn visit_impl_item_fn(&mut self, item_fn: &'ast syn::ImplItemFn) {
                 let previous_root_flags =
                     std::mem::replace(&mut self.root_flags, root_flag_names(&item_fn.block));
-                let previous_guard_lines = std::mem::replace(
-                    &mut self.strict_root_guard_lines,
-                    strict_root_guard_lines(&item_fn.block),
-                );
                 visit::visit_impl_item_fn(self, item_fn);
                 self.root_flags = previous_root_flags;
-                self.strict_root_guard_lines = previous_guard_lines;
+            }
+
+            fn visit_block(&mut self, block: &'ast syn::Block) {
+                self.root_guard_scopes.push(false);
+                visit::visit_block(self, block);
+                self.root_guard_scopes.pop();
+            }
+
+            fn visit_expr_try(&mut self, expr_try: &'ast syn::ExprTry) {
+                if is_ensure_root_call(&expr_try.expr) {
+                    if let Some(scope) = self.root_guard_scopes.last_mut() {
+                        *scope = true;
+                    }
+                }
+                visit::visit_expr_try(self, expr_try);
+            }
+
+            fn visit_expr_closure(&mut self, expr_closure: &'ast syn::ExprClosure) {
+                self.root_guard_scopes.push(false);
+                visit::visit_expr_closure(self, expr_closure);
+                self.root_guard_scopes.pop();
             }
 
             fn visit_expr_if(&mut self, expr_if: &'ast ExprIf) {
@@ -7697,7 +7686,7 @@ impl LintRule for DispatchBypassFilterInProduction {
                 if node.method == "dispatch_bypass_filter"
                     && !is_masked_span(self.mask, node.span())
                     && self.root_context_depth == 0
-                    && !self.has_prior_strict_root_guard(node.span())
+                    && !self.current_scope_has_strict_root_guard()
                 {
                     self.diagnostics.push(Diagnostic {
 						rule_id: self.rule_id.to_string(),
@@ -7727,7 +7716,7 @@ impl LintRule for DispatchBypassFilterInProduction {
             rule_name: self.name(),
             mask: &test_mask,
             root_flags: HashSet::new(),
-            strict_root_guard_lines: Vec::new(),
+            root_guard_scopes: Vec::new(),
             root_context_depth: 0,
         };
         visitor.visit_file(ast);
