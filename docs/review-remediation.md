@@ -43,6 +43,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | Source stripping mishandles block comments, character literals, and raw strings | Use a stateful Rust-literal/comment sanitizer for full-source consumers. | `ben002_does_not_treat_block_comments_as_verification`, `sem008_ignores_comments_and_literals_without_hiding_following_code` |
 | SEC003 misses qualified trait decode paths | Inspect the qualified self type of decode calls as well as the visible path. | `sec003_detects_qualified_runtime_call_decode_without_limit` |
 | SEC004 duplicates nested arithmetic and flags literal-only calculations | Deduplicate weight arithmetic by source line and ignore expressions whose operands are literal constants. | `sec004_reports_nested_runtime_arithmetic_once_per_line`, `sec004_allows_literal_weight_arithmetic` |
+| SEC015 lets any earlier root guard whitelist later bypasses | Track strict root guards in traversal order and only within the current block or closure scope. | `sec015_does_not_whitelist_bypass_after_sibling_root_guard`, `sec015_does_not_whitelist_bypass_in_closure_after_root_guard` |
 
 ## Still Open
 
