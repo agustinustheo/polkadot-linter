@@ -1509,9 +1509,20 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
         .path()
         .segments
         .iter()
-        .map(|segment| segment.ident.to_string());
-    let expected = segments.iter().copied();
-    attr_segments.eq(expected)
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    attr_segments
+        .iter()
+        .map(String::as_str)
+        .eq(segments.iter().copied())
+        || (segments.len() > 1
+            && attr_segments
+                .iter()
+                .map(String::as_str)
+                .rev()
+                .zip(segments.iter().rev().copied())
+                .all(|(actual, expected)| actual == expected)
+            && attr_segments.len() >= segments.len())
 }
 
 fn weight_attributes<'a>(ast: &'a SynFile, mask: &'a [bool]) -> Vec<&'a Attribute> {

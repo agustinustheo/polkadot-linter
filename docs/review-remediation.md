@@ -32,6 +32,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | BEN001 reports trait and impl declarations repeatedly | Deduplicate weight functions by name before matching benchmarks; end the text fallback when the WeightInfo block closes. | BEN001 rule suite |
 | BEN003 fallback only allows four lines for an extrinsic signature | Allow a bounded 32-line attribute/signature window. | BEN003 rule suite |
 | BEN003 ignores qualified FRAME pallet attributes | Match the `pallet::call` and `pallet::call_index` suffixes, preserving fully qualified FRAME forms. | `ben003_detects_qualified_pallet_call_attributes` |
+| Semantic FRAME-attribute rules ignore qualified paths | Match multi-segment FRAME attribute suffixes while retaining exact matching for one-segment language attributes. | `sem011_detects_weight_zero_in_qualified_frame_attribute` |
 | MOK001 ignores configured `new_test_ext` and counts callback arguments | Respect every configured mock pattern and inspect only call targets/receivers, not arbitrary call arguments. | MOK001 rule suite |
 | TST004 uses a separate test-file heuristic | Reuse the engine’s test and benchmark target classification. | TST004 rule suite |
 | Local builds can select an unsupported Rust version | Pin the same Rust 1.93.0 toolchain used by CI for ordinary Cargo commands. | `rust-toolchain.toml` |
