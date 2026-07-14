@@ -258,7 +258,11 @@ fn parse_macro_benchmark_name(line: &str) -> Option<String> {
     let trimmed = line.trim();
     let brace_idx = trimmed.find('{')?;
     let candidate = trimmed[..brace_idx].trim();
-    if candidate.is_empty() || candidate.contains(' ') || candidate.contains('(') {
+    if candidate.is_empty()
+        || candidate.contains(' ')
+        || candidate.contains('(')
+        || candidate.ends_with('!')
+    {
         return None;
     }
     if matches!(
@@ -274,10 +278,30 @@ fn parse_macro_benchmark_name(line: &str) -> Option<String> {
             | "where"
             | "type"
             | "benchmarks"
+            | "verify"
     ) {
         return None;
     }
     Some(candidate.to_string())
+}
+
+fn starts_benchmarks_macro(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(marker) = trimmed.find("benchmarks!") else {
+        return false;
+    };
+    let prefix = &trimmed[..marker];
+    prefix
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | ':'))
+        && trimmed[marker + "benchmarks!".len()..]
+            .trim_start()
+            .starts_with('{')
+}
+
+fn brace_delta(line: &str) -> i32 {
+    line.chars().filter(|&c| c == '{').count() as i32
+        - line.chars().filter(|&c| c == '}').count() as i32
 }
 
 fn find_block_end_from(lines: &[&str], start: usize) -> usize {
@@ -294,6 +318,22 @@ fn find_block_end_from(lines: &[&str], start: usize) -> usize {
         }
     }
     lines.len().saturating_sub(1)
+}
+
+fn macro_benchmark_end(lines: &[&str], body_end: usize) -> usize {
+    let Some(next) = lines
+        .iter()
+        .enumerate()
+        .skip(body_end + 1)
+        .find_map(|(index, line)| (!line.trim().is_empty()).then_some(index))
+    else {
+        return body_end;
+    };
+    if lines[next].trim_start().starts_with("verify") {
+        find_block_end_from(lines, next)
+    } else {
+        body_end
+    }
 }
 
 fn has_verification_in_text(body_lines: &[&str], verification_patterns: &[String]) -> bool {
@@ -513,12 +553,14 @@ impl LintRule for BenchmarkVerification {
         while i < lines.len() {
             let trimmed = lines[i].trim();
 
-            if trimmed.starts_with("benchmarks!") {
+            if starts_benchmarks_macro(trimmed) {
                 in_benchmarks_macro = true;
-                macro_depth = 0;
+                macro_depth = brace_delta(trimmed);
+                i += 1;
+                continue;
             }
 
-            let is_proc_benchmark = trimmed == "#[benchmark]";
+            let is_proc_benchmark = trimmed.starts_with("#[benchmark") && trimmed.ends_with(']');
             let is_macro_benchmark = in_benchmarks_macro
                 && !is_proc_benchmark
                 && parse_macro_benchmark_name(trimmed).is_some();
@@ -542,7 +584,12 @@ impl LintRule for BenchmarkVerification {
                 };
 
                 let body_end = find_block_end_from(&lines, fn_start);
-                let body_lines = &lines[fn_start..=body_end];
+                let benchmark_end = if is_macro_benchmark {
+                    macro_benchmark_end(&lines, body_end)
+                } else {
+                    body_end
+                };
+                let body_lines = &lines[fn_start..=benchmark_end];
                 if !has_verification_in_text(body_lines, &config.benchmarking.verification_patterns)
                 {
                     diagnostics.push(Diagnostic {
@@ -553,7 +600,7 @@ impl LintRule for BenchmarkVerification {
                         file: ctx.path.clone(),
                         line: fn_start + 1,
                         column: None,
-                        end_line: Some(body_end + 1),
+                        end_line: Some(benchmark_end + 1),
                         message: format!(
                             "Benchmark `{}` has no verification/postcondition check",
                             fn_name
@@ -569,11 +616,10 @@ impl LintRule for BenchmarkVerification {
                         ),
                     });
                 }
-                i = body_end + 1;
+                i = benchmark_end + 1;
             } else {
                 if in_benchmarks_macro {
-                    macro_depth += lines[i].chars().filter(|&c| c == '{').count() as i32;
-                    macro_depth -= lines[i].chars().filter(|&c| c == '}').count() as i32;
+                    macro_depth += brace_delta(lines[i]);
                     if macro_depth <= 0 {
                         in_benchmarks_macro = false;
                     }

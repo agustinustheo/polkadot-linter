@@ -111,20 +111,19 @@ fn type_args(type_value: &Value) -> Option<&Vec<Value>> {
         .and_then(Value::as_array)
 }
 
-fn type_contains_unbounded_collection(type_value: &Value, inside_bounded: bool) -> bool {
+fn type_contains_unbounded_collection(type_value: &Value, _inside_bounded: bool) -> bool {
     if let Some(path) = type_value
         .pointer("/resolved_path/path")
         .and_then(Value::as_str)
     {
         let name = path.rsplit("::").next().unwrap_or(path);
-        let is_bounded = inside_bounded || is_bounded_collection(name);
-        if !is_bounded && is_unbounded_collection(name) {
+        if is_unbounded_collection(name) {
             return true;
         }
         return type_args(type_value).is_some_and(|args| {
             args.iter().any(|arg| {
                 arg.get("type")
-                    .is_some_and(|ty| type_contains_unbounded_collection(ty, is_bounded))
+                    .is_some_and(|ty| type_contains_unbounded_collection(ty, false))
             })
         });
     }
@@ -132,10 +131,10 @@ fn type_contains_unbounded_collection(type_value: &Value, inside_bounded: bool) 
     match type_value {
         Value::Array(values) => values
             .iter()
-            .any(|value| type_contains_unbounded_collection(value, inside_bounded)),
+            .any(|value| type_contains_unbounded_collection(value, false)),
         Value::Object(map) => map
             .values()
-            .any(|value| type_contains_unbounded_collection(value, inside_bounded)),
+            .any(|value| type_contains_unbounded_collection(value, false)),
         _ => false,
     }
 }
@@ -144,13 +143,6 @@ fn is_unbounded_collection(name: &str) -> bool {
     matches!(
         name,
         "Vec" | "BTreeMap" | "BTreeSet" | "BinaryHeap" | "LinkedList" | "VecDeque"
-    )
-}
-
-fn is_bounded_collection(name: &str) -> bool {
-    matches!(
-        name,
-        "BoundedVec" | "WeakBoundedVec" | "BoundedBTreeMap" | "BoundedBTreeSet"
     )
 }
 
@@ -172,6 +164,7 @@ fn docs_mark_capacity_limited(item: &Value) -> bool {
     let lower = docs.to_ascii_lowercase();
     let admits_unbounded = lower.contains("no global maximum")
         || lower.contains("no global bound")
+        || lower.contains("no maximum capacity")
         || lower.contains("unbounded");
     if admits_unbounded {
         return false;
