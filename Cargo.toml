@@ -24,7 +24,7 @@ name = "polkadot-linter"
 path = "src/main.rs"
 
 [dependencies]
-syn = { version = "2", features = ["full", "parsing", "visit"] }
+syn = { version = "2", features = ["full", "parsing", "visit", "visit-mut"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
 clap = { version = "4", features = ["derive"] }

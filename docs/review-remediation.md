@@ -35,7 +35,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | BEN003 ignores qualified FRAME pallet attributes | Match the `pallet::call` and `pallet::call_index` suffixes, preserving fully qualified FRAME forms. | `ben003_detects_qualified_pallet_call_attributes` |
 | Semantic FRAME-attribute rules ignore qualified paths | Match multi-segment FRAME attribute suffixes while retaining exact matching for one-segment language attributes. | `sem011_detects_weight_zero_in_qualified_frame_attribute` |
 | Compiler-backed weight rules cannot distinguish active from inactive `cfg_attr` attributes | Expand attributes with rustc's active Cargo configuration before parsing the authored attribute source, so only the selected configuration contributes weight evidence. | `check-rustc-weight-attributes.sh` |
-| Source rules miss unconditionally active `cfg_attr` FRAME attributes | Expand only predicates that are provably true or false without assuming Cargo feature values; feature-dependent source attributes remain unresolved rather than producing false positives. | `ben003_recognizes_provably_active_cfg_pallet_call_attributes`, `sem011_respects_provable_cfg_attribute_truth` |
+| Source rules miss feature-controlled `cfg_attr` FRAME attributes | Resolve `cfg_attr` using the same default, disabled-default, and explicit Cargo feature selection as the CLI/compiler pipeline; keep custom cfg predicates unresolved instead of guessing. | `source_analysis_uses_selected_cargo_features_for_cfg_attrs`, `check-source-cfg-attributes.sh` |
 | MOK001 ignores configured `new_test_ext` and counts callback arguments | Respect every configured mock pattern and inspect only call targets/receivers, not arbitrary call arguments. | MOK001 rule suite |
 | TST004 uses a separate test-file heuristic | Reuse the engine’s test and benchmark target classification. | TST004 rule suite |
 | Local builds can select an unsupported Rust version | Pin the same Rust 1.93.0 toolchain used by CI for ordinary Cargo commands. | `rust-toolchain.toml` |
@@ -68,12 +68,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 
 The review is not fully resolved. The next implementation work should address:
 
-1. Remaining source-rule precision issues, particularly `cfg_attr`-controlled
-   FRAME attributes in source-authoritative rules. Compiler-backed weight rules
-   now use rustc's pre-expansion configured attributes; source rules still need
-   compiler-to-authored source mapping before feature-dependent attributes can
-   be handled exactly.
-2. Rule-specific compiler-driver regression coverage for every public
+1. Rule-specific compiler-driver regression coverage for every public
    compiler-backed rule. The current pinned-SDK gate covers the hard security
    rules and `VAL002`; a source-rule test alone does not prove production
    behavior where rustc is authoritative.

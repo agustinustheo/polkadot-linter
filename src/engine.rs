@@ -6,7 +6,7 @@ use walkdir::WalkDir;
 use crate::{
     config::Config,
     diagnostics::Diagnostic,
-    project_model::{ProjectModel, SourceTargetKind},
+    project_model::{expand_active_cfg_attrs, ProjectModel, SourceTargetKind},
     rules::{self, LintRule},
 };
 
@@ -55,8 +55,18 @@ impl LintEngine {
     }
 
     pub fn scan(&self, root: &Path) -> Vec<Diagnostic> {
+        self.scan_with_cargo_features(root, false, &[])
+    }
+
+    pub fn scan_with_cargo_features(
+        &self,
+        root: &Path,
+        no_default_features: bool,
+        features: &[String],
+    ) -> Vec<Diagnostic> {
         let mut diagnostics = Vec::new();
-        let project_model = ProjectModel::discover(root);
+        let project_model =
+            ProjectModel::discover_with_features(root, no_default_features, features);
         if let Some(model) = &project_model {
             log::debug!(
                 "Loaded project model for {} with {} rustc cfgs",
@@ -113,6 +123,17 @@ impl LintEngine {
                 .map(|model| model.target_kinds_for_file(path))
                 .unwrap_or_default();
 
+            let mut ast = if is_rust {
+                syn::parse_file(&content).ok()
+            } else {
+                None
+            };
+            if let (Some(model), Some(ast)) = (&project_model, &mut ast) {
+                if let Some(active_cfg) = model.active_cfg_for_file(path) {
+                    expand_active_cfg_attrs(ast, active_cfg);
+                }
+            }
+
             let file_ctx = FileContext {
                 path: path.to_path_buf(),
                 rel_path: rel_path.to_path_buf(),
@@ -128,11 +149,7 @@ impl LintEngine {
                     .any(|kind| matches!(kind, SourceTargetKind::Bench))
                     || Self::is_benchmark_file(path),
                 source_target_kinds,
-                ast: if is_rust {
-                    syn::parse_file(&content).ok()
-                } else {
-                    None
-                },
+                ast,
             };
 
             for rule in &self.rules {
@@ -199,7 +216,9 @@ pub struct FileContext<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs, path::Path};
+
+    use crate::config::Config;
 
     use super::LintEngine;
 
@@ -212,5 +231,70 @@ mod tests {
         assert!(LintEngine::is_benchmark_file(Path::new(
             r"project\benchmarks\weights.rs"
         )));
+    }
+
+    #[test]
+    fn source_analysis_uses_selected_cargo_features_for_cfg_attrs() {
+        let dir = tempfile::tempdir().expect("temporary crate should be created");
+        fs::create_dir_all(dir.path().join("src")).expect("source directory should be created");
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            r#"
+[package]
+name = "cfg-attribute-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["default-weight"]
+default-weight = []
+explicit-weight = []
+"#,
+        )
+        .expect("manifest should be written");
+        fs::write(
+            dir.path().join("src/lib.rs"),
+            r#"
+#[cfg_attr(feature = "default-weight", pallet::weight(Weight::zero()))]
+pub fn default_weight() {}
+
+#[cfg_attr(feature = "explicit-weight", pallet::weight(Weight::zero()))]
+pub fn explicit_weight() {}
+
+#[cfg_attr(not(custom_cfg), pallet::weight(Weight::zero()))]
+pub fn custom_cfg_weight() {}
+"#,
+        )
+        .expect("source should be written");
+
+        let mut engine = LintEngine::new(Config::default());
+        engine.filter_rules(&["SEM011".to_string()]);
+
+        let defaults = engine.scan(dir.path());
+        assert_eq!(
+            defaults
+                .iter()
+                .filter(|diagnostic| diagnostic.rule_id == "SEM011")
+                .count(),
+            1,
+            "default Cargo features should activate the matching cfg_attr"
+        );
+
+        let without_defaults = engine.scan_with_cargo_features(dir.path(), true, &[]);
+        assert!(
+            without_defaults.is_empty(),
+            "--no-default-features must remove source cfg_attr evidence"
+        );
+
+        let explicit =
+            engine.scan_with_cargo_features(dir.path(), true, &["explicit-weight".to_string()]);
+        assert_eq!(
+            explicit
+                .iter()
+                .filter(|diagnostic| diagnostic.rule_id == "SEM011")
+                .count(),
+            1,
+            "explicit Cargo features should activate matching source cfg_attr values"
+        );
     }
 }
