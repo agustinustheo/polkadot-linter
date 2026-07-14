@@ -637,39 +637,157 @@ fn merge_masks(left: &[bool], right: &[bool]) -> Vec<bool> {
         .collect()
 }
 
-pub(crate) fn strip_strings_and_line_comments(line: &str) -> String {
-    let mut stripped = String::with_capacity(line.len());
-    let mut chars = line.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
+#[derive(Default)]
+pub(crate) struct SourceSanitizer {
+    state: SourceSanitizerState,
+}
 
-    while let Some(ch) = chars.next() {
-        if in_string {
-            if escaped {
-                escaped = false;
-                continue;
-            }
-            match ch {
-                '\\' => escaped = true,
-                '"' => {
-                    in_string = false;
-                    stripped.push(' ');
+#[derive(Default)]
+enum SourceSanitizerState {
+    #[default]
+    Code,
+    BlockComment {
+        depth: usize,
+    },
+    String {
+        escaped: bool,
+    },
+    RawString {
+        hashes: usize,
+    },
+}
+
+impl SourceSanitizer {
+    pub(crate) fn strip_line(&mut self, line: &str) -> String {
+        let chars = line.chars().collect::<Vec<_>>();
+        let mut stripped = String::with_capacity(line.len());
+        let mut index = 0;
+
+        while index < chars.len() {
+            match &mut self.state {
+                SourceSanitizerState::Code => {
+                    if chars[index] == '/' && chars.get(index + 1) == Some(&'/') {
+                        stripped.extend(std::iter::repeat_n(' ', chars.len() - index));
+                        break;
+                    }
+                    if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+                        self.state = SourceSanitizerState::BlockComment { depth: 1 };
+                        stripped.push_str("  ");
+                        index += 2;
+                        continue;
+                    }
+                    if let Some((length, hashes)) = raw_string_start(&chars, index) {
+                        self.state = SourceSanitizerState::RawString { hashes };
+                        stripped.extend(std::iter::repeat_n(' ', length));
+                        index += length;
+                        continue;
+                    }
+                    if chars[index] == '"' {
+                        self.state = SourceSanitizerState::String { escaped: false };
+                        stripped.push(' ');
+                        index += 1;
+                        continue;
+                    }
+                    if chars[index] == 'b' && chars.get(index + 1) == Some(&'"') {
+                        self.state = SourceSanitizerState::String { escaped: false };
+                        stripped.push_str("  ");
+                        index += 2;
+                        continue;
+                    }
+                    if let Some(length) = char_literal_length(&chars, index) {
+                        stripped.extend(std::iter::repeat_n(' ', length));
+                        index += length;
+                        continue;
+                    }
+                    stripped.push(chars[index]);
+                    index += 1;
                 }
-                _ => {}
+                SourceSanitizerState::BlockComment { depth } => {
+                    if chars[index] == '/' && chars.get(index + 1) == Some(&'*') {
+                        *depth += 1;
+                        stripped.push_str("  ");
+                        index += 2;
+                    } else if chars[index] == '*' && chars.get(index + 1) == Some(&'/') {
+                        *depth -= 1;
+                        stripped.push_str("  ");
+                        index += 2;
+                        if *depth == 0 {
+                            self.state = SourceSanitizerState::Code;
+                        }
+                    } else {
+                        stripped.push(' ');
+                        index += 1;
+                    }
+                }
+                SourceSanitizerState::String { escaped } => {
+                    let character = chars[index];
+                    stripped.push(' ');
+                    index += 1;
+                    if *escaped {
+                        *escaped = false;
+                    } else if character == '\\' {
+                        *escaped = true;
+                    } else if character == '"' {
+                        self.state = SourceSanitizerState::Code;
+                    }
+                }
+                SourceSanitizerState::RawString { hashes } => {
+                    if chars[index] == '"' && chars[index + 1..].starts_with(&vec!['#'; *hashes]) {
+                        stripped.extend(std::iter::repeat_n(' ', hashes.saturating_add(1)));
+                        index += hashes.saturating_add(1);
+                        self.state = SourceSanitizerState::Code;
+                    } else {
+                        stripped.push(' ');
+                        index += 1;
+                    }
+                }
             }
-            continue;
         }
-        if ch == '"' {
-            in_string = true;
-            stripped.push(' ');
-            continue;
-        }
-        if ch == '/' && matches!(chars.peek(), Some('/')) {
-            break;
-        }
-        stripped.push(ch);
+
+        stripped
     }
-    stripped
+}
+
+pub(crate) fn strip_strings_and_line_comments(line: &str) -> String {
+    SourceSanitizer::default().strip_line(line)
+}
+
+fn raw_string_start(chars: &[char], index: usize) -> Option<(usize, usize)> {
+    let mut cursor = index;
+    if chars.get(cursor) == Some(&'b') {
+        cursor += 1;
+    }
+    if chars.get(cursor) != Some(&'r') {
+        return None;
+    }
+    cursor += 1;
+    let hashes_start = cursor;
+    while chars.get(cursor) == Some(&'#') {
+        cursor += 1;
+    }
+    (chars.get(cursor) == Some(&'"')).then_some((cursor - index + 1, cursor - hashes_start))
+}
+
+fn char_literal_length(chars: &[char], index: usize) -> Option<usize> {
+    if chars.get(index) != Some(&'\'') {
+        return None;
+    }
+    let mut cursor = index + 1;
+    if chars.get(cursor) == Some(&'\\') {
+        cursor += 1;
+        if chars.get(cursor) == Some(&'u') && chars.get(cursor + 1) == Some(&'{') {
+            cursor += 2;
+            while chars.get(cursor).is_some_and(|character| *character != '}') {
+                cursor += 1;
+            }
+            cursor += 1;
+        } else {
+            cursor += 1;
+        }
+    } else {
+        cursor += 1;
+    }
+    (chars.get(cursor) == Some(&'\'')).then_some(cursor - index + 1)
 }
 
 fn ast_file<'a>(ctx: &'a FileContext<'a>) -> Option<&'a SynFile> {
@@ -1677,12 +1795,13 @@ impl LintRule for ValidationBeforeHeavyRead {
         let mut first_heavy_op: Option<(usize, String)> = None;
         let mut heavy_op_bindings: Option<Vec<String>> = None;
 
+        let mut sanitizer = SourceSanitizer::default();
         for (i, line) in lines.iter().enumerate() {
             if non_production_mask.get(i).copied().unwrap_or(false) {
                 continue;
             }
             let trimmed = line.trim();
-            let code = strip_strings_and_line_comments(trimmed);
+            let code = sanitizer.strip_line(trimmed);
 
             // Skip comments and attributes
             if trimmed.starts_with("//") || trimmed.starts_with("#[") || trimmed.starts_with("///")
@@ -2606,12 +2725,13 @@ impl LintRule for SpStdDeprecated {
             return None;
         }
 
+        let mut sanitizer = SourceSanitizer::default();
         let diagnostics = ctx
             .content
             .lines()
             .enumerate()
             .filter_map(|(idx, line)| {
-                let sanitized = strip_strings_and_line_comments(line);
+                let sanitized = sanitizer.strip_line(line);
                 sanitized.contains("sp_std::").then(|| Diagnostic {
                     rule_id: self.id().to_string(),
                     rule_name: self.name().to_string(),

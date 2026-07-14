@@ -769,6 +769,23 @@ fn noop() {
 }
 
 #[test]
+fn ben002_does_not_treat_block_comments_as_verification() {
+    let code = r#"
+#[benchmark]
+fn noop() {
+    /*
+    assert_eq!(1, 1);
+    */
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert!(
+        has_rule(&diags, "BEN002"),
+        "BEN002 should not accept assertions inside block comments: {diags:?}"
+    );
+}
+
+#[test]
 fn ben002_allows_ensure_postconditions_outside_measured_block() {
     let code = r#"
 #[benchmark]
@@ -1072,6 +1089,30 @@ fn build() -> Vec<u32> {
     assert!(
         has_rule(&diags, "SEM008"),
         "SEM008 should fire on grouped sp_std imports and macro usage"
+    );
+}
+
+#[test]
+fn sem008_ignores_comments_and_literals_without_hiding_following_code() {
+    let code = r##"
+/*
+use sp_std::vec::Vec;
+*/
+fn build() {
+    let quote = '"'; let _example = r#"sp_std::vec::Vec"#;
+    use sp_std::vec::Vec;
+}
+"##;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sem008_lines = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "SEM008")
+        .map(|diagnostic| diagnostic.line)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sem008_lines,
+        vec![7],
+        "only the real sp_std import should be reported: {diags:?}"
     );
 }
 
