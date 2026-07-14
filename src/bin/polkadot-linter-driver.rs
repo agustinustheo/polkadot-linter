@@ -2,9 +2,11 @@
 
 extern crate rustc_ast;
 extern crate rustc_driver;
+extern crate rustc_expand;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
+extern crate rustc_session;
 extern crate rustc_span;
 
 use std::{
@@ -97,6 +99,7 @@ impl Callbacks for PolkadotCallbacks {
         krate: &mut rustc_ast::ast::Crate,
     ) -> Compilation {
         let mut visitor = ParsedWeightAttributeVisitor {
+            sess: &compiler.sess,
             source_map: compiler.sess.source_map(),
             parsed_attributes: &mut self.parsed_weight_attributes,
             parsed_item_attributes: &mut self.parsed_item_attributes,
@@ -2943,6 +2946,7 @@ fn parse_pallet_weight_attributes(
 }
 
 struct ParsedWeightAttributeVisitor<'a> {
+    sess: &'a rustc_session::Session,
     source_map: &'a SourceMap,
     parsed_attributes: &'a mut Vec<ParsedWeightAttribute>,
     parsed_item_attributes: &'a mut Vec<ParsedItemAttributes>,
@@ -2956,6 +2960,7 @@ impl ParsedWeightAttributeVisitor<'_> {
         span: Span,
         attributes: &[rustc_ast::ast::Attribute],
     ) {
+        let attributes = rustc_expand::config::pre_configure_attrs(self.sess, attributes);
         if attributes.iter().any(|attribute| {
             matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if normal.item.path.segments.last().is_some_and(|segment| segment.ident.name.as_str() == "transactional"))
         }) {
@@ -2995,25 +3000,25 @@ impl ParsedWeightAttributeVisitor<'_> {
     }
 
     fn collect_item_attributes(&mut self, item: &rustc_ast::ast::Item) {
+        let attributes = rustc_expand::config::pre_configure_attrs(self.sess, &item.attrs);
         let item_name = match &item.kind {
             rustc_ast::ast::ItemKind::TyAlias(alias) => alias.ident.name.as_str(),
             rustc_ast::ast::ItemKind::Enum(ident, ..) => ident.name.as_str(),
             _ => return,
         };
-        let storage = item.attrs.iter().any(|attribute| {
+        let storage = attributes.iter().any(|attribute| {
             matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "storage"]))
         });
-        let unbounded = item.attrs.iter().any(|attribute| {
+        let unbounded = attributes.iter().any(|attribute| {
             matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "unbounded"]))
         });
-        let event = item.attrs.iter().any(|attribute| {
+        let event = attributes.iter().any(|attribute| {
             matches!(&attribute.kind, rustc_ast::ast::AttrKind::Normal(normal) if ast_path_matches(&normal.item.path, &["pallet", "event"]))
         });
         if !(storage || unbounded || event) {
             return;
         }
-        let internal_numeric_layout = item
-            .attrs
+        let internal_numeric_layout = attributes
             .iter()
             .filter_map(|attribute| self.source_map.span_to_snippet(attribute.span).ok())
             .map(|source| source.to_ascii_lowercase())
@@ -3064,10 +3069,19 @@ impl<'ast> ast_visit::Visitor<'ast> for ParsedWeightAttributeVisitor<'_> {
 }
 
 fn ast_path_matches(path: &rustc_ast::Path, expected: &[&str]) -> bool {
-    path.segments
+    let segments = path
+        .segments
         .iter()
         .map(|segment| segment.ident.name.as_str())
-        .eq(expected.iter().copied())
+        .collect::<Vec<_>>();
+    segments.iter().copied().eq(expected.iter().copied())
+        || (expected.len() > 1
+            && segments.len() >= expected.len()
+            && segments
+                .iter()
+                .rev()
+                .zip(expected.iter().rev())
+                .all(|(actual, expected)| *actual == *expected))
 }
 
 fn attribute_block_belongs_to_definition(attribute_block: &str) -> bool {
@@ -3088,10 +3102,23 @@ fn starts_rust_item(line: &str) -> bool {
 }
 
 fn syn_path_matches(path: &syn::Path, expected: &[&str]) -> bool {
-    path.segments
+    let segments = path
+        .segments
         .iter()
         .map(|segment| segment.ident.to_string())
-        .eq(expected.iter().map(|segment| (*segment).to_string()))
+        .collect::<Vec<_>>();
+    segments
+        .iter()
+        .map(String::as_str)
+        .eq(expected.iter().copied())
+        || (expected.len() > 1
+            && segments.len() >= expected.len()
+            && segments
+                .iter()
+                .map(String::as_str)
+                .rev()
+                .zip(expected.iter().rev().copied())
+                .all(|(actual, expected)| actual == expected))
 }
 
 fn is_frame_dispatchable(
