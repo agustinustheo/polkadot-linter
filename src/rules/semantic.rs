@@ -3352,32 +3352,51 @@ impl LintRule for SubmitTransactionLogTarget {
             .any(|needle| line.contains(needle))
         }
 
+        fn log_macro_end(lines: &[&str], start: usize) -> usize {
+            let mut paren_depth = 0i32;
+            for (offset, line) in lines[start..start.saturating_add(32).min(lines.len())]
+                .iter()
+                .enumerate()
+            {
+                paren_depth += line.chars().filter(|character| *character == '(').count() as i32;
+                paren_depth -= line.chars().filter(|character| *character == ')').count() as i32;
+                if paren_depth <= 0 {
+                    return start + offset;
+                }
+            }
+            lines.len().saturating_sub(1)
+        }
+
         let mut diagnostics = Vec::new();
         let lines: Vec<&str> = ctx.content.lines().collect();
         let test_mask = cfg_test_module_mask(ctx.content);
+        let mut reported_log_lines = HashSet::new();
 
         for (i, line) in lines.iter().enumerate() {
-            if test_mask[i]
-                || !line.contains("SubmitTransaction::<")
-                || !line.contains("submit_transaction")
-            {
+            if test_mask[i] || !line.contains("SubmitTransaction::<") {
                 continue;
             }
 
-            let search_end = (i + 12).min(lines.len());
+            let search_end = (i + 24).min(lines.len());
+            let call_window = lines[i..search_end].join("\n");
+            if !call_window.contains("submit_transaction")
+                && !call_window.contains("submit_unsigned_transaction")
+            {
+                continue;
+            }
             for j in i..search_end {
                 if test_mask[j] || !is_log_macro_line(lines[j]) {
                     continue;
                 }
 
-                let log_end = (j + 5).min(lines.len()).saturating_sub(1);
+                let log_end = log_macro_end(&lines, j);
                 let log_window = (j..=log_end)
                     .filter(|&k| !test_mask[k])
                     .map(|k| lines[k])
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                if !log_window.contains("target:") {
+                if !log_window.contains("target:") && reported_log_lines.insert(j) {
                     diagnostics.push(Diagnostic {
                         rule_id: self.id().to_string(),
                         rule_name: self.name().to_string(),

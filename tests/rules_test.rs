@@ -1323,6 +1323,27 @@ fn log_other_issue() {
     );
 }
 
+#[test]
+fn sem014_handles_wrapped_unsigned_submission_and_long_log_target() {
+    let code = r#"
+fn submit() {
+    let transaction = SubmitTransaction::<T>::new(payload);
+    transaction
+        .submit_unsigned_transaction()
+        .expect("submission succeeds");
+    log::warn!(
+        target: LOG_TARGET,
+        "unable to submit transaction with a deliberately long and detailed diagnostic message",
+    );
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEM014"),
+        "SEM014 should associate rustfmt-wrapped unsigned submission with its full log macro: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM015: #[pallet::authorize] should have #[pallet::weight_of_authorize]
 // ==========================================================================
