@@ -5516,11 +5516,27 @@ pub fn update_config(origin: OriginFor<T>, key: u32, item: u32) -> DispatchResul
     ensure_signed(origin)?;
     Ok(())
 }
+
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     assert!(
         !has_rule(&diags, "VAL003"),
         "VAL003 should not treat try_mutate/try_append as unconditional writes"
+    );
+}
+
+#[test]
+fn val003_detects_validation_after_write_on_the_same_line() {
+    let code = r#"
+pub fn update(value: u32) -> DispatchResult {
+    Values::<T>::put(value); ensure!(value > 0, Error::<T>::InvalidValue);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "VAL003"),
+        "same-line validation after a storage write must be reported: {diags:?}"
     );
 }
 
@@ -6749,9 +6765,11 @@ impl<T: Config> Pallet<T> {
         items: Vec<T::ItemId>,
     ) -> DispatchResult {
         let _ = ensure_signed(origin)?;
+        let mut total = 0u32;
         let mut successful = Vec::with_capacity(items.len());
         for item in items.into_iter() {
             if Self::try_redeposit(&collection, &item).is_ok() {
+                total = total.saturating_add(1);
                 successful.push(item);
             }
         }

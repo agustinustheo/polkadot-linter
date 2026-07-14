@@ -6429,7 +6429,7 @@ impl LintRule for StorageWriteBeforeValidation {
             }
         }
 
-        fn expr_storage_write(expr: &Expr) -> Option<String> {
+        fn expr_storage_write(expr: &Expr) -> Option<(Span, String)> {
             struct WriteFinder {
                 found: Option<(Span, String)>,
             }
@@ -6451,7 +6451,13 @@ impl LintRule for StorageWriteBeforeValidation {
 
             let mut finder = WriteFinder { found: None };
             finder.visit_expr(expr);
-            finder.found.map(|(_, path)| path)
+            finder.found
+        }
+
+        fn validation_follows_write(write_span: Span, validation_span: Span) -> bool {
+            let write = write_span.start();
+            let validation = validation_span.start();
+            (validation.line, validation.column) > (write.line, write.column)
         }
 
         struct ValidationOrderVisitor<'a> {
@@ -6465,7 +6471,7 @@ impl LintRule for StorageWriteBeforeValidation {
 
         impl ValidationOrderVisitor<'_> {
             fn inspect_block(&mut self, block: &syn::Block) {
-                let mut first_write: Option<(usize, String)> = None;
+                let mut first_write: Option<(Span, String)> = None;
 
                 for stmt in &block.stmts {
                     if is_masked_span(self.mask, stmt.span()) {
@@ -6477,18 +6483,20 @@ impl LintRule for StorageWriteBeforeValidation {
                         syn::Stmt::Local(local) => {
                             if let Some(init) = &local.init {
                                 if first_write.is_none() {
-                                    first_write =
-                                        expr_storage_write(&init.expr).map(|path| (line, path));
+                                    first_write = expr_storage_write(&init.expr);
                                 }
-                                if let Some((write_line, write_pattern)) = &first_write {
-                                    if expr_is_validation(&init.expr) && line > *write_line {
+                                if let Some((write_span, write_pattern)) = &first_write {
+                                    if expr_is_validation(&init.expr)
+                                        && validation_follows_write(*write_span, init.expr.span())
+                                    {
+                                        let write_line = span_line(*write_span);
                                         self.diagnostics.push(Diagnostic {
                                             rule_id: self.rule_id.to_string(),
                                             rule_name: self.rule_name.to_string(),
                                             category: RuleCategory::Semantic,
                                             severity: self.severity,
                                             file: self.file.to_path_buf(),
-                                            line: *write_line,
+                                            line: write_line,
                                             column: None,
                                             end_line: Some(line),
                                             message: format!(
@@ -6510,17 +6518,52 @@ impl LintRule for StorageWriteBeforeValidation {
                         }
                         syn::Stmt::Expr(expr, _) => {
                             if first_write.is_none() {
-                                first_write = expr_storage_write(expr).map(|path| (line, path));
+                                first_write = expr_storage_write(expr);
                             }
-                            if let Some((write_line, write_pattern)) = &first_write {
-                                if expr_is_validation(expr) && line > *write_line {
+                            if let Some((write_span, write_pattern)) = &first_write {
+                                if expr_is_validation(expr)
+                                    && validation_follows_write(*write_span, expr.span())
+                                {
+                                    let write_line = span_line(*write_span);
                                     self.diagnostics.push(Diagnostic {
                                         rule_id: self.rule_id.to_string(),
                                         rule_name: self.rule_name.to_string(),
                                         category: RuleCategory::Semantic,
                                         severity: self.severity,
                                         file: self.file.to_path_buf(),
-                                        line: *write_line,
+                                        line: write_line,
+                                        column: None,
+                                        end_line: Some(line),
+                                        message: format!(
+                                            "Storage write `{}` at line {} occurs before validation `ensure!` at line {}",
+                                            write_pattern, write_line, line
+                                        ),
+                                        explanation: "Storage writes should happen after all validations. \
+                                            If a later ensure! fails, the write has already persisted \
+                                            (in hooks) or causes unnecessary rollback (in extrinsics)."
+                                            .to_string(),
+                                        suggestion: Some(
+                                            "Move all ensure! checks before any storage writes".to_string(),
+                                        ),
+                                    });
+                                    first_write = None;
+                                }
+                            }
+                        }
+                        syn::Stmt::Macro(stmt_macro) => {
+                            if macro_name(&stmt_macro.mac).as_deref() != Some("ensure") {
+                                continue;
+                            }
+                            if let Some((write_span, write_pattern)) = &first_write {
+                                if validation_follows_write(*write_span, stmt_macro.span()) {
+                                    let write_line = span_line(*write_span);
+                                    self.diagnostics.push(Diagnostic {
+                                        rule_id: self.rule_id.to_string(),
+                                        rule_name: self.rule_name.to_string(),
+                                        category: RuleCategory::Semantic,
+                                        severity: self.severity,
+                                        file: self.file.to_path_buf(),
+                                        line: write_line,
                                         column: None,
                                         end_line: Some(line),
                                         message: format!(
@@ -7945,12 +7988,19 @@ impl LintRule for VecInEvents {
         }
 
         fn local_name_before_assignment(prefix: &str) -> Option<String> {
-            let start = prefix.rfind("letmut").or_else(|| prefix.rfind("let"))?;
-            let name_start = if prefix[start..].starts_with("letmut") {
-                start + "letmut".len()
-            } else {
-                start + "let".len()
-            };
+            let marker = ["letmut", "let"]
+                .into_iter()
+                .flat_map(|marker| {
+                    prefix.match_indices(marker).filter_map(move |(start, _)| {
+                        let has_identifier_prefix = prefix[..start]
+                            .chars()
+                            .next_back()
+                            .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+                        (!has_identifier_prefix).then_some((start, marker))
+                    })
+                })
+                .max_by_key(|(start, marker)| (*start, marker.len()))?;
+            let name_start = marker.0 + marker.1.len();
             let name = prefix[name_start..]
                 .chars()
                 .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
