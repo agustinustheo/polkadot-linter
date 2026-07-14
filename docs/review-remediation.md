@@ -36,6 +36,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEM009 compares only storage owners | Require exact normalized argument equality between `contains_key` and `remove`/`take`. | `sem009_does_not_match_different_storage_keys` |
 | Input bounds are matched by substrings | Use AST-local `ensure!` length bounds and typed conversions; retain special fixed-size transformations only when the parameter is an actual call argument. | `sec001_recognizes_cast_length_bounds_for_the_correct_parameter`, `sec001_does_not_treat_similar_identifiers_as_input_bounds`, SEC018 bound-handling suite |
 | `ensure_signed_or_root` is unknown | Classify it as mixed access because signed callers remain possible. | `sec001_treats_signed_or_root_as_callable_by_signed_origins` |
+| VAL001 reads comments, strings, and `Get` constants as storage access | Strip inline non-code before pattern matching and exclude `T::...::get()` type-level constants without removing storage-alias `::get()` coverage. | `val001_ignores_comments_strings_and_get_constants` |
 
 ## Still Open
 
