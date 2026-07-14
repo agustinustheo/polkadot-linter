@@ -1479,13 +1479,6 @@ fn expr_contains_named(expr: &Expr, names: &[&str]) -> bool {
 
 fn type_contains_unbounded_storage_collection(ty: &Type) -> bool {
     const UNBOUNDED_COLLECTIONS: &[&str] = &["Vec", "BTreeMap", "BTreeSet"];
-    const BOUNDED_COLLECTIONS: &[&str] = &[
-        "BoundedBTreeMap",
-        "BoundedBTreeSet",
-        "BoundedVec",
-        "WeakBoundedVec",
-    ];
-
     struct TypeNameVisitor {
         found: bool,
     }
@@ -1497,14 +1490,14 @@ fn type_contains_unbounded_storage_collection(ty: &Type) -> bool {
             };
             let last_ident = last_segment.ident.to_string();
 
-            if BOUNDED_COLLECTIONS.contains(&last_ident.as_str()) {
-                return;
-            }
             if UNBOUNDED_COLLECTIONS.contains(&last_ident.as_str()) {
                 self.found = true;
                 return;
             }
 
+            // A bounded outer container does not bound a nested `Vec` or
+            // map value. Continue through its type arguments so
+            // `BoundedVec<Vec<u8>, N>` remains visible to SEC013.
             visit::visit_type_path(self, type_path);
         }
     }
@@ -6208,6 +6201,7 @@ impl LintRule for RawArithmeticInFallible {
 
             fn visit_expr_if(&mut self, expr_if: &'ast ExprIf) {
                 let ordered_condition = safe_subtractions_from_condition(&expr_if.cond);
+                self.visit_expr(&expr_if.cond);
 
                 if let Some((then_pair, _)) = &ordered_condition {
                     self.safe_subtractions.push(then_pair.clone());
@@ -7062,6 +7056,8 @@ impl LintRule for UnboundedStorageCollections {
             if doc.contains("could become bounded")
                 || doc.contains("no global maximum")
                 || doc.contains("no global bound")
+                || doc.contains("no maximum capacity")
+                || doc.contains("no maximum")
                 || doc.contains("unbounded")
             {
                 return false;
@@ -7177,8 +7173,10 @@ impl LintRule for IdentityHasherOnCommonKeys {
         }
 
         fn is_common_storage_key_type(ty: &Type) -> bool {
-            type_contains_named(ty, &["Balance", "BlockNumber"])
-                || type_is_named(ty, &["u32", "u64"])
+            type_contains_named(
+                ty,
+                &["Balance", "BalanceOf", "BlockNumber", "BlockNumberFor"],
+            ) || type_is_named(ty, &["u32", "u64"])
         }
 
         fn storage_doc_text(item: &ItemType) -> String {

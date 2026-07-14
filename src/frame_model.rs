@@ -31,6 +31,7 @@ pub struct Dispatchable {
     pub consumes_max_block: bool,
     pub body_tokens: String,
     weight_expr: Option<Expr>,
+    has_impl_weight_provider: bool,
 }
 
 impl Dispatchable {
@@ -46,6 +47,14 @@ impl Dispatchable {
     }
 
     pub fn weight_accounts_for_param(&self, param_name: &str) -> bool {
+        // `#[pallet::call(weight = T::WeightInfo)]` delegates generated call
+        // weights to the matching WeightInfo method with the dispatchable's
+        // declared inputs. The source model cannot inspect that generated call,
+        // but it must not treat the absence of a per-method attribute as proof
+        // that every input is unaccounted for.
+        if self.has_impl_weight_provider {
+            return true;
+        }
         let Some(expr) = &self.weight_expr else {
             return false;
         };
@@ -91,6 +100,8 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                 return;
             }
 
+            let has_impl_weight_provider = call_attr_has_weight_provider(&item_impl.attrs);
+
             for impl_item in &item_impl.items {
                 let ImplItem::Fn(method) = impl_item else {
                     continue;
@@ -122,6 +133,7 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                         .iter()
                         .find(|attr| attr_path_matches(attr, &["pallet", "weight"]))
                         .and_then(attr_expr),
+                    has_impl_weight_provider,
                 });
             }
 
@@ -143,6 +155,9 @@ fn dispatchable_param(arg: &FnArg, block: &syn::Block) -> Option<DispatchablePar
     };
 
     let name = pat_ident_name(&pat_type.pat)?;
+    if name == "origin" {
+        return None;
+    }
     Some(DispatchableParam {
         is_bounded_in_body: body_bounds_param(block, &name),
         name,
@@ -239,8 +254,30 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
         .path()
         .segments
         .iter()
-        .map(|segment| segment.ident.to_string());
-    attr_segments.eq(segments.iter().copied())
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    attr_segments
+        .iter()
+        .map(String::as_str)
+        .eq(segments.iter().copied())
+        || attr_segments
+            .iter()
+            .map(String::as_str)
+            .rev()
+            .zip(segments.iter().rev().copied())
+            .all(|(actual, expected)| actual == expected)
+            && attr_segments.len() >= segments.len()
+}
+
+fn call_attr_has_weight_provider(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        attr_path_matches(attr, &["pallet", "call"])
+            // FRAME accepts both `weight = T::WeightInfo` and
+            // `weight(T::WeightInfo)`. We only need to know that the impl
+            // delegates its methods to a provider; the generated per-method
+            // call is not present in the authored syn tree.
+            && attr.to_token_stream().to_string().contains("weight")
+    })
 }
 
 fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {

@@ -771,6 +771,51 @@ fn authorize_only() -> Result<(), BenchmarkError> {
 }
 
 #[test]
+fn ben002_handles_v1_benchmarks_with_individual_verify_blocks() {
+    let code = r#"
+frame_benchmarking::benchmarks! {
+    verified {
+        let value = 1u32;
+    }: _(value)
+    verify {
+        assert_eq!(value, 1);
+    }
+
+    missing_check {
+        let value = 2u32;
+    }: _(value)
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    let ben002 = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "BEN002")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ben002.len(),
+        1,
+        "BEN002 must report only the unverified v1 benchmark: {ben002:?}"
+    );
+    assert!(ben002[0].message.contains("missing_check"));
+}
+
+#[test]
+fn ben002_recognizes_parameterized_benchmark_attributes() {
+    let code = r#"
+#[benchmark(skip_meta)]
+fn no_check() {
+    let value = 1u32;
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert!(
+        has_rule(&diags, "BEN002"),
+        "BEN002 must inspect #[benchmark(...)] functions: {diags:?}"
+    );
+}
+
+#[test]
 fn ben001_detects_weight_function_without_matching_benchmark() {
     let root = std::env::temp_dir().join(format!(
         "polkadot-linter-ben001-missing-{}",
@@ -1426,6 +1471,25 @@ impl<T: Config> Pallet<T> {
     assert!(
         has_rule(&diags, "SEC001"),
         "SEC001 must inspect implicit-index FRAME dispatchables: {diags:?}"
+    );
+}
+
+#[test]
+fn sec001_recognizes_impl_level_call_weight_providers() {
+    let code = r#"
+#[frame_support::pallet::call(weight = T::WeightInfo)]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = values;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC001"),
+        "SEC001 must recognize the FRAME impl-level WeightInfo provider: {diags:?}"
     );
 }
 
@@ -5026,6 +5090,23 @@ fn sec009_detects_raw_arithmetic() {
 }
 
 #[test]
+fn sec009_detects_raw_arithmetic_in_if_conditions() {
+    let code = r#"
+pub fn check(a: u32, b: u32) -> Result<(), Error> {
+    if a + b > 100 {
+        return Err(Error::TooLarge);
+    }
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC009"),
+        "SEC009 must inspect raw arithmetic in if conditions: {diags:?}"
+    );
+}
+
+#[test]
 fn sec009_allows_saturating_arithmetic() {
     let good = include_str!("fixtures/good_sec009.rs");
     let diags = check_fixture("pallets/foo/src/lib.rs", good);
@@ -5666,20 +5747,38 @@ fn sec013_allows_bounded_storage_wrappers() {
     let code = r#"
 #[pallet::storage]
 pub type BoundedBytes<T: Config> =
-    StorageValue<_, BoundedVec<Vec<u8>, T::MaxItems>, ValueQuery>;
+    StorageValue<_, BoundedVec<u8, T::MaxItems>, ValueQuery>;
 
 #[pallet::storage]
 pub type WeakBoundedBytes<T: Config> =
-    StorageMap<_, Blake2_128Concat, T::AccountId, WeakBoundedVec<Vec<u8>, T::MaxItems>, ValueQuery>;
+    StorageMap<_, Blake2_128Concat, T::AccountId, WeakBoundedVec<u8, T::MaxItems>, ValueQuery>;
 
 #[pallet::storage]
 pub type BoundedMap<T: Config> =
-    StorageValue<_, BoundedBTreeMap<T::AccountId, Vec<u8>, T::MaxItems>, ValueQuery>;
+    StorageValue<_, BoundedBTreeMap<T::AccountId, u8, T::MaxItems>, ValueQuery>;
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     assert!(
         !has_rule(&diags, "SEC013"),
         "SEC013 should NOT fire when raw collection types are inside bounded storage wrappers"
+    );
+}
+
+#[test]
+fn sec013_reports_unbounded_collections_nested_in_bounded_wrappers() {
+    let code = r#"
+#[pallet::storage]
+pub type NestedBytes<T: Config> =
+    StorageValue<_, BoundedVec<Vec<u8>, T::MaxItems>, ValueQuery>;
+
+#[pallet::storage]
+pub type NestedMap<T: Config> =
+    StorageValue<_, BoundedBTreeMap<T::AccountId, Vec<u8>, T::MaxItems>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC013"),
+        "SEC013 must inspect nested values inside bounded wrappers: {diags:?}"
     );
 }
 
@@ -5710,6 +5809,20 @@ pub type HrmpOpenChannelRequestsList<T: Config> = StorageValue<_, Vec<HrmpChanne
     assert!(
         has_rule(&diags, "SEC013"),
         "SEC013 should report storage collections whose docs admit no global bound"
+    );
+}
+
+#[test]
+fn sec013_reports_docs_that_admit_no_maximum_capacity() {
+    let code = r#"
+/// There is no maximum capacity enforced for this queue.
+#[pallet::storage]
+pub type Queue<T: Config> = StorageValue<_, Vec<T::AccountId>, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC013"),
+        "SEC013 must not treat no-maximum-capacity docs as a bound: {diags:?}"
     );
 }
 
@@ -5766,13 +5879,15 @@ fn rustdoc_sec013_reports_resolved_unbounded_storage_values_only() {
     )
     .expect("rustdoc JSON should parse");
 
-    assert_eq!(diags.len(), 2);
+    assert_eq!(diags.len(), 3);
     assert_eq!(diags[0].rule_id, "SEC013");
     assert_eq!(diags[0].file, PathBuf::from("/workspace/pallet/src/lib.rs"));
     assert_eq!(diags[0].line, 10);
     assert!(diags[0].message.contains("BadVec"));
-    assert_eq!(diags[1].line, 50);
-    assert!(diags[1].message.contains("AdmittedNoGlobalBound"));
+    assert_eq!(diags[1].line, 20);
+    assert!(diags[1].message.contains("BoundedBytes"));
+    assert_eq!(diags[2].line, 50);
+    assert!(diags[2].message.contains("AdmittedNoGlobalBound"));
 }
 
 #[test]
@@ -5962,6 +6077,19 @@ pub type UserScores<T: Config> = StorageMap<_, Identity, u32, BalanceOf<T>, Valu
     assert!(
         has_rule(&diags, "SEC014"),
         "SEC014 should still report generic numeric identity keys without internal-layout docs"
+    );
+}
+
+#[test]
+fn sec014_detects_identity_hasher_on_frame_type_alias_keys() {
+    let code = r#"
+#[pallet::storage]
+pub type ByBlock<T: Config> = StorageMap<_, Identity, BlockNumberFor<T>, u32, ValueQuery>;
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC014"),
+        "SEC014 must recognize BlockNumberFor keys: {diags:?}"
     );
 }
 
