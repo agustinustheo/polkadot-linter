@@ -231,6 +231,8 @@ fn main() {
         }
     }
 
+    normalize_diagnostics(&mut results);
+
     let filtered = results
         .into_iter()
         .filter(|d| d.severity >= cli.severity)
@@ -368,6 +370,26 @@ fn source_filters_for_paths(paths: &[PathBuf]) -> Vec<String> {
         .collect()
 }
 
+fn normalize_diagnostics(diagnostics: &mut Vec<diagnostics::Diagnostic>) {
+    diagnostics.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.column.cmp(&b.column))
+            .then(a.end_line.cmp(&b.end_line))
+            .then(a.rule_id.cmp(&b.rule_id))
+            .then(a.message.cmp(&b.message))
+    });
+    diagnostics.dedup_by(|a, b| {
+        a.rule_id == b.rule_id
+            && a.file == b.file
+            && a.line == b.line
+            && a.column == b.column
+            && a.end_line == b.end_line
+            && a.message == b.message
+    });
+}
+
 fn selected_compiler_backed_rules(
     cli_rules: Option<&[String]>,
     explicit_compiler_rules: &[String],
@@ -401,11 +423,16 @@ fn selected_compiler_backed_rules(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::PathBuf};
 
-    use polkadot_linter::config::Config;
+    use polkadot_linter::{
+        config::Config,
+        diagnostics::{Diagnostic, RuleCategory, Severity},
+    };
 
-    use super::{discover_cargo_manifest, load_config, selected_compiler_backed_rules};
+    use super::{
+        discover_cargo_manifest, load_config, normalize_diagnostics, selected_compiler_backed_rules,
+    };
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -531,5 +558,33 @@ mod tests {
             .expect_err("multiple projects should require an explicit manifest");
 
         assert!(error.contains("multiple Cargo projects"));
+    }
+
+    #[test]
+    fn normalizes_order_and_removes_overlapping_scan_duplicates() {
+        let diagnostic = |rule_id: &str, line| Diagnostic {
+            rule_id: rule_id.to_string(),
+            rule_name: "test".to_string(),
+            category: RuleCategory::Semantic,
+            severity: Severity::Warning,
+            file: PathBuf::from("src/lib.rs"),
+            line,
+            column: None,
+            end_line: None,
+            message: "test finding".to_string(),
+            explanation: "test explanation".to_string(),
+            suggestion: None,
+        };
+        let mut diagnostics = vec![
+            diagnostic("SEC002", 3),
+            diagnostic("SEC001", 2),
+            diagnostic("SEC002", 3),
+        ];
+
+        normalize_diagnostics(&mut diagnostics);
+
+        assert_eq!(diagnostics.len(), 2);
+        assert_eq!(diagnostics[0].rule_id, "SEC001");
+        assert_eq!(diagnostics[1].rule_id, "SEC002");
     }
 }

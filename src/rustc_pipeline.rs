@@ -234,12 +234,19 @@ fn prepend_dynamic_library_path(command: &mut Command, library_dir: &Path) {
     } else {
         "LD_LIBRARY_PATH"
     };
+    command.env(
+        variable,
+        dynamic_library_paths(library_dir, env::var_os(variable)),
+    );
+}
+
+fn dynamic_library_paths(library_dir: &Path, existing: Option<OsString>) -> OsString {
     let mut paths = vec![library_dir.to_path_buf()];
-    if let Some(existing) = env::var_os(variable) {
-        paths.extend(env::split_paths(&existing));
+    if let Some(existing) = &existing {
+        paths.extend(env::split_paths(existing));
     }
-    let joined = env::join_paths(paths).unwrap_or_else(|_| OsString::from(library_dir));
-    command.env(variable, joined);
+    env::join_paths(paths)
+        .unwrap_or_else(|_| existing.unwrap_or_else(|| OsString::from(library_dir)))
 }
 
 fn read_jsonl_diagnostics(path: &Path) -> Result<Vec<RustcDiagnostic>, RustcPipelineError> {
@@ -304,11 +311,11 @@ impl From<RustcDiagnostic> for Diagnostic {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{ffi::OsString, fs, path::PathBuf};
 
     use crate::diagnostics::{Diagnostic, RuleCategory, Severity};
 
-    use super::{read_jsonl_diagnostics, RustcDiagnostic};
+    use super::{dynamic_library_paths, read_jsonl_diagnostics, RustcDiagnostic};
 
     #[test]
     fn reads_jsonl_diagnostics_and_ignores_blank_lines() {
@@ -379,5 +386,17 @@ mod tests {
         });
 
         assert_eq!(diagnostic.severity, Severity::Error);
+    }
+
+    #[test]
+    fn preserves_existing_library_path_when_joining_fails() {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        let invalid_library_dir = PathBuf::from(format!("driver{separator}library"));
+        let existing = OsString::from("existing-library-path");
+
+        assert_eq!(
+            dynamic_library_paths(&invalid_library_dir, Some(existing.clone())),
+            existing
+        );
     }
 }
