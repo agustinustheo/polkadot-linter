@@ -95,9 +95,10 @@ pub fn collect_dispatchables(ast: &SynFile, test_mask: &[bool]) -> Vec<Dispatcha
                 let ImplItem::Fn(method) = impl_item else {
                     continue;
                 };
-                if !has_attr(&method.attrs, &["pallet", "call_index"])
-                    || is_masked_span(self.test_mask, method.span())
-                {
+                // `call_index` is optional in FRAME. Every method in a
+                // `#[pallet::call]` impl is a dispatchable, whether it uses an
+                // explicit index or FRAME assigns its positional index.
+                if is_masked_span(self.test_mask, method.span()) {
                     continue;
                 }
 

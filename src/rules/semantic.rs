@@ -268,12 +268,24 @@ fn is_block_start(trimmed: &str) -> bool {
         || trimmed.starts_with("fn ")
         || trimmed.starts_with("pub async fn ")
         || trimmed.starts_with("async fn ")
+        || trimmed.starts_with("const fn ")
+        || trimmed.starts_with("unsafe fn ")
+        || trimmed.starts_with("pub unsafe fn ")
         || trimmed.starts_with("pub(crate) fn ")
         || trimmed.starts_with("pub(crate) async fn ")
+        || trimmed.starts_with("pub(super) fn ")
+        || trimmed.starts_with("pub(super) async fn ")
+        || trimmed.starts_with("pub(in ") && trimmed.contains(" fn ")
+        || trimmed.starts_with("struct ")
         || trimmed.starts_with("pub struct ")
         || trimmed.starts_with("pub(crate) struct ")
+        || trimmed.starts_with("pub(super) struct ")
         || trimmed.starts_with("pub enum ")
         || trimmed.starts_with("enum ")
+        || trimmed.starts_with("union ")
+        || trimmed.starts_with("pub union ")
+        || trimmed.starts_with("pub(crate) union ")
+        || trimmed.starts_with("pub(super) union ")
         || trimmed.starts_with("pub trait ")
         || trimmed.starts_with("trait ")
         || trimmed.starts_with("if ")
@@ -328,9 +340,15 @@ where
             mask[i] = true;
         }
 
-        if is_masking_attr(trimmed) && masked_depth.is_none() {
+        let masking_attr = is_masking_attr(trimmed) && masked_depth.is_none();
+        if masking_attr {
             mask[i] = true;
-            next_item_is_masked = true;
+            // Attributes can annotate a complete item on the same line, e.g.
+            // `#[cfg(test)] use crate::mock;`. In that case there is no later
+            // item to mask.
+            next_item_is_masked = trimmed
+                .find(']')
+                .is_none_or(|end| trimmed[end + 1..].trim().is_empty());
         }
 
         // Skip other attributes and comments between the cfg and the target item.
@@ -1334,6 +1352,41 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
     attr_segments.eq(expected)
 }
 
+fn weight_attributes<'a>(ast: &'a SynFile, mask: &'a [bool]) -> Vec<&'a Attribute> {
+    struct WeightAttributeVisitor<'a> {
+        mask: &'a [bool],
+        attrs: Vec<&'a Attribute>,
+    }
+
+    impl<'a> WeightAttributeVisitor<'a> {
+        fn collect(&mut self, attrs: &'a [Attribute]) {
+            self.attrs.extend(attrs.iter().filter(|attr| {
+                attr_path_matches(attr, &["pallet", "weight"])
+                    && !is_masked_span(self.mask, attr.span())
+            }));
+        }
+    }
+
+    impl<'a> Visit<'a> for WeightAttributeVisitor<'a> {
+        fn visit_item_fn(&mut self, item_fn: &'a ItemFn) {
+            self.collect(&item_fn.attrs);
+            visit::visit_item_fn(self, item_fn);
+        }
+
+        fn visit_impl_item_fn(&mut self, item_fn: &'a syn::ImplItemFn) {
+            self.collect(&item_fn.attrs);
+            visit::visit_impl_item_fn(self, item_fn);
+        }
+    }
+
+    let mut visitor = WeightAttributeVisitor {
+        mask,
+        attrs: Vec::new(),
+    };
+    visitor.visit_file(ast);
+    visitor.attrs
+}
+
 fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
     attrs.iter().any(|attr| attr_path_matches(attr, segments))
 }
@@ -1626,8 +1679,8 @@ impl LintRule for ValidationBeforeHeavyRead {
 
         // Track function boundaries
         let mut in_fn = false;
-        let mut fn_start = 0;
         let mut brace_depth: i32 = 0;
+        let mut function_body_started = false;
         let mut first_heavy_op: Option<(usize, String)> = None;
         let mut heavy_op_bindings: Option<Vec<String>> = None;
 
@@ -1645,19 +1698,22 @@ impl LintRule for ValidationBeforeHeavyRead {
 
             // Detect function start
             if !in_fn
-                && (trimmed.contains("pub fn ") || trimmed.starts_with("fn "))
+                && (trimmed.starts_with("fn ") || trimmed.contains(" fn "))
                 && trimmed.contains('(')
             {
                 in_fn = true;
-                fn_start = i;
                 first_heavy_op = None;
                 heavy_op_bindings = None;
                 brace_depth = 0;
+                function_body_started = false;
             }
 
             if in_fn {
-                brace_depth += line.chars().filter(|&c| c == '{').count() as i32;
-                brace_depth -= line.chars().filter(|&c| c == '}').count() as i32;
+                let opens = line.chars().filter(|&c| c == '{').count() as i32;
+                let closes = line.chars().filter(|&c| c == '}').count() as i32;
+                function_body_started |= opens > 0;
+                brace_depth += opens;
+                brace_depth -= closes;
 
                 // Check for heavy operations
                 if first_heavy_op.is_none() {
@@ -1766,7 +1822,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                 }
 
                 // Function end
-                if brace_depth <= 0 && i > fn_start {
+                if function_body_started && brace_depth <= 0 {
                     in_fn = false;
                     first_heavy_op = None;
                     heavy_op_bindings = None;
@@ -4488,10 +4544,6 @@ impl LintRule for UnsafeWeightArithmetic {
         let ast = ast_file(ctx)?;
         let test_mask = cfg_test_module_mask(ctx.content);
 
-        fn is_weight_attr(attr: &Attribute) -> bool {
-            attr_path_matches(attr, &["pallet", "weight"])
-        }
-
         struct WeightArithmeticVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -4557,26 +4609,7 @@ impl LintRule for UnsafeWeightArithmetic {
         }
 
         let mut diagnostics = Vec::new();
-        for attr in ast
-            .items
-            .iter()
-            .flat_map(|item| match item {
-                Item::Impl(item_impl) => item_impl
-                    .items
-                    .iter()
-                    .filter_map(|impl_item| match impl_item {
-                        ImplItem::Fn(item_fn) => Some(&item_fn.attrs),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                Item::Fn(item_fn) => vec![&item_fn.attrs],
-                _ => Vec::new(),
-            })
-            .flatten()
-        {
-            if !is_weight_attr(attr) || is_masked_span(&test_mask, attr.span()) {
-                continue;
-            }
+        for attr in weight_attributes(ast, &test_mask) {
             let Some(expr) = attr_expr(attr) else {
                 continue;
             };
@@ -4625,10 +4658,6 @@ impl LintRule for ExpensiveWeightCalculation {
 
         let ast = ast_file(ctx)?;
         let test_mask = cfg_test_module_mask(ctx.content);
-
-        fn is_weight_attr(attr: &Attribute) -> bool {
-            attr_path_matches(attr, &["pallet", "weight"])
-        }
 
         struct ExpensiveWeightVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
@@ -4707,26 +4736,7 @@ impl LintRule for ExpensiveWeightCalculation {
         }
 
         let mut diagnostics = Vec::new();
-        for attr in ast
-            .items
-            .iter()
-            .flat_map(|item| match item {
-                Item::Impl(item_impl) => item_impl
-                    .items
-                    .iter()
-                    .filter_map(|impl_item| match impl_item {
-                        ImplItem::Fn(item_fn) => Some(&item_fn.attrs),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>(),
-                Item::Fn(item_fn) => vec![&item_fn.attrs],
-                _ => Vec::new(),
-            })
-            .flatten()
-        {
-            if !is_weight_attr(attr) || is_masked_span(&test_mask, attr.span()) {
-                continue;
-            }
+        for attr in weight_attributes(ast, &test_mask) {
             let Some(expr) = attr_expr(attr) else {
                 continue;
             };
@@ -6925,13 +6935,15 @@ impl LintRule for UnboundedClearPrefix {
                     visit::visit_expr_call(self, expr_call);
                     return;
                 };
+                let limit = if expr_call.args.len() <= 2 {
+                    // StorageMap::clear_prefix(limit, cursor)
+                    expr_call.args.first()
+                } else {
+                    // StorageDoubleMap::clear_prefix(key, limit, cursor)
+                    expr_call.args.iter().nth(1)
+                };
                 if path_has_exact_ident(path, "clear_prefix")
-                    && expr_call
-                        .args
-                        .iter()
-                        .nth(1)
-                        .map(is_unbounded_clear_prefix_limit)
-                        .unwrap_or(false)
+                    && limit.map(is_unbounded_clear_prefix_limit).unwrap_or(false)
                     && !nearby_comment_documents_bounded_unbounded_clear(
                         self.lines,
                         span_line(expr_call.span()),
@@ -7336,32 +7348,19 @@ impl LintRule for DispatchBypassFilterInProduction {
             method_call.method == "is_ok" && is_ensure_root_call(&method_call.receiver)
         }
 
-        fn expr_mentions_root_flag(expr: &Expr, root_flags: &HashSet<String>) -> bool {
-            struct RootFlagVisitor<'a> {
-                root_flags: &'a HashSet<String>,
-                found: bool,
-            }
-
-            impl<'ast> Visit<'ast> for RootFlagVisitor<'_> {
-                fn visit_expr_path(&mut self, expr_path: &'ast syn::ExprPath) {
-                    if expr_path
-                        .path
-                        .segments
-                        .last()
-                        .is_some_and(|segment| self.root_flags.contains(&segment.ident.to_string()))
-                    {
-                        self.found = true;
-                    }
-                    visit::visit_expr_path(self, expr_path);
+        fn expr_proves_root_context(expr: &Expr, root_flags: &HashSet<String>) -> bool {
+            match strip_expr_wrappers(expr) {
+                Expr::Path(expr_path) => expr_path
+                    .path
+                    .segments
+                    .last()
+                    .is_some_and(|segment| root_flags.contains(&segment.ident.to_string())),
+                Expr::Binary(expr_binary) if matches!(expr_binary.op, syn::BinOp::And(_)) => {
+                    expr_proves_root_context(&expr_binary.left, root_flags)
+                        || expr_proves_root_context(&expr_binary.right, root_flags)
                 }
+                _ => expr_is_root_is_ok(expr),
             }
-
-            let mut visitor = RootFlagVisitor {
-                root_flags,
-                found: false,
-            };
-            visitor.visit_expr(expr);
-            visitor.found
         }
 
         fn root_flag_names(block: &syn::Block) -> HashSet<String> {
@@ -7460,9 +7459,7 @@ impl LintRule for DispatchBypassFilterInProduction {
 
             fn visit_expr_if(&mut self, expr_if: &'ast ExprIf) {
                 visit::visit_expr(self, &expr_if.cond);
-                if expr_mentions_root_flag(&expr_if.cond, &self.root_flags)
-                    || expr_is_root_is_ok(&expr_if.cond)
-                {
+                if expr_proves_root_context(&expr_if.cond, &self.root_flags) {
                     self.root_context_depth += 1;
                     self.visit_block(&expr_if.then_branch);
                     self.root_context_depth -= 1;

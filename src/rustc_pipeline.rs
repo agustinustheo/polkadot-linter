@@ -37,6 +37,7 @@ pub enum RustcPipelineError {
         status: Option<i32>,
         stderr: String,
     },
+    DriverDidNotRun,
     ToolchainProbe {
         toolchain: String,
         status: Option<i32>,
@@ -66,6 +67,10 @@ impl fmt::Display for RustcPipelineError {
                 }
                 Ok(())
             }
+            RustcPipelineError::DriverDidNotRun => write!(
+                f,
+                "compiler-backed cargo check completed without invoking the linter driver"
+            ),
             RustcPipelineError::ToolchainProbe {
                 toolchain,
                 status,
@@ -102,7 +107,10 @@ struct RustcDiagnostic {
 pub fn run_cargo_check(
     options: &RustcPipelineOptions,
 ) -> Result<Vec<Diagnostic>, RustcPipelineError> {
-    let jsonl_path = temporary_jsonl_path();
+    let jsonl_file = tempfile::NamedTempFile::new()?;
+    let jsonl_path = jsonl_file.into_temp_path();
+    let driver_marker_file = tempfile::NamedTempFile::new()?;
+    let driver_marker_path = driver_marker_file.into_temp_path();
     let driver_path = absolutize(&options.driver_path)?;
     let manifest_path = absolutize(&options.manifest_path)?;
     let target_dir = options
@@ -111,8 +119,6 @@ pub fn run_cargo_check(
         .map(|path| absolutize(path))
         .transpose()?;
     let rustc_library_dir = rustc_library_dir(&options.toolchain)?;
-
-    fs::File::create(&jsonl_path)?;
 
     let mut command = Command::new("cargo");
     command.arg(format!("+{}", options.toolchain));
@@ -131,6 +137,11 @@ pub fn run_cargo_check(
     command
         .env("RUSTC_WORKSPACE_WRAPPER", &driver_path)
         .env("POLKADOT_LINTER_DRIVER_JSONL", &jsonl_path)
+        .env("POLKADOT_LINTER_DRIVER_MARKER", &driver_marker_path)
+        // Cargo does not fingerprint the driver-specific environment variables.
+        // A unique cfg changes its compilation fingerprint for every linter run,
+        // ensuring the wrapper is invoked even against a warm target directory.
+        .env("RUSTFLAGS", driver_invocation_rustflags())
         .env(
             "POLKADOT_LINTER_DRIVER_MANIFEST_ROOT",
             manifest_path.parent().unwrap_or_else(|| Path::new(".")),
@@ -164,15 +175,21 @@ pub fn run_cargo_check(
         )
     };
     if !status.success() {
-        let _ = fs::remove_file(&jsonl_path);
         return Err(RustcPipelineError::CargoFailed {
             status: status.code(),
             stderr,
         });
     }
 
+    if fs::metadata(&driver_marker_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or_default()
+        == 0
+    {
+        return Err(RustcPipelineError::DriverDidNotRun);
+    }
+
     let diagnostics_result = read_jsonl_diagnostics(&jsonl_path);
-    let _ = fs::remove_file(&jsonl_path);
     let mut diagnostics = diagnostics_result?;
     diagnostics.sort_by(|a, b| {
         a.file
@@ -242,15 +259,20 @@ fn read_jsonl_diagnostics(path: &Path) -> Result<Vec<RustcDiagnostic>, RustcPipe
         .collect()
 }
 
-fn temporary_jsonl_path() -> PathBuf {
+fn driver_invocation_rustflags() -> OsString {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    env::temp_dir().join(format!(
-        "polkadot-linter-driver-{}-{nanos}.jsonl",
+    let mut flags = env::var_os("RUSTFLAGS").unwrap_or_default();
+    if !flags.is_empty() {
+        flags.push(" ");
+    }
+    flags.push(format!(
+        "--cfg=polkadot_linter_driver_invocation=\"{}-{nanos}\"",
         std::process::id()
-    ))
+    ));
+    flags
 }
 
 fn absolutize(path: &Path) -> Result<PathBuf, RustcPipelineError> {

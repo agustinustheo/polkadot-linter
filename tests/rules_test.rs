@@ -340,6 +340,25 @@ pub fn dispatch(origin: OriginFor<T>, username: Username) -> Result<(), Error> {
 }
 
 #[test]
+fn val001_detects_multiline_dispatchable_signatures() {
+    let code = r#"
+pub(crate) fn submit(
+    origin: OriginFor<T>,
+    value: u32,
+) -> DispatchResult {
+    let _existing = Values::<T>::get(value);
+    ensure_signed(origin)?;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "VAL001"),
+        "VAL001 must continue through multiline function signatures: {diags:?}"
+    );
+}
+
+#[test]
 fn val001_ignores_storage_reads_that_select_a_guarded_branch() {
     let code = r#"
 pub fn chill(stash: AccountId) -> Result<(), Error> {
@@ -859,6 +878,25 @@ fn trm001_allows_standard_spelling() {
     );
 }
 
+#[test]
+fn trm001_handles_non_ascii_before_inline_comments() {
+    let mut config = polkadot_linter::config::Config::default();
+    config
+        .terminology
+        .british_english
+        .insert("optimisation".to_string(), "optimization".to_string());
+
+    let diags = check_fixture_with_config(
+        "src/lib.rs",
+        "let label = \"éééé\"; // optimisation\n",
+        &config,
+    );
+    assert!(
+        has_rule(&diags, "TRM001"),
+        "TRM001 must not panic or lose inline comments after non-ASCII source text"
+    );
+}
+
 // ==========================================================================
 // SEM006: DbWeight missing proof size
 // ==========================================================================
@@ -1369,6 +1407,25 @@ mod tests {
     assert!(
         has_rule(&diags, "SEC001"),
         "SEC001 should still lint pallet lib.rs files that contain inline #[cfg(test)] modules"
+    );
+}
+
+#[test]
+fn sec001_checks_dispatchables_without_explicit_call_indices() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>, values: Vec<u8>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        let _ = values;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC001"),
+        "SEC001 must inspect implicit-index FRAME dispatchables: {diags:?}"
     );
 }
 
@@ -2837,6 +2894,27 @@ impl<T: Config> Pallet<T> {
     );
 }
 
+#[test]
+fn sec004_checks_weight_attributes_nested_in_pallet_modules() {
+    let code = r#"
+pub mod pallet {
+    #[pallet::call]
+    impl<T: Config> Pallet<T> {
+        #[pallet::weight(T::WeightInfo::base() + items.len() as u64)]
+        pub fn process(origin: OriginFor<T>, items: BoundedVec<u8, MaxItems>) -> DispatchResult {
+            let _ = ensure_signed(origin)?;
+            Ok(())
+        }
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC004"),
+        "SEC004 must inspect weights in the normal `pub mod pallet` layout: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEC005: Expensive operations in weight calculation
 // ==========================================================================
@@ -4026,6 +4104,26 @@ pub fn prod() {
     assert!(
         has_rule(&diags, "SEC008"),
         "SEC008 should still lint production code after a cfg(test) single-line item"
+    );
+}
+
+#[test]
+fn sec008_does_not_mask_production_after_cfg_test_const_fn() {
+    let code = r#"
+#[cfg(test)]
+const fn test_helper() {
+    let _ = Some(1u32).unwrap();
+}
+
+pub fn prod() {
+    let _ = Some(2u32).unwrap();
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let sec008_count = diags.iter().filter(|d| d.rule_id == "SEC008").count();
+    assert_eq!(
+        sec008_count, 1,
+        "cfg(test) const functions must not mask the remainder of a file: {diags:?}"
     );
 }
 
@@ -5405,6 +5503,20 @@ fn sec012_allows_bounded_clear_prefix() {
 }
 
 #[test]
+fn sec012_allows_bounded_single_key_clear_prefix() {
+    let code = r#"
+pub fn clear_accounts() {
+    Accounts::<T>::clear_prefix(100, None);
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC012"),
+        "SEC012 must inspect the first argument as a StorageMap clear limit: {diags:?}"
+    );
+}
+
+#[test]
 fn sec012_allows_documented_unbounded_clear_with_static_page_bound() {
     let code = r#"
 pub fn take_submission_with_data(round: u32, who: &T::AccountId) {
@@ -5909,6 +6021,24 @@ pub fn batch(origin: OriginFor<T>, call: T::RuntimeCall) -> DispatchResult {
     assert!(
         !has_rule(&diags, "SEC015"),
         "SEC015 should allow bypass only inside branches gated by ensure_root(...).is_ok()"
+    );
+}
+
+#[test]
+fn sec015_reports_bypass_inside_negated_root_flag_branch() {
+    let code = r#"
+pub fn batch(origin: OriginFor<T>, call: T::RuntimeCall) -> DispatchResult {
+    let is_root = ensure_root(origin.clone()).is_ok();
+    if !is_root {
+        call.dispatch_bypass_filter(origin.clone())?;
+    }
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC015"),
+        "SEC015 must not treat a negated root flag as a root-only context: {diags:?}"
     );
 }
 

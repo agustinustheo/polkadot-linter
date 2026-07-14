@@ -5731,13 +5731,25 @@ fn append_jsonl_diagnostics(path: &str, diagnostics: &[RustcDiagnostic]) {
         .open(path)
         .expect("rustc diagnostics output should be writable");
 
+    let mut records = String::new();
     for diagnostic in diagnostics {
-        writeln!(
-            output,
-            "{}",
-            serde_json::to_string(diagnostic).expect("rustc diagnostic should serialize")
-        )
-        .expect("rustc diagnostic should be written");
+        records.push_str(
+            &serde_json::to_string(diagnostic).expect("rustc diagnostic should serialize"),
+        );
+        records.push('\n');
+    }
+    output
+        .write_all(records.as_bytes())
+        .expect("rustc diagnostics should be written");
+}
+
+fn mark_driver_invoked() {
+    if let Ok(path) = env::var("POLKADOT_LINTER_DRIVER_MARKER") {
+        OpenOptions::new()
+            .append(true)
+            .open(path)
+            .and_then(|mut output| output.write_all(b"1"))
+            .expect("rustc driver marker should be writable");
     }
 }
 
@@ -5800,6 +5812,7 @@ fn filtered_unique_diagnostics(
 }
 
 fn main() {
+    mark_driver_invoked();
     let mut rustc_args = env::args().skip(1).collect::<Vec<_>>();
     if rustc_args.is_empty() {
         eprintln!("usage: polkadot-linter-driver <rustc args>");
