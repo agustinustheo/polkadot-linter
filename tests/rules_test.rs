@@ -1483,6 +1483,25 @@ fn ben003_detects_extrinsic_without_benchmark() {
 }
 
 #[test]
+fn ben003_detects_qualified_pallet_call_attributes() {
+    let code = r#"
+#[frame_support::pallet::call]
+impl<T: Config> Pallet<T> {
+    #[frame_support::pallet::call_index(0)]
+    pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "BEN003"),
+        "BEN003 must recognize qualified FRAME pallet call attributes: {diags:?}"
+    );
+}
+
+#[test]
 fn ben003_skips_non_pallet_files() {
     let good = include_str!("fixtures/good_ben003.rs");
     let diags = check_fixture("pallets/foo/src/lib.rs", good);

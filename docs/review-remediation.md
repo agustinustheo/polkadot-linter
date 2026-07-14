@@ -31,6 +31,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | TST001 emits duplicate diagnostics | Remove the unreachable text pass and inspect assertion macro tokens for macro-contained `unwrap_err` calls. | `tst001_reports_one_diagnostic_for_one_manual_error_check`, `tst001_detects_unwrap_err_inside_assert_macro` |
 | BEN001 reports trait and impl declarations repeatedly | Deduplicate weight functions by name before matching benchmarks; end the text fallback when the WeightInfo block closes. | BEN001 rule suite |
 | BEN003 fallback only allows four lines for an extrinsic signature | Allow a bounded 32-line attribute/signature window. | BEN003 rule suite |
+| BEN003 ignores qualified FRAME pallet attributes | Match the `pallet::call` and `pallet::call_index` suffixes, preserving fully qualified FRAME forms. | `ben003_detects_qualified_pallet_call_attributes` |
 | MOK001 ignores configured `new_test_ext` and counts callback arguments | Respect every configured mock pattern and inspect only call targets/receivers, not arbitrary call arguments. | MOK001 rule suite |
 | TST004 uses a separate test-file heuristic | Reuse the engine’s test and benchmark target classification. | TST004 rule suite |
 | Local builds can select an unsupported Rust version | Pin the same Rust 1.93.0 toolchain used by CI for ordinary Cargo commands. | `rust-toolchain.toml` |
