@@ -119,6 +119,13 @@ pub fn to_sarif(diagnostics: &[Diagnostic]) -> String {
     let results: Vec<serde_json::Value> = diagnostics
         .iter()
         .map(|d| {
+            let mut region = serde_json::json!({
+                "startLine": d.line,
+                "startColumn": d.column.unwrap_or(1),
+            });
+            if let Some(end_line) = d.end_line {
+                region["endLine"] = serde_json::json!(end_line);
+            }
             serde_json::json!({
                 "ruleId": d.rule_id,
                 "level": match d.severity {
@@ -130,10 +137,7 @@ pub fn to_sarif(diagnostics: &[Diagnostic]) -> String {
                 "locations": [{
                     "physicalLocation": {
                         "artifactLocation": { "uri": d.file.display().to_string() },
-                        "region": {
-                            "startLine": d.line,
-                            "startColumn": d.column.unwrap_or(1),
-                        }
+                        "region": region,
                     }
                 }]
             })
@@ -156,4 +160,34 @@ pub fn to_sarif(diagnostics: &[Diagnostic]) -> String {
     });
 
     serde_json::to_string_pretty(&sarif).expect("SARIF serialization failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{to_sarif, Diagnostic, RuleCategory, Severity};
+
+    #[test]
+    fn sarif_preserves_end_line_when_available() {
+        let diagnostic = Diagnostic {
+            rule_id: "SEC001".to_string(),
+            rule_name: "unbounded-input".to_string(),
+            category: RuleCategory::Semantic,
+            severity: Severity::Warning,
+            file: PathBuf::from("src/lib.rs"),
+            line: 10,
+            column: Some(4),
+            end_line: Some(14),
+            message: "example".to_string(),
+            explanation: "example explanation".to_string(),
+            suggestion: None,
+        };
+
+        let sarif: serde_json::Value =
+            serde_json::from_str(&to_sarif(&[diagnostic])).expect("SARIF must be valid JSON");
+        let region = &sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"];
+        assert_eq!(region["startLine"], 10);
+        assert_eq!(region["endLine"], 14);
+    }
 }
