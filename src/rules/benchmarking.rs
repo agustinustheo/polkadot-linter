@@ -29,9 +29,19 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
         .path()
         .segments
         .iter()
-        .map(|segment| segment.ident.to_string());
-    let expected = segments.iter().copied();
-    attr_segments.eq(expected)
+        .map(|segment| segment.ident.to_string())
+        .collect::<Vec<_>>();
+    attr_segments
+        .iter()
+        .map(String::as_str)
+        .eq(segments.iter().copied())
+        || attr_segments
+            .iter()
+            .map(String::as_str)
+            .rev()
+            .zip(segments.iter().rev().copied())
+            .all(|(actual, expected)| actual == expected)
+            && attr_segments.len() >= segments.len()
 }
 
 fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
@@ -676,10 +686,6 @@ impl LintRule for ExtrinsicWithoutBenchmark {
         if !path_str.ends_with("lib.rs") {
             return None;
         }
-        if !ctx.content.contains("#[pallet::call]") {
-            return None;
-        }
-
         let extrinsic_fns = collect_extrinsic_names(ctx.content);
 
         if extrinsic_fns.is_empty() {
