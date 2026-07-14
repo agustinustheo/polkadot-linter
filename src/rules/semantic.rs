@@ -4691,65 +4691,71 @@ impl LintRule for UnsafeWeightArithmetic {
         let ast = ast_file(ctx)?;
         let test_mask = cfg_test_module_mask(ctx.content);
 
+        fn is_literal_constant(expr: &Expr) -> bool {
+            match strip_expr_wrappers(expr) {
+                Expr::Lit(_) => true,
+                Expr::Unary(expr_unary) => is_literal_constant(&expr_unary.expr),
+                Expr::Cast(expr_cast) => is_literal_constant(&expr_cast.expr),
+                _ => false,
+            }
+        }
+
         struct WeightArithmeticVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
             severity: Severity,
             rule_id: &'a str,
             rule_name: &'a str,
+            seen_lines: HashSet<usize>,
+        }
+
+        impl WeightArithmeticVisitor<'_> {
+            fn report(&mut self, span: Span) {
+                let line = span_line(span);
+                if !self.seen_lines.insert(line) {
+                    return;
+                }
+                self.diagnostics.push(Diagnostic {
+                    rule_id: self.rule_id.to_string(),
+                    rule_name: self.rule_name.to_string(),
+                    category: RuleCategory::Semantic,
+                    severity: self.severity,
+                    file: self.file.to_path_buf(),
+                    line,
+                    column: Some(span_column(span)),
+                    end_line: None,
+                    message:
+                        "Non-saturating arithmetic inside `#[pallet::weight(...)]` — overflow risk"
+                            .to_string(),
+                    explanation: "Arithmetic overflow in weight calculation produces a tiny \
+                        weight value in release builds, allowing overweight blocks that can \
+                        stall the chain. Use `saturating_add`/`saturating_mul` instead."
+                        .to_string(),
+                    suggestion: Some(
+                        "Replace `.add()` with `.saturating_add()` and `.mul()` with `.saturating_mul()`"
+                            .to_string(),
+                    ),
+                });
+            }
         }
 
         impl<'ast> Visit<'ast> for WeightArithmeticVisitor<'_> {
             fn visit_expr_binary(&mut self, expr_binary: &'ast ExprBinary) {
-                if matches!(expr_binary.op, syn::BinOp::Add(_) | syn::BinOp::Mul(_)) {
-                    self.diagnostics.push(Diagnostic {
-                        rule_id: self.rule_id.to_string(),
-                        rule_name: self.rule_name.to_string(),
-                        category: RuleCategory::Semantic,
-                        severity: self.severity,
-                        file: self.file.to_path_buf(),
-                        line: span_line(expr_binary.span()),
-                        column: Some(span_column(expr_binary.span())),
-                        end_line: None,
-                        message:
-                            "Non-saturating arithmetic inside `#[pallet::weight(...)]` — overflow risk"
-                                .to_string(),
-                        explanation: "Arithmetic overflow in weight calculation produces a tiny \
-                            weight value in release builds, allowing overweight blocks that can \
-                            stall the chain. Use `saturating_add`/`saturating_mul` instead."
-                            .to_string(),
-                        suggestion: Some(
-                            "Replace `.add()` with `.saturating_add()` and `.mul()` with `.saturating_mul()`"
-                                .to_string(),
-                        ),
-                    });
+                if matches!(expr_binary.op, syn::BinOp::Add(_) | syn::BinOp::Mul(_))
+                    && !is_literal_constant(&expr_binary.left)
+                    && !is_literal_constant(&expr_binary.right)
+                {
+                    self.report(expr_binary.span());
                 }
                 visit::visit_expr_binary(self, expr_binary);
             }
 
             fn visit_expr_method_call(&mut self, expr_method_call: &'ast ExprMethodCall) {
-                if matches!(expr_method_call.method.to_string().as_str(), "add" | "mul") {
-                    self.diagnostics.push(Diagnostic {
-                        rule_id: self.rule_id.to_string(),
-                        rule_name: self.rule_name.to_string(),
-                        category: RuleCategory::Semantic,
-                        severity: self.severity,
-                        file: self.file.to_path_buf(),
-                        line: span_line(expr_method_call.span()),
-                        column: Some(span_column(expr_method_call.span())),
-                        end_line: None,
-                        message:
-                            "Non-saturating arithmetic inside `#[pallet::weight(...)]` — overflow risk"
-                                .to_string(),
-                        explanation: "Arithmetic overflow in weight calculation produces a tiny \
-                            weight value in release builds, allowing overweight blocks that can \
-                            stall the chain. Use `saturating_add`/`saturating_mul` instead."
-                            .to_string(),
-                        suggestion: Some(
-                            "Replace `.add()` with `.saturating_add()` and `.mul()` with `.saturating_mul()`"
-                                .to_string(),
-                        ),
-                    });
+                if matches!(expr_method_call.method.to_string().as_str(), "add" | "mul")
+                    && !(is_literal_constant(&expr_method_call.receiver)
+                        && expr_method_call.args.iter().all(is_literal_constant))
+                {
+                    self.report(expr_method_call.span());
                 }
                 visit::visit_expr_method_call(self, expr_method_call);
             }
@@ -4766,6 +4772,7 @@ impl LintRule for UnsafeWeightArithmetic {
                 severity: config.rule_severity(self.id(), Severity::Warning),
                 rule_id: self.id(),
                 rule_name: self.name(),
+                seen_lines: HashSet::new(),
             };
             visitor.visit_expr(&expr);
             diagnostics.extend(visitor.diagnostics);

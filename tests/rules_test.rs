@@ -3153,6 +3153,48 @@ pub mod pallet {
     );
 }
 
+#[test]
+fn sec004_reports_nested_runtime_arithmetic_once_per_line() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::weight(T::WeightInfo::base() + T::WeightInfo::per_item() * items.len() as u64)]
+    pub fn process(origin: OriginFor<T>, items: BoundedVec<u8, MaxItems>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert_eq!(
+        diags
+            .iter()
+            .filter(|diagnostic| diagnostic.rule_id == "SEC004")
+            .count(),
+        1,
+        "nested arithmetic on one weight line should produce one finding: {diags:?}"
+    );
+}
+
+#[test]
+fn sec004_allows_literal_weight_arithmetic() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::weight(Weight::from_parts(10_000 + 5_000, 0))]
+    pub fn process(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC004"),
+        "compile-time literal arithmetic is not an overflowable runtime weight calculation: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEC005: Expensive operations in weight calculation
 // ==========================================================================
