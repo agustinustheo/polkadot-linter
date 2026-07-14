@@ -4290,6 +4290,38 @@ pub fn production_path() {
 }
 
 #[test]
+fn sec008_does_not_mask_production_after_negated_test_cfg() {
+    let code = r#"
+#[cfg(not(any(test, feature = "runtime-benchmarks")))]
+pub fn production_path() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC008"),
+        "SEC008 should not treat negated test cfg conditions as test-only code: {diags:?}"
+    );
+}
+
+#[test]
+fn sec008_masks_test_cfg_when_test_is_conjoined_with_other_conditions() {
+    let code = r#"
+#[cfg(all(not(feature = "std"), test))]
+pub fn test_only_path() {
+    let value = Some(2u32).unwrap();
+    let _ = value;
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC008"),
+        "SEC008 should continue to skip conditions that require the test cfg: {diags:?}"
+    );
+}
+
+#[test]
 fn sec008_skips_inline_test_functions() {
     let code = r#"
 #[test]
