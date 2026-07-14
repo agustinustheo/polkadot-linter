@@ -5600,6 +5600,45 @@ impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     );
 }
 
+#[test]
+fn sec010_accepts_qualified_transactional_attributes() {
+    let code = r#"
+impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    #[frame_support::transactional]
+    fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
+        ProcessedCount::<T>::put(1);
+        PendingItems::<T>::kill();
+        ensure!(Self::is_ready(), Error::<T>::NotReady);
+        Weight::zero()
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC010"),
+        "qualified transactional attributes must protect FRAME hooks: {diags:?}"
+    );
+}
+
+#[test]
+fn sec010_ignores_non_hooks_methods_with_hook_names() {
+    let code = r#"
+impl<T: Config> Pallet<T> {
+    fn on_initialize() -> Result<(), Error<T>> {
+        ProcessedCount::<T>::put(1);
+        PendingItems::<T>::kill();
+        ensure!(Self::is_ready(), Error::<T>::NotReady);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "SEC010"),
+        "only methods implementing Hooks are lifecycle hooks: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEC011: Storage iteration in dispatchables/hooks
 // ==========================================================================
