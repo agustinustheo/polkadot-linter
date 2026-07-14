@@ -156,7 +156,6 @@ impl Default for TestSmellsConfig {
     fn default() -> Self {
         TestSmellsConfig {
             internal_field_patterns: vec![
-                r"\.0\b".to_string(),  // tuple field access
                 r"\._\w+".to_string(), // underscore-prefixed private fields
                 r"\.inner\b".to_string(),
                 r"\.state\b".to_string(),
@@ -329,6 +328,26 @@ mod tests {
         let error = toml::from_str::<Config>("[general]\nmax_setup_ratio = 5.0\n")
             .expect_err("unknown settings must not be silently ignored");
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn partial_test_smell_config_does_not_match_float_literals() {
+        let config: Config = toml::from_str(
+            r#"
+[test_smells]
+severity = "warning"
+"#,
+        )
+        .expect("partial test smell configuration must deserialize");
+
+        assert!(
+            !config
+                .test_smells
+                .internal_field_patterns
+                .iter()
+                .any(|pattern| pattern == r"\.0\b"),
+            "float literals must not be treated as tuple-field assertions"
+        );
     }
 
     #[test]
