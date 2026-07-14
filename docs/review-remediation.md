@@ -41,6 +41,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEC017 chooses an earlier or identifier-internal `let` | Select the latest identifier-bound `let`/`let mut` before the capacity assignment. | `sec017_allows_vec_event_payloads_derived_from_weighted_inputs` |
 | SEC010 treats any matching function name as a hook and misses qualified transactional attributes | Analyze only `Hooks` trait impls and match the terminal `transactional` attribute segment. | `sec010_accepts_qualified_transactional_attributes`, `sec010_ignores_non_hooks_methods_with_hook_names` |
 | Source stripping mishandles block comments, character literals, and raw strings | Use a stateful Rust-literal/comment sanitizer for full-source consumers. | `ben002_does_not_treat_block_comments_as_verification`, `sem008_ignores_comments_and_literals_without_hiding_following_code` |
+| SEC003 misses qualified trait decode paths | Inspect the qualified self type of decode calls as well as the visible path. | `sec003_detects_qualified_runtime_call_decode_without_limit` |
 
 ## Still Open
 

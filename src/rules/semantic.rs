@@ -4563,6 +4563,26 @@ impl LintRule for MissingDecodeDepthLimit {
                 .any(|name| tokens.contains(name))
         }
 
+        fn call_decodes_recursive_runtime_type(expr_call: &ExprCall, path: &syn::Path) -> bool {
+            if is_recursive_runtime_decode(path) {
+                return true;
+            }
+            let Expr::Path(expr_path) = strip_expr_wrappers(&expr_call.func) else {
+                return false;
+            };
+            expr_path
+                .qself
+                .as_ref()
+                .is_some_and(|qself| is_recursive_runtime_decode_type(&qself.ty))
+        }
+
+        fn is_recursive_runtime_decode_type(ty: &Type) -> bool {
+            let tokens = compact_tokens(ty);
+            ["RuntimeCall", "UncheckedExtrinsic", "OpaqueExtrinsic"]
+                .iter()
+                .any(|name| tokens.contains(name))
+        }
+
         struct DecodeVisitor<'a> {
             diagnostics: Vec<Diagnostic>,
             file: &'a Path,
@@ -4586,7 +4606,7 @@ impl LintRule for MissingDecodeDepthLimit {
                     && !path_has_segment(path, "DecodeLimit")
                     && !path_has_exact_ident(path, "decode_with_depth_limit")
                     && !path_has_exact_ident(path, "decode_all_with_depth_limit")
-                    && is_recursive_runtime_decode(path)
+                    && call_decodes_recursive_runtime_type(expr_call, path)
                 {
                     self.diagnostics.push(Diagnostic {
                         rule_id: self.rule_id.to_string(),

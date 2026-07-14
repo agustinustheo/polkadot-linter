@@ -3053,6 +3053,21 @@ pub fn decode_extrinsic(mut data: &[u8]) -> DispatchResult {
 }
 
 #[test]
+fn sec003_detects_qualified_runtime_call_decode_without_limit() {
+    let code = r#"
+pub fn decode_call(mut data: &[u8]) -> DispatchResult {
+    let call = <RuntimeCall as Decode>::decode(&mut data)?;
+    call.dispatch_bypass_filter(RawOrigin::Root.into())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEC003"),
+        "SEC003 must inspect the qualified self type of Decode calls: {diags:?}"
+    );
+}
+
+#[test]
 fn sec003_allows_runtime_call_decode_from_local_using_encoded_tuple() {
     let code = r#"
 pub fn notify(pallet_index: u8, call_index: u8, query_id: QueryId, response: Response) -> Weight {
