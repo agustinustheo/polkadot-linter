@@ -23,13 +23,23 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEC014 misses FRAME numeric type aliases | Recognize `BalanceOf` and `BlockNumberFor` in identity-key analysis. | `sec014_detects_identity_hasher_on_frame_type_alias_keys` |
 | SEC013 trusts “no maximum capacity” docs | Treat explicit no-maximum wording as evidence that a storage collection remains unbounded. | Source-rule regression suite |
 | Driver JSONL records can interleave | Serialize diagnostics and their newlines into one buffer and append them with one `write_all` call. | Driver build under `rustc-driver` |
+| `config/default.toml` diverges from runtime defaults | Deserialize the bundled TOML as the `Config` default, so the documented file is the effective default source. | `bundled_default_configuration_matches_config_default_toml` |
+| Explicit missing config silently falls back | Treat omitted config and explicit `--config` separately; an explicit path must load successfully. | `explicit_missing_config_is_an_error` |
+| Invalid include/exclude globs are ignored | Validate configured patterns and make CLI pattern compilation fallible before scanning. | `validation_rejects_invalid_globs_and_severities` |
+| Family severity settings are dead | Apply family severity to VAL, TST, MOK, BEN, and TRM rules; per-rule overrides remain higher precedence. | `per_rule_severity_overrides_family_severity` |
+| TST001 emits duplicate diagnostics | Remove the unreachable text pass and inspect assertion macro tokens for macro-contained `unwrap_err` calls. | `tst001_reports_one_diagnostic_for_one_manual_error_check`, `tst001_detects_unwrap_err_inside_assert_macro` |
+| BEN001 reports trait and impl declarations repeatedly | Deduplicate weight functions by name before matching benchmarks; end the text fallback when the WeightInfo block closes. | BEN001 rule suite |
+| BEN003 fallback only allows four lines for an extrinsic signature | Allow a bounded 32-line attribute/signature window. | BEN003 rule suite |
+| MOK001 ignores configured `new_test_ext` and counts callback arguments | Respect every configured mock pattern and inspect only call targets/receivers, not arbitrary call arguments. | MOK001 rule suite |
+| TST004 uses a separate test-file heuristic | Reuse the engine’s test and benchmark target classification. | TST004 rule suite |
+| Local builds can select an unsupported Rust version | Pin the same Rust 1.93.0 toolchain used by CI for ordinary Cargo commands. | `rust-toolchain.toml` |
 
 ## Still Open
 
 The review is not fully resolved. The next implementation work should address:
 
-1. Config options that are declared but ignored, and the divergence between
-   `config/default.toml` and `Config::default`.
+1. Remaining declared-but-unused heuristic options, especially benchmark paths and
+   patterns plus the test/mock ratio limits.
 2. Remaining source-rule precision issues, particularly bounds/dataflow matching,
    string/comment stripping, root-guard dominance, and retired parser rules.
 3. Rule-specific compiler-driver regression coverage for public compiler-backed

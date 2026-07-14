@@ -100,7 +100,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 
 ## Configuration
 
-The default configuration lives in [`config/default.toml`](config/default.toml). A project can override it with a `polkadot-linter.toml` file:
+The bundled default configuration is [`config/default.toml`](config/default.toml). When no `--config` is supplied, `polkadot-linter.toml` in the working directory is loaded when present; otherwise the bundled defaults are used. An explicit `--config` path must exist and be valid.
 
 ```toml
 [rules.enabled]
@@ -121,7 +121,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 
 - [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
 - `[rules.enabled]` is optional. Rules without an explicit `false` override remain enabled.
-- `[rules.severity]` lets you promote or demote individual rules without changing the implementation. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
+- `[rules.severity]` lets you promote or demote individual rules without changing the implementation. It takes precedence over a family severity. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
 - `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.
 

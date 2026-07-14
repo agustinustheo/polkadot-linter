@@ -563,11 +563,30 @@ fn manual_error_assertion() {
     assert!(result.is_err(), "should fail");
     assert_eq!(result.unwrap_err(), Error::<Test>::Boom.into());
 }
+
 "#;
     let diags = check_fixture("tests/test.rs", bad);
     assert!(
         has_rule(&diags, "TST001"),
         "TST001 should fire when unwrap_err is used inside another assertion macro"
+    );
+}
+
+#[test]
+fn tst001_reports_one_diagnostic_for_one_manual_error_check() {
+    let code = r#"
+#[test]
+fn manual_error_assertion() {
+    let result = call();
+    assert!(result.is_err());
+    let _error = result.unwrap_err();
+}
+"#;
+    let diags = check_fixture("tests/test.rs", code);
+    assert_eq!(
+        diags.iter().filter(|diag| diag.rule_id == "TST001").count(),
+        1,
+        "AST analysis must be the single authority for TST001: {diags:?}"
     );
 }
 

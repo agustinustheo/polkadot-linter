@@ -104,10 +104,23 @@ impl LintRule for AssertNoop {
 
         impl<'ast> Visit<'ast> for AssertNoopFnVisitor {
             fn visit_stmt_macro(&mut self, stmt_macro: &'ast StmtMacro) {
-                if macro_name(&stmt_macro.mac).as_deref() == Some("assert") {
-                    let tokens = compact_tokens(&stmt_macro.mac.tokens);
-                    if tokens.contains(".is_err()") {
-                        self.assert_lines.push(span_line(stmt_macro.span()));
+                let name = macro_name(&stmt_macro.mac);
+                let tokens = compact_tokens(&stmt_macro.mac.tokens);
+                if name.as_deref() == Some("assert") && tokens.contains(".is_err()") {
+                    self.assert_lines.push(span_line(stmt_macro.span()));
+                }
+                if matches!(
+                    name.as_deref(),
+                    Some("assert" | "assert_eq" | "assert_ne" | "assert_matches")
+                ) && tokens.contains(".unwrap_err()")
+                {
+                    // Expressions inside declarative macro tokens are not exposed
+                    // through `visit_expr_method_call`.
+                    if !self
+                        .unwrap_err_lines
+                        .contains(&span_line(stmt_macro.span()))
+                    {
+                        self.unwrap_err_lines.push(span_line(stmt_macro.span()));
                     }
                 }
                 visit::visit_stmt_macro(self, stmt_macro);
@@ -183,46 +196,6 @@ impl LintRule for AssertNoop {
         };
         visitor.visit_file(ast);
         diagnostics.extend(visitor.diagnostics);
-
-        let lines: Vec<&str> = ctx.content.lines().collect();
-        for (idx, line) in lines.iter().enumerate() {
-            if !line.contains(".is_err()") {
-                continue;
-            }
-            if lines
-                .iter()
-                .skip(idx + 1)
-                .take(4)
-                .any(|candidate| candidate.contains(".unwrap_err()"))
-            {
-                diagnostics.push(Diagnostic {
-                    rule_id: self.id().to_string(),
-                    rule_name: self.name().to_string(),
-                    category: RuleCategory::TestSmell,
-                    severity: config.rule_severity(self.id(), Severity::Warning),
-                    file: ctx.path.clone(),
-                    line: idx + 1,
-                    column: line.find(".is_err()").map(|col| col + 1),
-                    end_line: None,
-                    message: "Manual `is_err()` + `unwrap_err()` pattern; prefer `assert_noop!`"
-                        .to_string(),
-                    explanation:
-                        "Project convention: use `assert_noop!` for dispatch error assertions. \
-                        It checks both the error and that storage was not modified."
-                            .to_string(),
-                    suggestion: Some(
-                        "Replace with `assert_noop!(call, Error::<T>::YourError)`".to_string(),
-                    ),
-                });
-            }
-        }
-        diagnostics.sort_by_key(|diag| (diag.line, diag.column.unwrap_or(0)));
-        diagnostics.dedup_by(|a, b| {
-            a.rule_id == b.rule_id
-                && a.line == b.line
-                && a.column == b.column
-                && a.message == b.message
-        });
 
         if diagnostics.is_empty() {
             None
@@ -427,13 +400,9 @@ impl LintRule for PaysYesErrorPath {
         // Instead, only skip pure test files (tests/ dir, _test.rs suffix).
         // Files like lib.rs that CONTAIN #[cfg(test)] should still be checked
         // for Pays::No in their non-test production code.
-        let path_str = ctx.path.to_string_lossy();
-        let is_pure_test_file = path_str.contains("/tests/")
-            || path_str.contains("/test/")
-            || path_str.ends_with("_test.rs")
-            || path_str.ends_with("_tests.rs")
-            || path_str.ends_with("tests.rs");
-        if is_pure_test_file {
+        if crate::engine::LintEngine::is_test_file(&ctx.path, ctx.content)
+            || crate::engine::LintEngine::is_benchmark_file(&ctx.path)
+        {
             return None;
         }
 
