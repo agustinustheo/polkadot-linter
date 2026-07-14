@@ -63,7 +63,7 @@ struct MockStats<'a> {
 
 impl MockStats<'_> {
     fn mark_mock_line(&mut self, span: proc_macro2::Span, text: &str) {
-        if contains_mock_pattern(text, self.patterns) && !text.contains("new_test_ext") {
+        if contains_mock_pattern(text, self.patterns) {
             self.mock_lines.insert(span_line(span));
         }
     }
@@ -82,8 +82,9 @@ impl<'ast> Visit<'ast> for MockStats<'_> {
     }
 
     fn visit_expr_call(&mut self, expr_call: &'ast ExprCall) {
-        let tokens = expr_call.to_token_stream().to_string();
-        self.mark_mock_line(expr_call.span(), &tokens);
+        if let Some(path) = expr_call_path(expr_call) {
+            self.mark_mock_line(expr_call.span(), &path.to_token_stream().to_string());
+        }
 
         if let Some(path) = expr_call_path(expr_call) {
             if matches!(
@@ -100,9 +101,13 @@ impl<'ast> Visit<'ast> for MockStats<'_> {
     fn visit_expr_method_call(&mut self, expr_method_call: &'ast ExprMethodCall) {
         let line = span_line(expr_method_call.span());
         let method = expr_method_call.method.to_string();
-        let tokens = expr_method_call.to_token_stream().to_string();
+        let target = format!(
+            "{} {}",
+            expr_method_call.receiver.to_token_stream(),
+            expr_method_call.method
+        );
 
-        self.mark_mock_line(expr_method_call.span(), &tokens);
+        self.mark_mock_line(expr_method_call.span(), &target);
 
         if method.starts_with("expect_") || matches!(method.as_str(), "times" | "returning") {
             self.expectation_lines.insert(line);

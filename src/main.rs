@@ -22,8 +22,8 @@ struct Cli {
     paths: Vec<PathBuf>,
 
     /// Configuration file path
-    #[arg(short, long, default_value = "polkadot-linter.toml")]
-    config: PathBuf,
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 
     /// Output format: human, json, or sarif
     #[arg(short = 'f', long, default_value = "human")]
@@ -114,30 +114,37 @@ fn main() {
         env_logger::init();
     }
 
-    let config = match Config::load(&cli.config) {
-        Ok(c) => c,
-        Err(e) => {
-            if cli.config.to_str() == Some("polkadot-linter.toml") && !cli.config.exists() {
-                log::info!("No config file found, using defaults");
-                Config::default()
-            } else {
-                eprintln!("Error loading config: {e}");
-                process::exit(2);
-            }
+    let config = match load_config(cli.config.as_deref()) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("Error loading config: {error}");
+            process::exit(2);
         }
     };
 
-    let mut engine = LintEngine::new(config.clone());
+    let mut engine = match LintEngine::try_new(config.clone()) {
+        Ok(engine) => engine,
+        Err(error) => {
+            eprintln!("Error compiling configuration glob: {error}");
+            process::exit(2);
+        }
+    };
 
     // Apply CLI overrides
     if let Some(ref rules) = cli.rules {
         engine.filter_rules(rules);
     }
     if let Some(ref include) = cli.include {
-        engine.set_include_patterns(include);
+        if let Err(error) = engine.set_include_patterns(include) {
+            eprintln!("Error compiling --include glob: {error}");
+            process::exit(2);
+        }
     }
     if let Some(ref exclude) = cli.exclude {
-        engine.set_exclude_patterns(exclude);
+        if let Err(error) = engine.set_exclude_patterns(exclude) {
+            eprintln!("Error compiling --exclude glob: {error}");
+            process::exit(2);
+        }
     }
 
     let manifest_path = match effective_manifest_path(&cli) {
@@ -280,6 +287,21 @@ fn main() {
     }
 }
 
+fn load_config(path: Option<&Path>) -> Result<Config, String> {
+    match path {
+        Some(path) => Config::load(path).map_err(|error| error.to_string()),
+        None => {
+            let default_path = Path::new("polkadot-linter.toml");
+            if default_path.is_file() {
+                Config::load(default_path).map_err(|error| error.to_string())
+            } else {
+                log::info!("No config file found, using bundled defaults");
+                Ok(Config::default())
+            }
+        }
+    }
+}
+
 fn effective_manifest_path(cli: &Cli) -> Result<Option<PathBuf>, String> {
     if cli.syntax_only {
         return Ok(None);
@@ -383,7 +405,7 @@ mod tests {
 
     use polkadot_linter::config::Config;
 
-    use super::{discover_cargo_manifest, selected_compiler_backed_rules};
+    use super::{discover_cargo_manifest, load_config, selected_compiler_backed_rules};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
@@ -454,6 +476,16 @@ mod tests {
         assert!(!selected_compiler_backed_rules(None, &[], &config)
             .iter()
             .any(|rule| rule == "SEC009"));
+    }
+
+    #[test]
+    fn explicit_missing_config_is_an_error() {
+        let path = tempfile::tempdir()
+            .expect("tempdir should be created")
+            .path()
+            .join("missing.toml");
+
+        assert!(load_config(Some(&path)).is_err());
     }
 
     #[test]

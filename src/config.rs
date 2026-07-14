@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path};
 
 use crate::diagnostics::Severity;
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub general: GeneralConfig,
@@ -13,6 +13,19 @@ pub struct Config {
     pub mock_usage: MockUsageConfig,
     pub benchmarking: BenchmarkingConfig,
     pub terminology: TerminologyConfig,
+}
+
+/// Mirrors the complete bundled TOML schema without invoking `Config::default`
+/// while serde is deserializing the defaults themselves.
+#[derive(Deserialize)]
+struct BundledConfig {
+    general: GeneralConfig,
+    rules: RulesConfig,
+    validation_order: ValidationOrderConfig,
+    test_smells: TestSmellsConfig,
+    mock_usage: MockUsageConfig,
+    benchmarking: BenchmarkingConfig,
+    terminology: TerminologyConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -231,7 +244,40 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
+        config.validate()?;
         Ok(config)
+    }
+
+    /// Reject configuration that would otherwise silently change scan coverage.
+    pub fn validate(&self) -> Result<(), String> {
+        for pattern in self.general.exclude.iter().chain(&self.general.include) {
+            glob::Pattern::new(pattern)
+                .map_err(|error| format!("invalid glob pattern `{pattern}`: {error}"))?;
+        }
+
+        self.validate_severity("general.default_severity", &self.general.default_severity)?;
+        for (rule_id, severity) in &self.rules.severity {
+            self.validate_severity(&format!("rules.severity.{rule_id}"), severity)?;
+        }
+        for (section, severity) in [
+            ("validation_order.severity", &self.validation_order.severity),
+            ("test_smells.severity", &self.test_smells.severity),
+            ("mock_usage.severity", &self.mock_usage.severity),
+            ("benchmarking.severity", &self.benchmarking.severity),
+            ("terminology.severity", &self.terminology.severity),
+        ] {
+            self.validate_severity(section, severity)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_severity(&self, location: &str, value: &str) -> Result<(), String> {
+        value.parse::<Severity>().map(|_| ()).map_err(|_| {
+            format!(
+                "invalid severity `{value}` for {location}; expected advisory, warning, or error"
+            )
+        })
     }
 
     pub fn rule_enabled(&self, rule_id: &str) -> bool {
@@ -243,6 +289,90 @@ impl Config {
             .severity
             .get(rule_id)
             .and_then(|s| s.parse().ok())
+            .or_else(|| self.family_severity(rule_id))
+            // This only applies to future rule families. Existing families retain
+            // their rule-specific defaults unless their family config overrides it.
+            .or_else(|| {
+                (!matches!(
+                    rule_id.get(..3),
+                    Some("VAL" | "TST" | "MOK" | "BEN" | "TRM" | "SEM" | "SEC")
+                ))
+                .then(|| self.general.default_severity.parse().ok())
+                .flatten()
+            })
             .unwrap_or(default)
+    }
+
+    fn family_severity(&self, rule_id: &str) -> Option<Severity> {
+        let severity = match rule_id.get(..3) {
+            Some("VAL") => &self.validation_order.severity,
+            Some("TST") => &self.test_smells.severity,
+            Some("MOK") => &self.mock_usage.severity,
+            Some("BEN") => &self.benchmarking.severity,
+            Some("TRM") => &self.terminology.severity,
+            _ => return None,
+        };
+        severity.parse().ok()
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let defaults: BundledConfig = toml::from_str(include_str!("../config/default.toml"))
+            .expect("bundled default configuration must be valid");
+        Self {
+            general: defaults.general,
+            rules: defaults.rules,
+            validation_order: defaults.validation_order,
+            test_smells: defaults.test_smells,
+            mock_usage: defaults.mock_usage,
+            benchmarking: defaults.benchmarking,
+            terminology: defaults.terminology,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_default_configuration_matches_config_default_toml() {
+        let config = Config::default();
+        assert_eq!(
+            config.rules.severity.get("TST002"),
+            Some(&"error".to_string())
+        );
+        assert_eq!(config.general.exclude.first(), Some(&"*.lock".to_string()));
+    }
+
+    #[test]
+    fn per_rule_severity_overrides_family_severity() {
+        let mut config = Config::default();
+        config.test_smells.severity = "error".to_string();
+        config
+            .rules
+            .severity
+            .insert("TST001".to_string(), "advisory".to_string());
+
+        assert_eq!(
+            config.rule_severity("TST001", Severity::Warning),
+            Severity::Advisory
+        );
+        assert_eq!(
+            config.rule_severity("TST003", Severity::Advisory),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn validation_rejects_invalid_globs_and_severities() {
+        let mut config = Config::default();
+        config.general.exclude = vec!["[".to_string()];
+        assert!(config.validate().unwrap_err().contains("invalid glob"));
+
+        config.general.exclude.clear();
+        config.benchmarking.severity = "urgent".to_string();
+        assert!(config.validate().unwrap_err().contains("invalid severity"));
     }
 }

@@ -19,28 +19,21 @@ pub struct LintEngine {
 
 impl LintEngine {
     pub fn new(config: Config) -> Self {
-        let exclude_patterns = config
-            .general
-            .exclude
-            .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
-            .collect();
+        Self::try_new(config).expect("lint configuration glob patterns must be valid")
+    }
 
-        let include_patterns = config
-            .general
-            .include
-            .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
-            .collect();
+    pub fn try_new(config: Config) -> Result<Self, glob::PatternError> {
+        let exclude_patterns = compile_patterns(&config.general.exclude)?;
+        let include_patterns = compile_patterns(&config.general.include)?;
 
         let rules = rules::all_rules(&config);
 
-        LintEngine {
+        Ok(LintEngine {
             config,
             rules,
             include_patterns,
             exclude_patterns,
-        }
+        })
     }
 
     pub fn filter_rules(&mut self, families: &[String]) {
@@ -51,18 +44,14 @@ impl LintEngine {
         });
     }
 
-    pub fn set_include_patterns(&mut self, patterns: &[String]) {
-        self.include_patterns = patterns
-            .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
-            .collect();
+    pub fn set_include_patterns(&mut self, patterns: &[String]) -> Result<(), glob::PatternError> {
+        self.include_patterns = compile_patterns(patterns)?;
+        Ok(())
     }
 
-    pub fn set_exclude_patterns(&mut self, patterns: &[String]) {
-        self.exclude_patterns = patterns
-            .iter()
-            .filter_map(|p| glob::Pattern::new(p).ok())
-            .collect();
+    pub fn set_exclude_patterns(&mut self, patterns: &[String]) -> Result<(), glob::PatternError> {
+        self.exclude_patterns = compile_patterns(patterns)?;
+        Ok(())
     }
 
     pub fn scan(&self, root: &Path) -> Vec<Diagnostic> {
@@ -163,7 +152,7 @@ impl LintEngine {
         diagnostics
     }
 
-    fn is_test_file(path: &Path, _content: &str) -> bool {
+    pub(crate) fn is_test_file(path: &Path, _content: &str) -> bool {
         let path_str = path.to_string_lossy();
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         path_str.contains("/tests/")
@@ -179,13 +168,20 @@ impl LintEngine {
             || file_name == "testing_utils.rs"
     }
 
-    fn is_benchmark_file(path: &Path) -> bool {
+    pub(crate) fn is_benchmark_file(path: &Path) -> bool {
         let path_str = path.to_string_lossy();
         path_str.contains("/benchmarking")
             || path_str.contains("/benchmarks")
             || path_str.ends_with("benchmarking.rs")
             || path_str.ends_with("benchmarks.rs")
     }
+}
+
+fn compile_patterns(patterns: &[String]) -> Result<Vec<glob::Pattern>, glob::PatternError> {
+    patterns
+        .iter()
+        .map(|pattern| glob::Pattern::new(pattern))
+        .collect()
 }
 
 /// Context passed to each rule when checking a file

@@ -83,13 +83,19 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
         let mut visitor = WeightFnVisitor { names: Vec::new() };
         visitor.visit_file(&ast);
         if !visitor.names.is_empty() {
-            return visitor.names;
+            let mut seen = HashSet::new();
+            return visitor
+                .names
+                .into_iter()
+                .filter(|(name, _)| seen.insert(name.clone()))
+                .collect();
         }
     }
 
     let weight_fn_re = Regex::new(r"fn\s+(\w+)\s*\(").unwrap();
     let mut weight_fns = Vec::new();
     let mut in_trait = false;
+    let mut brace_depth = 0_i32;
     for (i, line) in content.lines().enumerate() {
         let trimmed = line.trim();
         if trimmed.contains("trait WeightInfo")
@@ -97,12 +103,17 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
             || trimmed.contains("impl<T: frame_system::Config>") && trimmed.contains("WeightInfo")
         {
             in_trait = true;
+            brace_depth = brace_delta(trimmed);
             continue;
         }
         if in_trait {
             if let Some(captures) = weight_fn_re.captures(trimmed) {
                 let fn_name = captures.get(1).unwrap().as_str().to_string();
                 weight_fns.push((fn_name, i + 1));
+            }
+            brace_depth += brace_delta(trimmed);
+            if brace_depth <= 0 {
+                in_trait = false;
             }
         }
     }
@@ -227,7 +238,7 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
             for (j, line) in lines
                 .iter()
                 .enumerate()
-                .take((i + 5).min(lines.len()))
+                .take((i + 33).min(lines.len()))
                 .skip(i + 1)
             {
                 if let Some(caps) = fn_re.captures(line) {
