@@ -3,7 +3,8 @@ use quote::ToTokens;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, Expr, ExprCall, ExprMethodCall, File as SynFile, FnArg, ImplItem, Pat, Type,
+    Attribute, Expr, ExprCall, ExprMethodCall, ExprPath, File as SynFile, FnArg, ImplItem, Pat,
+    Type,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,29 +168,144 @@ fn dispatchable_param(arg: &FnArg, block: &syn::Block) -> Option<DispatchablePar
 }
 
 fn body_bounds_param(block: &syn::Block, param_name: &str) -> bool {
-    let tokens = compact_tokens(block);
-    let len_call = format!("{param_name}.len()");
-    let reference = format!("&{param_name}");
+    fn root_ident(expr: &Expr) -> Option<&syn::Ident> {
+        match expr {
+            Expr::Path(ExprPath {
+                qself: None, path, ..
+            }) if path.segments.len() == 1 => path.get_ident(),
+            Expr::Reference(reference) => root_ident(&reference.expr),
+            Expr::Paren(paren) => root_ident(&paren.expr),
+            Expr::Group(group) => root_ident(&group.expr),
+            _ => None,
+        }
+    }
 
-    tokens.contains(&format!("{len_call}<"))
-        || tokens.contains(&format!("{len_call}<="))
-        || tokens.contains(&format!("({len_call}asu32)<"))
-        || tokens.contains(&format!("({len_call}asu32)<="))
-        || tokens.contains(&format!("({len_call}asusize)<"))
-        || tokens.contains(&format!("({len_call}asusize)<="))
-        || tokens.contains(&format!("try_from({param_name})"))
-        || tokens.contains(&format!("try_from(&{param_name})"))
-        || tokens.contains(&format!("{param_name}.try_into()"))
-        || tokens.contains(&format!("decode(&mut&{param_name}[..]"))
-        || (param_name.contains("signature")
-            && tokens.contains("verify_")
-            && tokens.contains(&reference))
-        || (tokens.contains("to_text()")
-            && (tokens.contains(&format!("==&{param_name}[..]"))
-                || tokens.contains(&format!("&{param_name}[..]=="))))
-        || (tokens.contains("ownership_proof_is_valid") && tokens.contains(&reference))
-        || (tokens.contains("bound_") && tokens.contains(param_name))
-        || (tokens.contains("validate_") && tokens.contains(&reference))
+    fn is_param_len(expr: &Expr, param_name: &str) -> bool {
+        match expr {
+            Expr::MethodCall(method) if method.method == "len" => {
+                root_ident(&method.receiver).is_some_and(|ident| ident == param_name)
+            }
+            Expr::Cast(cast) => is_param_len(&cast.expr, param_name),
+            Expr::Paren(paren) => is_param_len(&paren.expr, param_name),
+            Expr::Group(group) => is_param_len(&group.expr, param_name),
+            _ => false,
+        }
+    }
+
+    fn is_proven_length_bound(expr: &Expr, param_name: &str) -> bool {
+        let Expr::Binary(binary) = expr else {
+            return false;
+        };
+        matches!(binary.op, syn::BinOp::Lt(_) | syn::BinOp::Le(_))
+            && is_param_len(&binary.left, param_name)
+            || matches!(binary.op, syn::BinOp::Gt(_) | syn::BinOp::Ge(_))
+                && is_param_len(&binary.right, param_name)
+    }
+
+    fn is_param_reference(expr: &Expr, param_name: &str) -> bool {
+        let tokens = compact_tokens(expr);
+        tokens == param_name
+            || tokens == format!("&{param_name}")
+            || tokens == format!("&mut{param_name}")
+            || tokens == format!("{param_name}[..]")
+            || tokens == format!("&{param_name}[..]")
+            || tokens == format!("&mut{param_name}[..]")
+            || tokens == format!("&mut&{param_name}[..]")
+    }
+
+    struct BoundVisitor<'a> {
+        param_name: &'a str,
+        found: bool,
+    }
+
+    impl<'ast> Visit<'ast> for BoundVisitor<'_> {
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            if path_last_ident(&mac.path).as_deref() == Some("ensure") {
+                let tokens = mac.tokens.to_string();
+                if let Some(condition) = tokens.split(',').next() {
+                    if let Ok(condition) = syn::parse_str::<Expr>(condition) {
+                        if is_proven_length_bound(&condition, self.param_name) {
+                            self.found = true;
+                        }
+                    }
+                }
+                if tokens.contains("to_text")
+                    && (tokens.contains(&format!("{} [..]", self.param_name))
+                        || tokens.contains(&format!("& {} [..]", self.param_name)))
+                {
+                    self.found = true;
+                }
+                if tokens.contains("ownership_proof_is_valid")
+                    && (tokens.contains(&format!("& {}", self.param_name))
+                        || tokens.contains(&format!("&{}", self.param_name)))
+                {
+                    self.found = true;
+                }
+            }
+            visit::visit_macro(self, mac);
+        }
+
+        fn visit_expr_call(&mut self, node: &'ast ExprCall) {
+            if let Some(name) = expr_call_path(node).and_then(path_last_ident) {
+                let receives_param = node
+                    .args
+                    .iter()
+                    .any(|arg| is_param_reference(arg, self.param_name));
+                if (name == "try_from"
+                    && node
+                        .args
+                        .first()
+                        .and_then(root_ident)
+                        .is_some_and(|ident| ident == self.param_name))
+                    || (receives_param
+                        && (name.starts_with("bound_")
+                            || name.starts_with("validate_")
+                            || name.starts_with("verify_")
+                            || matches!(name.as_str(), "ownership_proof_is_valid" | "decode")))
+                {
+                    self.found = true;
+                }
+            }
+            visit::visit_expr_call(self, node);
+        }
+
+        fn visit_expr_method_call(&mut self, node: &'ast ExprMethodCall) {
+            if node.method == "try_into"
+                && root_ident(&node.receiver).is_some_and(|ident| ident == self.param_name)
+            {
+                self.found = true;
+            }
+            if matches!(node.method.to_string().as_str(), "ownership_proof_is_valid")
+                && node
+                    .args
+                    .iter()
+                    .any(|arg| is_param_reference(arg, self.param_name))
+            {
+                self.found = true;
+            }
+            visit::visit_expr_method_call(self, node);
+        }
+
+        fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+            if matches!(node.op, syn::BinOp::Eq(_) | syn::BinOp::Ne(_)) {
+                let tokens = compact_tokens(node);
+                if tokens.contains("to_text()")
+                    && (tokens.contains(&format!("{}[..]", self.param_name))
+                        || tokens.contains(&format!("&{}[..]", self.param_name)))
+                {
+                    self.found = true;
+                }
+            }
+            visit::visit_expr_binary(self, node);
+        }
+    }
+
+    let mut visitor = BoundVisitor {
+        param_name,
+        found: false,
+    };
+    visitor.visit_block(block);
+    visitor.found
 }
 
 fn body_consumes_max_block(block: &syn::Block) -> bool {
@@ -209,6 +325,10 @@ fn detect_origin(block: &syn::Block) -> DispatchableOrigin {
             if let Some(path) = expr_call_path(node) {
                 match path_last_ident(path).as_deref() {
                     Some("ensure_signed") => self.has_signed_guard = true,
+                    Some("ensure_signed_or_root") => {
+                        self.has_signed_guard = true;
+                        self.has_privileged_guard = true;
+                    }
                     Some(
                         "ensure_root" | "ensure_none" | "ensure_origin" | "ensure_origin_or_root",
                     ) => {

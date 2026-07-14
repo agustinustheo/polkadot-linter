@@ -2661,16 +2661,20 @@ impl LintRule for RedundantContainsKeyBeforeRemove {
 
         let ast = ast_file(ctx)?;
 
-        fn storage_call_owner(expr: &Expr) -> Option<String> {
+        fn storage_call(expr: &Expr) -> Option<(String, Vec<String>)> {
             let Expr::Call(expr_call) = expr else {
                 return None;
             };
             let path = expr_call_path(expr_call)?;
-            path_owner_name(path)
+            Some((
+                path_owner_name(path)?,
+                expr_call.args.iter().map(compact_tokens).collect(),
+            ))
         }
 
         struct RemoveTakeFinder {
             target_owner: String,
+            target_args: Vec<String>,
             found_line: Option<usize>,
         }
 
@@ -2682,7 +2686,13 @@ impl LintRule for RedundantContainsKeyBeforeRemove {
                 };
                 let is_remove =
                     path_has_exact_ident(path, "remove") || path_has_exact_ident(path, "take");
-                if is_remove && path_owner_name(path).as_deref() == Some(self.target_owner.as_str())
+                if is_remove
+                    && path_owner_name(path).as_deref() == Some(self.target_owner.as_str())
+                    && expr_call
+                        .args
+                        .iter()
+                        .map(compact_tokens)
+                        .eq(self.target_args.iter().cloned())
                 {
                     self.found_line = Some(span_line(expr_call.span()));
                 }
@@ -2700,7 +2710,7 @@ impl LintRule for RedundantContainsKeyBeforeRemove {
 
         impl<'ast> Visit<'ast> for ContainsKeyVisitor<'_> {
             fn visit_expr_if(&mut self, expr_if: &'ast syn::ExprIf) {
-                let Some(owner) = storage_call_owner(&expr_if.cond) else {
+                let Some((owner, key_args)) = storage_call(&expr_if.cond) else {
                     visit::visit_expr_if(self, expr_if);
                     return;
                 };
@@ -2719,6 +2729,7 @@ impl LintRule for RedundantContainsKeyBeforeRemove {
 
                 let mut finder = RemoveTakeFinder {
                     target_owner: owner.clone(),
+                    target_args: key_args,
                     found_line: None,
                 };
                 finder.visit_block(&expr_if.then_branch);
