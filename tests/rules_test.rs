@@ -1509,11 +1509,30 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 }
+
 "#;
     let diags = check_fixture("pallets/foo/src/lib.rs", code);
     assert!(
         has_rule(&diags, "BEN003"),
         "BEN003 must recognize qualified FRAME pallet call attributes: {diags:?}"
+    );
+}
+
+#[test]
+fn ben003_detects_implicit_index_dispatchables() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "BEN003"),
+        "BEN003 must inspect FRAME dispatchables without explicit call indices: {diags:?}"
     );
 }
 
