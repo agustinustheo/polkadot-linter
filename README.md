@@ -135,6 +135,9 @@ scan path is inside a single Cargo project; the CLI discovers the nearest
 `--syntax-only` skips compiler-backed rules and is appropriate only when
 running the remaining syntax/text rule families.
 
+Use `--no-default-features` and `--features feature_a,feature_b` to select the
+Cargo feature configuration for both source and compiler-backed analysis.
+
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
 data-driven `scripts/check-sdk-benchmarks.sh` baseline used by CI.
 

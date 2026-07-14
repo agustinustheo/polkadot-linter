@@ -22,6 +22,7 @@ pub struct RustcPipelineOptions {
     pub file_filters: Vec<String>,
     pub lib: bool,
     pub no_default_features: bool,
+    pub features: Vec<String>,
     pub show_cargo_progress: bool,
 }
 
@@ -132,6 +133,9 @@ pub fn run_cargo_check(
     }
     if options.no_default_features {
         command.arg("--no-default-features");
+    }
+    if !options.features.is_empty() {
+        command.arg("--features").arg(options.features.join(","));
     }
 
     command

@@ -21,6 +21,11 @@ compiler path. `scripts/check-sdk-benchmarks.sh` maintains pinned SDK
 baselines for the hard security rules and `VAL002`; additional rule-specific
 SDK benchmark coverage remains tracked as migration work.
 
+For source-authoritative FRAME attributes, the CLI applies active `cfg_attr`
+values from Cargo metadata using the same default, `--no-default-features`, and
+`--features` selection passed to compiler-backed analysis. Custom cfg values
+that Cargo metadata cannot establish remain unresolved rather than guessed.
+
 ## Source authority
 
 These rules remain parser/source-based because their current contract depends

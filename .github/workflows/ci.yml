@@ -65,6 +65,9 @@ jobs:
       - name: Check rustc-backed weight attributes
         run: scripts/check-rustc-weight-attributes.sh
 
+      - name: Check source cfg_attr feature selection
+        run: scripts/check-source-cfg-attributes.sh
+
       - name: Check default compiler-backed CLI routing
         run: scripts/check-rustc-cli-default.sh
 

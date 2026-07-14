@@ -81,6 +81,10 @@ struct Cli {
     #[arg(long = "no-default-features")]
     no_default_features: bool,
 
+    /// Cargo features to enable for both source and compiler-backed analysis
+    #[arg(long = "features", value_delimiter = ',')]
+    features: Vec<String>,
+
     /// Cargo target directory for compiler-backed cargo check
     #[arg(long = "target-dir")]
     target_dir: Option<PathBuf>,
@@ -193,7 +197,11 @@ fn main() {
     }
     if !cli.no_syntax {
         for path in &cli.paths {
-            results.extend(engine.scan(path));
+            results.extend(engine.scan_with_cargo_features(
+                path,
+                cli.no_default_features,
+                &cli.features,
+            ));
         }
     }
 
@@ -213,6 +221,7 @@ fn main() {
                 },
                 lib: cli.lib_only,
                 no_default_features: cli.no_default_features,
+                features: cli.features.clone(),
                 show_cargo_progress: !cli.no_progress,
             };
             match rustc_pipeline::run_cargo_check(&options) {
