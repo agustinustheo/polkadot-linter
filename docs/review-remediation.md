@@ -53,6 +53,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | Config documents ignored severity, setup, and benchmark options | Remove no-op schema entries and reject unknown configuration keys instead of silently accepting them. | `project_configuration_uses_the_supported_schema`, `deserialization_rejects_unknown_configuration_options` |
 | Overlapping CLI scan paths produce repeated, unsorted diagnostics | Normalize the combined syntax and compiler result set by full location/rule identity before rendering output. | `normalizes_order_and_removes_overlapping_scan_duplicates` |
 | Dynamic-library path joining can erase the caller's library search path | Retain the existing environment value when path joining cannot safely prepend the toolchain directory. | `preserves_existing_library_path_when_joining_fails` |
+| Comma-containing compiler source paths split into multiple filters | Serialize file filters as JSON across the linter-driver boundary; the driver retains legacy environment parsing for older invocations. | `encodes_file_filters_without_delimiter_ambiguity`, rustc-driver build |
 
 ## Still Open
 
@@ -60,9 +61,7 @@ The review is not fully resolved. The next implementation work should address:
 
 1. Remaining source-rule precision issues, particularly `cfg_attr` handling and the
    retired parser implementations that are not public production authority.
-2. Lossless compiler-driver file filtering for unusual source paths (the current
-   environment transport is comma-delimited).
-3. Rule-specific compiler-driver regression coverage for public compiler-backed
+2. Rule-specific compiler-driver regression coverage for public compiler-backed
    SEC/VAL diagnostics. A source-rule test alone does not prove production behavior
    for a rule whose public authority is rustc.
 

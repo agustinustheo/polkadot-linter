@@ -153,8 +153,8 @@ pub fn run_cargo_check(
     }
     if !options.file_filters.is_empty() {
         command.env(
-            "POLKADOT_LINTER_DRIVER_FILE_CONTAINS",
-            options.file_filters.join(","),
+            "POLKADOT_LINTER_DRIVER_FILE_FILTERS_JSON",
+            encode_file_filters(&options.file_filters),
         );
     }
     if let Some(target_dir) = &target_dir {
@@ -249,6 +249,10 @@ fn dynamic_library_paths(library_dir: &Path, existing: Option<OsString>) -> OsSt
         .unwrap_or_else(|_| existing.unwrap_or_else(|| OsString::from(library_dir)))
 }
 
+fn encode_file_filters(filters: &[String]) -> String {
+    serde_json::to_string(filters).expect("file filter list should serialize")
+}
+
 fn read_jsonl_diagnostics(path: &Path) -> Result<Vec<RustcDiagnostic>, RustcPipelineError> {
     let content = fs::read_to_string(path)?;
     content
@@ -315,7 +319,9 @@ mod tests {
 
     use crate::diagnostics::{Diagnostic, RuleCategory, Severity};
 
-    use super::{dynamic_library_paths, read_jsonl_diagnostics, RustcDiagnostic};
+    use super::{
+        dynamic_library_paths, encode_file_filters, read_jsonl_diagnostics, RustcDiagnostic,
+    };
 
     #[test]
     fn reads_jsonl_diagnostics_and_ignores_blank_lines() {
@@ -397,6 +403,20 @@ mod tests {
         assert_eq!(
             dynamic_library_paths(&invalid_library_dir, Some(existing.clone())),
             existing
+        );
+    }
+
+    #[test]
+    fn encodes_file_filters_without_delimiter_ambiguity() {
+        let filters = vec![
+            "/tmp/pallet,with,commas/src/lib.rs".to_string(),
+            "runtime/src/lib.rs".to_string(),
+        ];
+
+        assert_eq!(
+            serde_json::from_str::<Vec<String>>(&encode_file_filters(&filters))
+                .expect("encoded filters should deserialize"),
+            filters
         );
     }
 }

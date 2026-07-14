@@ -5754,18 +5754,23 @@ fn mark_driver_invoked() {
 }
 
 fn output_file_filters() -> Vec<String> {
-    env::var("POLKADOT_LINTER_DRIVER_FILE_CONTAINS")
+    env::var("POLKADOT_LINTER_DRIVER_FILE_FILTERS_JSON")
         .ok()
-        .into_iter()
-        .flat_map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_else(|| {
+            env::var("POLKADOT_LINTER_DRIVER_FILE_CONTAINS")
+                .ok()
+                .into_iter()
+                .flat_map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
         })
-        .collect()
 }
 
 fn enabled_rule_filters() -> HashSet<String> {
