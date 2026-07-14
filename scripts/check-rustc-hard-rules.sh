@@ -1652,7 +1652,7 @@ cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --emit metadata \
   --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_JSON"
 
-POLKADOT_LINTER_DRIVER_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
+POLKADOT_LINTER_DRIVER_FILE_FILTERS_JSON='["hard-rules-fixture/src/lib.rs"]' \
   cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
@@ -1662,7 +1662,7 @@ POLKADOT_LINTER_DRIVER_FILE_CONTAINS="hard-rules-fixture/src/lib.rs" \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_JSON"
 
-POLKADOT_LINTER_DRIVER_FILE_CONTAINS="does-not-match.rs" \
+POLKADOT_LINTER_DRIVER_FILE_FILTERS_JSON='["does-not-match.rs"]' \
   cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
