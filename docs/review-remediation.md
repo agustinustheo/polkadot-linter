@@ -48,6 +48,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SARIF omits diagnostic end lines | Serialize `endLine` whenever the diagnostic contains an end span. | `sarif_preserves_end_line_when_available` |
 | SEM002 skips nested local bindings | Recurse from every local binding so closure and nested initializer locals are inspected. | `sem002_detects_typed_collect_inside_closure` |
 | SEM013 treats every `*Invalidity` enum as a custom transaction invalidity code | Restrict the convention to the documented `CustomInvalidity` and `CustomValidity` enum names. | `sem013_ignores_unrelated_invalidity_enum_names` |
+| TRM001 skips identifiers on lines containing strings or comments | Check sanitized code identifiers alongside configured string and comment text. | `trm001_checks_identifiers_on_lines_with_strings_and_comments` |
 
 ## Still Open
 
