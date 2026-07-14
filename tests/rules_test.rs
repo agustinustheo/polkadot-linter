@@ -379,6 +379,24 @@ pub fn chill(stash: AccountId) -> Result<(), Error> {
     );
 }
 
+#[test]
+fn val001_ignores_comments_strings_and_get_constants() {
+    let code = r#"
+pub fn submit(origin: OriginFor<T>, value: u32) -> DispatchResult {
+    let description = "avoid Foo::<T>::get() before validation";
+    // Foo::<T>::get() is expensive, but this is only a comment.
+    let maximum = T::MaxValues::get();
+    ensure!(value < maximum, Error::<T>::TooLarge);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "non-code text and Get constants are not expensive storage reads: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================

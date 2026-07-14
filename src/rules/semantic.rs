@@ -1682,6 +1682,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                 continue;
             }
             let trimmed = line.trim();
+            let code = strip_strings_and_line_comments(trimmed);
 
             // Skip comments and attributes
             if trimmed.starts_with("//") || trimmed.starts_with("#[") || trimmed.starts_with("///")
@@ -1712,7 +1713,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                 if first_heavy_op.is_none() {
                     for pattern in &config.validation_order.heavy_operations {
                         if validation_guard_tokens.get(i).is_none_or(String::is_empty)
-                            && trimmed.contains(pattern.as_str())
+                            && val001_has_heavy_operation(&code, pattern)
                         {
                             if conditional_read_mask.get(i).copied().unwrap_or(false) {
                                 break;
@@ -1725,12 +1726,8 @@ impl LintRule for ValidationBeforeHeavyRead {
                                     .cloned()
                                     .filter(|bindings| !bindings.is_empty())
                                     .unwrap_or_else(|| {
-                                        let lhs = trimmed
-                                            .split('=')
-                                            .next()
-                                            .unwrap_or("")
-                                            .trim()
-                                            .to_string();
+                                        let lhs =
+                                            code.split('=').next().unwrap_or("").trim().to_string();
                                         val001_binding_names(&lhs)
                                     }),
                             );
@@ -1744,12 +1741,12 @@ impl LintRule for ValidationBeforeHeavyRead {
                 if let Some((heavy_line, ref heavy_pattern)) = first_heavy_op {
                     let mut consumed_heavy_read = false;
                     for pattern in &config.validation_order.cheap_validations {
-                        if trimmed.contains(pattern.as_str()) && i > heavy_line {
+                        if code.contains(pattern.as_str()) && i > heavy_line {
                             // A predicate by itself is not a validation. It becomes one when a
                             // fallible FRAME guard consumes it; otherwise post-operation checks
                             // such as `if !remaining.is_zero()` are not reorderable
                             // preconditions.
-                            if !is_val001_predicate_validation(pattern, trimmed) {
+                            if !is_val001_predicate_validation(pattern, &code) {
                                 continue;
                             }
                             // FIX #5: Skip if the validation references the variable
@@ -1760,7 +1757,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                                     .map(String::as_str)
                                     .unwrap_or("");
                                 if bindings.iter().any(|binding| {
-                                    val001_references_binding(trimmed, binding)
+                                    val001_references_binding(&code, binding)
                                         || val001_references_binding(guard_tokens, binding)
                                 }) {
                                     consumed_heavy_read = true;
@@ -1805,7 +1802,7 @@ impl LintRule for ValidationBeforeHeavyRead {
                             consumed_heavy_read = i > heavy_line
                                 && bindings
                                     .iter()
-                                    .any(|binding| val001_references_binding(trimmed, binding));
+                                    .any(|binding| val001_references_binding(&code, binding));
                         }
                     }
                     if consumed_heavy_read {
@@ -1829,6 +1826,12 @@ impl LintRule for ValidationBeforeHeavyRead {
             Some(diagnostics)
         }
     }
+}
+
+fn val001_has_heavy_operation(code: &str, pattern: &str) -> bool {
+    code.contains(pattern)
+        // `T::Max*::get()` is a type-level `Get` constant, not a storage read.
+        && !(pattern == "::get(" && code.contains("T::"))
 }
 
 fn is_val001_predicate_validation(pattern: &str, line: &str) -> bool {
