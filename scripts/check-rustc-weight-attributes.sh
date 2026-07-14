@@ -18,8 +18,10 @@ OUTPUT="$(cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin
   --target-dir "$TARGET_DIR" "$FIXTURE_DIR/src")"
 
 printf '%s\n' "$OUTPUT"
-test "$(jq '[.[] | select(.rule_id == "SEC004")] | length' <<<"$OUTPUT")" -eq 1
+test "$(jq '[.[] | select(.rule_id == "SEC004")] | length' <<<"$OUTPUT")" -eq 2
 test "$(jq '[.[] | select(.rule_id == "SEC004" and .line == 1)] | length' <<<"$OUTPUT")" -eq 1
+test "$(jq '[.[] | select(.rule_id == "SEC004" and .line == 56)] | length' <<<"$OUTPUT")" -eq 1
+test "$(jq '[.[] | select(.rule_id == "SEC004" and .line == 53)] | length' <<<"$OUTPUT")" -eq 0
 test "$(jq '[.[] | select(.rule_id == "SEC005")] | length' <<<"$OUTPUT")" -eq 2
 test "$(jq '[.[] | select(.rule_id == "SEC005" and .line == 41)] | length' <<<"$OUTPUT")" -eq 1
 test "$(jq '[.[] | select(.rule_id == "SEC005" and .line == 46)] | length' <<<"$OUTPUT")" -eq 1

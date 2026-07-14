@@ -49,3 +49,9 @@ pub fn dispatch_info_weight() {}
 
 #[pallet::weight(MaxItems::get())]
 pub fn config_weight() {}
+
+#[cfg_attr(feature = "enabled-weight", pallet::weight(3u32 + 4))]
+pub fn disabled_cfg_weight() {}
+
+#[cfg_attr(not(any()), pallet::weight(5u32 + 6))]
+pub fn enabled_cfg_weight() {}
