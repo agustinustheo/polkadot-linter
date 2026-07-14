@@ -153,7 +153,7 @@ impl LintEngine {
     }
 
     pub(crate) fn is_test_file(path: &Path, _content: &str) -> bool {
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().replace('\\', "/");
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         path_str.contains("/tests/")
             || path_str.contains("/test/")
@@ -169,7 +169,7 @@ impl LintEngine {
     }
 
     pub(crate) fn is_benchmark_file(path: &Path) -> bool {
-        let path_str = path.to_string_lossy();
+        let path_str = path.to_string_lossy().replace('\\', "/");
         path_str.contains("/benchmarking")
             || path_str.contains("/benchmarks")
             || path_str.ends_with("benchmarking.rs")
@@ -195,4 +195,22 @@ pub struct FileContext<'a> {
     pub is_benchmark_file: bool,
     pub source_target_kinds: Vec<SourceTargetKind>,
     pub ast: Option<SynFile>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::LintEngine;
+
+    #[test]
+    fn target_classification_accepts_windows_path_separators() {
+        assert!(LintEngine::is_test_file(
+            Path::new(r"project\tests\integration.rs"),
+            ""
+        ));
+        assert!(LintEngine::is_benchmark_file(Path::new(
+            r"project\benchmarks\weights.rs"
+        )));
+    }
 }
