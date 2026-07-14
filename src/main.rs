@@ -159,21 +159,39 @@ fn main() {
     let mut results = Vec::new();
     let compiler_backed_rules =
         selected_compiler_backed_rules(cli.rules.as_deref(), &cli.compiler_backed_rules, &config);
+    let compiler_driver_available = cli.syntax_only
+        || compiler_backed_rules.is_empty()
+        || manifest_path.is_none()
+        || cli.driver_path.is_file();
+    if !cli.syntax_only
+        && !compiler_backed_rules.is_empty()
+        && manifest_path.is_none()
+        && cli.no_syntax
+    {
+        eprintln!("Compiler-backed analysis requires a Cargo manifest when --no-syntax is set.");
+        process::exit(2);
+    }
+    if !compiler_driver_available {
+        if cli.no_syntax {
+            eprintln!(
+                "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-09-01 build --features rustc-driver --bin polkadot-linter-driver`.",
+                cli.driver_path.display()
+            );
+            process::exit(2);
+        }
+        eprintln!(
+            "Compiler-backed analysis skipped because {} is unavailable; emitting syntax diagnostics only.",
+            cli.driver_path.display()
+        );
+    }
     if !cli.no_syntax {
         for path in &cli.paths {
             results.extend(engine.scan(path));
         }
     }
 
-    if !cli.syntax_only && !compiler_backed_rules.is_empty() {
+    if !cli.syntax_only && compiler_driver_available && !compiler_backed_rules.is_empty() {
         if let Some(manifest_path) = &manifest_path {
-            if !cli.driver_path.is_file() {
-                eprintln!(
-                    "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-09-01 build --features rustc-driver --bin polkadot-linter-driver`.",
-                    cli.driver_path.display()
-                );
-                process::exit(2);
-            }
             let options = rustc_pipeline::RustcPipelineOptions {
                 manifest_path: manifest_path.clone(),
                 packages: cli.packages.clone(),

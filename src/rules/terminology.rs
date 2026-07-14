@@ -170,20 +170,22 @@ impl LintRule for SpellingConventions {
     }
 }
 
-/// Find the position of a line comment (`//`) that is NOT inside a string literal.
+/// Find the byte position of a line comment (`//`) that is NOT inside a string literal.
 fn find_line_comment(line: &str) -> Option<usize> {
     let mut in_string = false;
-    let mut prev = ' ';
-    let chars: Vec<char> = line.chars().collect();
+    let mut escaped = false;
 
-    for i in 0..chars.len() {
-        if chars[i] == '"' && prev != '\\' {
+    for (byte_index, character) in line.char_indices() {
+        if character == '"' && !escaped {
             in_string = !in_string;
         }
-        if !in_string && chars[i] == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
-            return Some(i);
+        if !in_string && line[byte_index..].starts_with("//") {
+            return Some(byte_index);
         }
-        prev = chars[i];
+        escaped = in_string && character == '\\' && !escaped;
+        if character != '\\' {
+            escaped = false;
+        }
     }
     None
 }

@@ -10,6 +10,7 @@
 - [Configuration](guide/configuration.md)
 - [CI Integration](guide/ci-integration.md)
 - [Rule Authority Matrix](rule-authority-matrix.md)
+- [Review Remediation](review-remediation.md)
 
 # Polkadot Linter Rules Reference
 
