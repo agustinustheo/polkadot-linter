@@ -19,7 +19,10 @@ use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
-    frame_model::{collect_dispatchables, DispatchableOrigin},
+    frame_model::{
+        active_cfg_attr_args, active_cfg_attr_path_matches, collect_dispatchables,
+        DispatchableOrigin,
+    },
     project_model::SourceTargetKind,
     rules::LintRule,
 };
@@ -1523,6 +1526,7 @@ fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
                 .zip(segments.iter().rev().copied())
                 .all(|(actual, expected)| actual == expected)
             && attr_segments.len() >= segments.len())
+        || active_cfg_attr_path_matches(attr, segments)
 }
 
 fn weight_attributes<'a>(ast: &'a SynFile, mask: &'a [bool]) -> Vec<&'a Attribute> {
@@ -1766,6 +1770,12 @@ fn path_owner_name(path: &syn::Path) -> Option<String> {
 
 fn attr_expr(attr: &Attribute) -> Option<Expr> {
     attr.parse_args::<Expr>().ok()
+}
+
+fn attr_expr_for_path(attr: &Attribute, segments: &[&str]) -> Option<Expr> {
+    attr_expr(attr).or_else(|| {
+        active_cfg_attr_args(attr, segments).and_then(|arguments| syn::parse2(arguments).ok())
+    })
 }
 
 fn use_tree_has_disallowed_glob(tree: &UseTree) -> bool {
@@ -2508,7 +2518,7 @@ impl LintRule for ParameteriseWeightFunctions {
                     if !attr_path_matches(attr, &["pallet", "weight"]) {
                         continue;
                     }
-                    let Ok(expr) = attr.parse_args::<Expr>() else {
+                    let Some(expr) = attr_expr_for_path(attr, &["pallet", "weight"]) else {
                         continue;
                     };
                     let mut finder = WeightExprVisitor { found: false };
@@ -3088,7 +3098,9 @@ impl LintRule for WeightZeroPlaceholder {
         impl WeightZeroVisitor<'_> {
             fn inspect_attrs(&mut self, attrs: &[Attribute]) {
                 for attr in attrs.iter().filter(|attr| is_weight_attr(attr)) {
-                    let Some(expr) = attr_expr(attr) else {
+                    let Some(expr) = attr_expr_for_path(attr, &["pallet", "weight"])
+                        .or_else(|| attr_expr_for_path(attr, &["pallet", "weight_of_authorize"]))
+                    else {
                         continue;
                     };
                     let Expr::Call(expr_call) = expr else {
@@ -4834,7 +4846,7 @@ impl LintRule for UnsafeWeightArithmetic {
 
         let mut diagnostics = Vec::new();
         for attr in weight_attributes(ast, &test_mask) {
-            let Some(expr) = attr_expr(attr) else {
+            let Some(expr) = attr_expr_for_path(attr, &["pallet", "weight"]) else {
                 continue;
             };
             let mut visitor = WeightArithmeticVisitor {
@@ -4962,7 +4974,7 @@ impl LintRule for ExpensiveWeightCalculation {
 
         let mut diagnostics = Vec::new();
         for attr in weight_attributes(ast, &test_mask) {
-            let Some(expr) = attr_expr(attr) else {
+            let Some(expr) = attr_expr_for_path(attr, &["pallet", "weight"]) else {
                 continue;
             };
             let mut visitor = ExpensiveWeightVisitor {

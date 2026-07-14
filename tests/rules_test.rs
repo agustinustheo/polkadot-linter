@@ -1260,6 +1260,38 @@ pub fn submit(origin: OriginFor<T>) -> DispatchResult {
 }
 
 #[test]
+fn sem011_respects_provable_cfg_attribute_truth() {
+    let active = r#"
+#[cfg_attr(not(any()), pallet::weight(Weight::zero()))]
+pub fn active_weight() {}
+"#;
+    let inactive = r#"
+#[cfg_attr(any(), pallet::weight(Weight::zero()))]
+pub fn inactive_weight() {}
+"#;
+    let feature_dependent = r#"
+#[cfg_attr(feature = "runtime-benchmarks", pallet::weight(Weight::zero()))]
+pub fn feature_weight() {}
+"#;
+
+    assert!(
+        has_rule(&check_fixture("pallets/foo/src/lib.rs", active), "SEM011"),
+        "SEM011 must inspect a provably active cfg_attr weight"
+    );
+    assert!(
+        !has_rule(&check_fixture("pallets/foo/src/lib.rs", inactive), "SEM011"),
+        "SEM011 must not inspect a provably inactive cfg_attr weight"
+    );
+    assert!(
+        !has_rule(
+            &check_fixture("pallets/foo/src/lib.rs", feature_dependent),
+            "SEM011"
+        ),
+        "SEM011 must not guess whether a Cargo feature enables cfg_attr"
+    );
+}
+
+#[test]
 fn sem011_allows_benchmarked_weight_in_attribute() {
     let good = include_str!("fixtures/good_sem011.rs");
     let diags = check_fixture("pallets/foo/src/lib.rs", good);
@@ -1515,6 +1547,37 @@ impl<T: Config> Pallet<T> {
     assert!(
         has_rule(&diags, "BEN003"),
         "BEN003 must recognize qualified FRAME pallet call attributes: {diags:?}"
+    );
+}
+
+#[test]
+fn ben003_recognizes_provably_active_cfg_pallet_call_attributes() {
+    let active = r#"
+#[cfg_attr(not(any()), pallet::call)]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let inactive = r#"
+#[cfg_attr(any(), pallet::call)]
+impl<T: Config> Pallet<T> {
+    pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+        let _ = ensure_signed(origin)?;
+        Ok(())
+    }
+}
+"#;
+
+    assert!(
+        has_rule(&check_fixture("pallets/foo/src/lib.rs", active), "BEN003"),
+        "BEN003 must inspect a provably active cfg_attr pallet call"
+    );
+    assert!(
+        !has_rule(&check_fixture("pallets/foo/src/lib.rs", inactive), "BEN003"),
+        "BEN003 must not treat a provably inactive cfg_attr pallet call as active"
     );
 }
 
