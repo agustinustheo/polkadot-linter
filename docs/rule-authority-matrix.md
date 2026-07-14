@@ -1,30 +1,56 @@
 # Rule Authority Matrix
 
-The public CLI uses rustc-backed analysis as the final authority for every rule
-listed as compiler-backed in src/rules/mod.rs. A source rule remains public
-only when the compiler cannot yet preserve or improve the evidence required by
-the rule.
+This matrix is derived from the public rule registry in
+`src/rules/mod.rs`. It describes what the released CLI actually runs, rather
+than planned or experimental rules.
 
-| Rule | Current authority | Evidence | Next enabling work |
-| --- | --- | --- | --- |
-| VAL001 | rustc bridge | Resolved FRAME storage reads and authored dispatchable bodies; pinned nomination-pools baseline | None |
-| TST006 | rustc bridge | Resolved storage writes and authored event calls; pinned timestamp baseline | None |
-| BEN001 | rustc bridge | Resolved WeightInfo calls from authored weight expressions and compiled benchmark identities; pinned assets baseline | None |
-| BEN003 | rustc bridge | Compiler-confirmed dispatchables and compiled benchmark identities; pinned assets baseline | None |
-| BEN002 | source | The authored verify block and its position outside the measured block are consumed by the FRAME benchmark macro. HIR can prove compilation but not this authored verification contract. | Compiler-to-authored benchmark block mapping with macro provenance |
-| TST001 | source | The requirement to prefer assert_noop includes an authored assertion style and storage-rollback intent that macro-expanded HIR does not retain. | Macro-call source mapping plus rollback-effect analysis |
-| TST002 | rustc bridge | Rustc resolves the called function and nested Result type; a source-span bridge recovers the authored assert_ok macro location. The pinned parachain-system test target validates that a source candidate with a non-nested result emits no finding. | None |
-| TST007 | source | Whether a test made a meaningful observable assertion after a successful dispatch is an authored test-design convention. Exact macro and helper-call matching is stronger than expanded HIR. | Test-target compilation plus assertion-effect classification |
-| TST003 | source | Import placement is lexical source style; HIR does not preserve the intended source-scope convention better than the parser. | None; a compiler port would be weaker |
-| TST004 | source | The rule compares separate tests and their semantic intent, including a missing companion error-path test. | Test-target compilation plus cross-test behavioral classification |
-| TST005 | source | Whether an assertion targets an implementation detail is a test-design convention, not a resolved-type property. | None; a compiler port would be weaker |
-| MOK001 | source | Mock/setup-to-assertion ratio is a test-design heuristic based on authored structure. | None; a compiler port would be weaker |
-| SEM017 | source | `#[pallet::getter]` is an authored FRAME attribute consumed during expansion; exact parser matching is the strongest evidence. | None; a compiler port would lose the attribute |
-| SEM018 | source | The rule is intentionally limited to authored primitive parameter annotations and immediate explicit conversions. Rustc resolves the destination type but cannot improve the API-design judgment. | Benchmark evidence that resolved type aliases identify a materially stronger signal |
-| DOC001 | source | Rustdoc presence on a public FRAME item or variant is an authored source contract that macro expansion does not preserve consistently. | None; a compiler port would lose documentation placement |
-| SEC019 | rustc | Exact external crate identity and resolved function identity for `rand::random`, limited to reachable runtime and pallet source paths. | Broaden only with a benchmarked catalogue of unsafe randomness APIs |
-| SEC020 | rustc bridge | Resolved `frame_system::ensure_signed_or_root` identity and resolved FRAME storage writes, constrained by an authored discarded or unused-result statement. The pinned referenda baseline proves index-keyed signed-or-root calls remain silent. | None |
+## Rustc-backed authority
 
-Each future migration must add a focused fixture, a pinned polkadot-sdk case,
-and evidence that the compiler implementation improves precision or validated
-coverage before the source implementation is removed.
+The public CLI routes these rules through the compiler driver whenever it
+scans a compilable Cargo project. The parser implementations with matching
+security IDs are retired and are not registered in the public rule set.
+
+| Rules | Evidence used |
+| --- | --- |
+| `VAL002`, `VAL003` | Resolved expressions, control flow, and storage-write evidence. |
+| `SEM006`, `SEM009`, `SEM010`, `SEM016` | Resolved paths, operators, storage methods, and trait implementations. |
+| `SEC001`-`SEC018` | Resolved types and paths, macro/cfg-expanded code, trait/operator resolution, and control-flow/dataflow evidence as required by each rule. |
+
+The focused driver checks in `scripts/check-rustc-*.sh` cover the released
+compiler path. `scripts/check-sdk-benchmarks.sh` maintains pinned SDK
+baselines for the hard security rules and `VAL002`; additional rule-specific
+SDK benchmark coverage remains tracked as migration work.
+
+## Source authority
+
+These rules remain parser/source-based because their current contract depends
+on authored layout, comments, spelling, benchmark structure, or FRAME
+attributes that macro expansion does not preserve. A rustc implementation is
+not an upgrade unless it can provide stronger benchmarked evidence; it must
+not replace a more accurate source implementation merely for uniformity.
+
+| Rules | Why source remains authoritative | Next enabling work, if any |
+| --- | --- | --- |
+| `VAL001` | Validation ordering is reported over the authored dispatchable body; FRAME expansion can hide the source ordering that the diagnostic explains. | Compiler-to-pre-expansion source mapping with dataflow evidence. |
+| `SEM002`-`SEM005`, `SEM007`, `SEM008`, `SEM011`-`SEM015` | These are authored style, lexical import, or FRAME-attribute conventions. | Only migrate where a compiler implementation demonstrates improved precision. |
+| `TST001`-`TST006`, `MOK001` | Test assertion style, test design, and mock/setup ratios are source-level conventions. | Test-target compilation plus source-span/effect analysis for a specific rule. |
+| `BEN001`-`BEN003` | Benchmark identity and `verify` blocks must be associated with their authored macro bodies. | Compiler-to-authored FRAME benchmark mapping with macro provenance. |
+| `TRM001` | The rule intentionally evaluates spelling and terminology in comments, strings, and identifiers. | None; a compiler port would lose the primary evidence. |
+
+## Scope boundaries
+
+The current binary has no `DOC001`, `SEC019`, `SEC020`, `SEM017`, `SEM018`,
+or `TST007` rule. Those identifiers must not be described as enforced until
+they are implemented, tested, registered, and benchmarked. A clean run only
+means the implemented evidence was absent; it does not replace runtime review,
+benchmark review, or whole-program security analysis.
+
+Before moving any source rule to rustc, add all of the following:
+
+1. A precise public rule contract and a source-vs-driver precision comparison.
+2. Focused positive and negative regression cases that exercise the released
+   CLI path.
+3. A reproducible pinned-SDK benchmark showing better true-positive coverage
+   or fewer false positives.
+4. Removal or demotion of the source implementation only after the driver is
+   demonstrably the stronger final authority.

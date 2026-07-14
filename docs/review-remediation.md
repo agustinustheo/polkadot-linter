@@ -60,17 +60,20 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | Dynamic-library path joining can erase the caller's library search path | Retain the existing environment value when path joining cannot safely prepend the toolchain directory. | `preserves_existing_library_path_when_joining_fails` |
 | Comma-containing compiler source paths split into multiple filters | Serialize file filters as JSON across the linter-driver boundary; the driver retains legacy environment parsing for older invocations. | `encodes_file_filters_without_delimiter_ambiguity`, `check-rustc-hard-rules.sh` |
 | Source-rule corpus baseline predates the review fixes | Regenerate the pinned `substrate/frame` baseline after validating the intentional BEN001/BEN002/BEN003, SEM002, TST, and VAL001 count changes against the pinned SDK commit. | `check-source-rule-corpus.sh .repos/polkadot-sdk` |
+| Authority and best-practice docs describe unimplemented rules as enforced | Derive the authority matrix from the public registry and mark unsupported rule IDs as scope boundaries rather than coverage. | `docs/rule-authority-matrix.md`, `docs/best-practices.md` |
 
 ## Still Open
 
 The review is not fully resolved. The next implementation work should address:
 
-1. Remaining source-rule precision issues, particularly multiline/conditional
-   attribute handling and the retired parser implementations that are not public
-   production authority.
-2. Rule-specific compiler-driver regression coverage for public compiler-backed
-   SEC/VAL diagnostics. A source-rule test alone does not prove production behavior
-   for a rule whose public authority is rustc.
+1. Remaining source-rule precision issues, particularly `cfg_attr`-controlled
+   FRAME attributes. A parser cannot safely assume that an inactive feature
+   attribute is active; exact migration needs compiler-to-authored source
+   mapping.
+2. Rule-specific compiler-driver regression coverage for every public
+   compiler-backed rule. The current pinned-SDK gate covers the hard security
+   rules and `VAL002`; a source-rule test alone does not prove production
+   behavior where rustc is authoritative.
 
 Run the core checks with:
 
