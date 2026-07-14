@@ -46,6 +46,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEC015 lets any earlier root guard whitelist later bypasses | Track strict root guards in traversal order and only within the current block or closure scope. | `sec015_does_not_whitelist_bypass_after_sibling_root_guard`, `sec015_does_not_whitelist_bypass_in_closure_after_root_guard` |
 | SEM014 has narrow line windows for submission and log targets | Associate wrapped signed or unsigned submissions with the full nearby log macro and deduplicate reports by log site. | `sem014_handles_wrapped_unsigned_submission_and_long_log_target` |
 | SARIF omits diagnostic end lines | Serialize `endLine` whenever the diagnostic contains an end span. | `sarif_preserves_end_line_when_available` |
+| SEM002 skips nested local bindings | Recurse from every local binding so closure and nested initializer locals are inspected. | `sem002_detects_typed_collect_inside_closure` |
 
 ## Still Open
 

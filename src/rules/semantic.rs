@@ -2131,38 +2131,35 @@ impl LintRule for PreferCollectTurbofish {
 
         impl<'ast> Visit<'ast> for CollectVisitor<'_> {
             fn visit_local(&mut self, local: &'ast Local) {
-                let Pat::Type(pat_type) = &local.pat else {
-                    return;
-                };
-                if !type_contains_named(&pat_type.ty, &["Vec"]) {
-                    return;
+                if let Pat::Type(pat_type) = &local.pat {
+                    if type_contains_named(&pat_type.ty, &["Vec"]) {
+                        if let Some(init) = &local.init {
+                            if let Expr::MethodCall(method_call) = &*init.expr {
+                                if method_call.method == "collect"
+                                    && method_call.turbofish.is_none()
+                                {
+                                    self.diagnostics.push(Diagnostic {
+                                        rule_id: self.rule_id.to_string(),
+                                        rule_name: self.rule_name.to_string(),
+                                        category: RuleCategory::Semantic,
+                                        severity: self.severity,
+                                        file: self.file.to_path_buf(),
+                                        line: span_line(local.span()),
+                                        column: Some(span_column(local.span())),
+                                        end_line: None,
+                                        message: "Prefer `.collect::<Vec<_>>()` turbofish over typed let-binding"
+                                            .to_string(),
+                                        explanation: "Project convention: use turbofish syntax for collect() \
+                                            to keep the type near the call site."
+                                            .to_string(),
+                                        suggestion: Some("Rewrite as `.collect::<Vec<_>>()`".to_string()),
+                                    });
+                                }
+                            }
+                        }
+                    }
                 }
-                let Some(init) = &local.init else {
-                    return;
-                };
-                let Expr::MethodCall(method_call) = &*init.expr else {
-                    return;
-                };
-                if method_call.method != "collect" || method_call.turbofish.is_some() {
-                    return;
-                }
-
-                self.diagnostics.push(Diagnostic {
-                    rule_id: self.rule_id.to_string(),
-                    rule_name: self.rule_name.to_string(),
-                    category: RuleCategory::Semantic,
-                    severity: self.severity,
-                    file: self.file.to_path_buf(),
-                    line: span_line(local.span()),
-                    column: Some(span_column(local.span())),
-                    end_line: None,
-                    message: "Prefer `.collect::<Vec<_>>()` turbofish over typed let-binding"
-                        .to_string(),
-                    explanation: "Project convention: use turbofish syntax for collect() \
-                        to keep the type near the call site."
-                        .to_string(),
-                    suggestion: Some("Rewrite as `.collect::<Vec<_>>()`".to_string()),
-                });
+                visit::visit_local(self, local);
             }
         }
 

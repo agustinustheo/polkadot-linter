@@ -420,6 +420,24 @@ fn sem002_allows_turbofish_collect() {
     );
 }
 
+#[test]
+fn sem002_detects_typed_collect_inside_closure() {
+    let code = r#"
+fn build_callback() {
+    let callback = || {
+        let values: Vec<u8> = source.iter().copied().collect();
+        values.len()
+    };
+    callback();
+}
+"#;
+    let diags = check_fixture("src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEM002"),
+        "SEM002 should recurse into closure local bindings: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM003: Prefer reference iteration
 // ==========================================================================
