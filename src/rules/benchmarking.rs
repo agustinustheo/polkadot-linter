@@ -6,7 +6,7 @@ use syn::{
     Attribute, File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, TraitItem,
 };
 
-use super::semantic::strip_strings_and_line_comments;
+use super::semantic::SourceSanitizer;
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
@@ -349,9 +349,10 @@ fn macro_benchmark_end(lines: &[&str], body_end: usize) -> usize {
 
 fn has_verification_in_text(body_lines: &[&str], verification_patterns: &[String]) -> bool {
     let body_outside_measured_blocks = body_lines_outside_measured_blocks(body_lines);
+    let mut sanitizer = SourceSanitizer::default();
     let sanitized_body = body_outside_measured_blocks
         .iter()
-        .map(|line| strip_strings_and_line_comments(line))
+        .map(|line| sanitizer.strip_line(line))
         .collect::<Vec<_>>();
 
     sanitized_body.iter().any(|line| {
