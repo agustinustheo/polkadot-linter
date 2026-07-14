@@ -1,8 +1,17 @@
 # Summary
 
-[Introduction](README.md)
+# Polkadot Linter
 
-# Rules Reference
+- [Introduction](README.md)
+- [Installation](guide/installation.md)
+- [Quick Start](guide/quick-start.md)
+- [Command-Line Reference](guide/cli-reference.md)
+- [Output & Exit Codes](guide/output-and-exit-codes.md)
+- [Configuration](guide/configuration.md)
+- [CI Integration](guide/ci-integration.md)
+- [Rule Authority Matrix](rule-authority-matrix.md)
+
+# Polkadot Linter Rules Reference
 
 - [Security Rules (SEC)](rules/security.md)
   - [SEC001 - Unbounded Vec in Extrinsic Parameters](rules/SEC001.md)
@@ -58,10 +67,6 @@
   - [MOK001 - Excessive Mock Setup in Tests](rules/MOK001.md)
 - [Terminology Rules (TRM)](rules/terminology.md)
   - [TRM001 - Spelling and Terminology Conventions](rules/TRM001.md)
-
-# Guides
-
-- [Rule Authority Matrix](rule-authority-matrix.md)
 
 # Polkadot SDK Best Practices
 

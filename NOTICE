@@ -1,0 +1,21 @@
+Polkadot Linter
+Copyright 2026 Polkadot Linter Contributors
+
+Licensed under the Apache License, Version 2.0 (the "License"); see the LICENSE
+file in this repository for the full terms.
+
+==============================================================================
+Third-party content
+==============================================================================
+
+The "Polkadot SDK Best Practices" documentation under `docs/best-practices/`
+is derived from "Libro — Polkadot SDK Best Practices", copyright BlockDeep and
+the Libro contributors, licensed under the Apache License, Version 2.0.
+
+    Source:   https://github.com/blockdeep/libro
+    Rendered: https://libro.blockdeep.dev/
+
+The original prose and code examples are reproduced with modifications. Each
+reproduced page carries a "Linter coverage" note and an attribution footer
+added by the Polkadot Linter project; these additions are the only changes to
+the upstream text. The upstream work carries no NOTICE file of its own.

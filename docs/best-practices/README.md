@@ -11,7 +11,8 @@ if anything, `polkadot-linter` enforces for it.
 > under the **Apache-2.0** license. Only the "Linter coverage" callouts and this
 > overview page are added by the polkadot-linter project. If you want the
 > canonical guide with the maintainers' full context, read it upstream at
-> <https://libro.blockdeep.dev/>.
+> <https://libro.blockdeep.dev/>. The formal attribution for this reproduced
+> content is recorded in the repository's `NOTICE` file.
 
 ## Why this section exists
 
