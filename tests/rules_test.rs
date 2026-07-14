@@ -1244,6 +1244,22 @@ fn sem011_detects_weight_zero_in_attribute() {
 }
 
 #[test]
+fn sem011_detects_weight_zero_in_qualified_frame_attribute() {
+    let code = r#"
+#[frame_support::pallet::weight(Weight::zero())]
+pub fn submit(origin: OriginFor<T>) -> DispatchResult {
+    let _ = origin;
+    Ok(())
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert!(
+        has_rule(&diags, "SEM011"),
+        "SEM011 must inspect qualified FRAME weight attributes: {diags:?}"
+    );
+}
+
+#[test]
 fn sem011_allows_benchmarked_weight_in_attribute() {
     let good = include_str!("fixtures/good_sem011.rs");
     let diags = check_fixture("pallets/foo/src/lib.rs", good);
