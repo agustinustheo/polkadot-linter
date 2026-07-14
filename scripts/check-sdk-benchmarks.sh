@@ -15,6 +15,7 @@ BASELINE_FILE="${4:-$ROOT_DIR/benchmarks/rustc-sdk-baseline.tsv}"
 TOOLCHAIN="nightly-2025-09-01"
 DRIVER="$ROOT_DIR/target/debug/polkadot-linter-driver"
 LINTER="$ROOT_DIR/target/debug/polkadot-linter"
+ONLY_RULES="${POLKADOT_LINTER_SDK_RULES:-}"
 
 [[ "$SDK_DIR" = /* ]] || SDK_DIR="$ROOT_DIR/$SDK_DIR"
 [[ "$OUTPUT_DIR" = /* ]] || OUTPUT_DIR="$ROOT_DIR/$OUTPUT_DIR"
@@ -27,8 +28,10 @@ else
 fi
 
 SUMMARY="$(mktemp)"
+TEMP_EXPECTED_SUMMARY=""
 cleanup() {
   rm -f "$SUMMARY"
+  [[ -z "$TEMP_EXPECTED_SUMMARY" ]] || rm -f "$TEMP_EXPECTED_SUMMARY"
   [[ -n "${POLKADOT_LINTER_SDK_RUSTC_TARGET_DIR:-}" ]] || rm -rf "$SDK_TARGET_DIR"
 }
 trap cleanup EXIT
@@ -47,7 +50,7 @@ run_cli_case() {
   case_summary="$case_dir/summary.tsv"
 
   "$LINTER" --config "$ROOT_DIR/config/default.toml" --format json --rules "$rule_id" \
-    --syntax-only "$SDK_DIR/$package_dir" > "$syntax_json"
+    --syntax-only --no-progress "$SDK_DIR/$package_dir" > "$syntax_json"
 
   # The driver rule selection is passed through Cargo's rustc wrapper
   # environment, which Cargo does not include in its fingerprint. Rebuild only
@@ -57,7 +60,7 @@ run_cli_case() {
   "$LINTER" --config "$ROOT_DIR/config/default.toml" --format json --rules "$rule_id" \
     --package "$package" --lib --no-default-features \
     --driver-path "$DRIVER" --toolchain "$TOOLCHAIN" --target-dir "$SDK_TARGET_DIR" \
-    --source-filter "$source_filter" "$SDK_DIR/$package_dir" > "$rustc_json"
+    --source-filter "$source_filter" --no-progress "$SDK_DIR/$package_dir" > "$rustc_json"
 
   [[ -s "$syntax_json" ]] || printf '[]\n' > "$syntax_json"
   [[ -s "$rustc_json" ]] || printf '[]\n' > "$rustc_json"
@@ -111,8 +114,14 @@ run_wrapper_case() {
   cat "$case_summary" >> "$SUMMARY"
 }
 
+should_run_rule() {
+  local rule_id="$1"
+  [[ -z "$ONLY_RULES" || ",$ONLY_RULES," == *",$rule_id,"* ]]
+}
+
 while IFS=$'\t' read -r mode rule_id package package_dir source_filter expected_syntax expected_rustc; do
   [[ -z "$mode" || "$mode" == \#* ]] && continue
+  should_run_rule "$rule_id" || continue
   case "$mode" in
     cli)
       run_cli_case "$rule_id" "$package" "$package_dir" "$source_filter" "$expected_syntax" "$expected_rustc"
@@ -127,7 +136,15 @@ while IFS=$'\t' read -r mode rule_id package package_dir source_filter expected_
   esac
 done < "$CASES_FILE"
 
-if ! diff -u <(sort "$BASELINE_FILE") <(sort "$SUMMARY"); then
+if [[ -n "$ONLY_RULES" ]]; then
+  TEMP_EXPECTED_SUMMARY="$(mktemp)"
+  EXPECTED_SUMMARY="$TEMP_EXPECTED_SUMMARY"
+  awk -F $'\t' -v rules=",$ONLY_RULES," 'index(rules, "," $1 ",")' "$BASELINE_FILE" > "$EXPECTED_SUMMARY"
+else
+  EXPECTED_SUMMARY="$BASELINE_FILE"
+fi
+
+if ! diff -u <(sort "$EXPECTED_SUMMARY") <(sort "$SUMMARY"); then
   echo "error: rustc SDK findings differ from the pinned baseline" >&2
   exit 1
 fi

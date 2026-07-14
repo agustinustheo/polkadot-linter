@@ -20,6 +20,8 @@ SEC013	substrate/frame/session/src/lib.rs	617	Storage alias resolves to an unbou
 SEC016	substrate/frame/bags-list/src/migrations.rs	105	Resolved FRAME runtime upgrade writes storage without a StorageVersion check
 SEC017	substrate/frame/root-offences/src/lib.rs	116	Event field resolves to an unbounded Vec payload
 SEC018	substrate/frame/contracts/src/lib.rs	944	Weight attribute does not account for resolved unbounded `data` input
+SEM006	substrate/frame/multisig/src/migrations.rs	52	Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)
+SEM006	substrate/frame/multisig/src/migrations.rs	63	Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)
 VAL002	substrate/frame/aura/src/lib.rs	137	Resolved config, storage, or collection divisor lacks a nonzero proof
 VAL002	substrate/frame/babe/src/equivocation.rs	180	Resolved config, storage, or collection divisor lacks a nonzero proof
 VAL002	substrate/frame/broker/src/tick_impls.rs	102	Resolved config, storage, or collection divisor lacks a nonzero proof

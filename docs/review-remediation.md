@@ -64,14 +64,16 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | Source-rule corpus baseline predates the review fixes | Regenerate the pinned `substrate/frame` baseline after validating the intentional BEN001/BEN002/BEN003, SEM002, TST, and VAL001 count changes against the pinned SDK commit. | `check-source-rule-corpus.sh .repos/polkadot-sdk` |
 | Authority and best-practice docs describe unimplemented rules as enforced | Derive the authority matrix from the public registry and mark unsupported rule IDs as scope boundaries rather than coverage. | `docs/rule-authority-matrix.md`, `docs/best-practices.md` |
 
-## Still Open
+## Follow-up Coverage
 
-The review is not fully resolved. The next implementation work should address:
+Every finding in the 2026-07-14 review is resolved by code, regression tests,
+or a documented authority boundary. Future benchmark expansion should address:
 
-1. Rule-specific compiler-driver regression coverage for every public
-   compiler-backed rule. The current pinned-SDK gate covers the hard security
-   rules and `VAL002`; a source-rule test alone does not prove production
-   behavior where rustc is authoritative.
+1. Extend the pinned SDK controls with representative positive findings when
+   upstream code offers a stable, reviewed example for the remaining
+   compiler-backed VAL/SEM rules. `SEM006` now has two reviewed SDK findings;
+   the other controls prevent false positives while focused driver fixtures
+   retain positive and negative behavioral coverage.
 
 Run the core checks with:
 

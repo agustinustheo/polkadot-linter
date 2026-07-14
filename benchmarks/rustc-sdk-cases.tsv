@@ -17,6 +17,11 @@ cli	SEC015	pallet-collective	substrate/frame/collective	substrate/frame/collecti
 cli	SEC016	pallet-bags-list	substrate/frame/bags-list	substrate/frame/bags-list/src/migrations.rs	0	1
 cli	SEC017	pallet-root-offences	substrate/frame/root-offences	substrate/frame/root-offences/src/lib.rs	0	1
 cli	SEC018	pallet-contracts	substrate/frame/contracts	substrate/frame/contracts/src/lib.rs	0	1
+cli	VAL003	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
+cli	SEM006	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/migrations.rs	0	2
+cli	SEM009	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
+cli	SEM010	pallet-babe	substrate/frame/babe	substrate/frame/babe/src/lib.rs	0	0
+cli	SEM016	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
 wrapper	VAL002	pallet-aura	substrate/frame/aura	substrate/frame/aura/	-	1
 wrapper	VAL002	pallet-babe	substrate/frame/babe	substrate/frame/babe/	-	1
 wrapper	VAL002	pallet-broker	substrate/frame/broker	substrate/frame/broker/	-	3
