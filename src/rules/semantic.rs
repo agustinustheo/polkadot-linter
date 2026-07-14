@@ -11,8 +11,8 @@ use syn::{
     spanned::Spanned,
     visit::{self, Visit},
     Attribute, Expr, ExprBinary, ExprCall, ExprForLoop, ExprIf, ExprMethodCall, File as SynFile,
-    GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Pat,
-    PathArguments, Stmt, Token, TraitItemFn, Type, TypePath, UseTree, Visibility,
+    GenericArgument, ImplItem, Item, ItemEnum, ItemFn, ItemImpl, ItemType, Lit, Local, Macro, Meta,
+    Pat, PathArguments, Stmt, Token, TraitItemFn, Type, TypePath, UseTree, Visibility,
 };
 
 use crate::{
@@ -303,20 +303,64 @@ fn is_masked_cfg_attribute(trimmed: &str) -> bool {
         return true;
     }
 
-    if !(trimmed.starts_with("#[cfg(") || trimmed.starts_with("#![cfg(")) {
-        return false;
+    cfg_condition(trimmed).is_some_and(|condition| cfg_is_non_production(&condition))
+}
+
+fn cfg_condition(attribute: &str) -> Option<Meta> {
+    let condition = attribute
+        .strip_prefix("#[cfg(")
+        .or_else(|| attribute.strip_prefix("#![cfg("))?
+        .strip_suffix(")]")?;
+    syn::parse_str(condition).ok()
+}
+
+fn cfg_is_non_production(condition: &Meta) -> bool {
+    const NON_PRODUCTION_FEATURES: &[&str] = &[
+        "runtime-benchmarks",
+        "try-runtime",
+        "test-helpers",
+        "remote-test",
+        "integrity-test",
+    ];
+
+    let is_non_production_atom = |meta: &Meta| match meta {
+        Meta::Path(path) => path.is_ident("test"),
+        Meta::NameValue(name_value) => {
+            name_value.path.is_ident("feature")
+                && matches!(
+                    &name_value.value,
+                    Expr::Lit(expr_lit)
+                        if matches!(
+                            &expr_lit.lit,
+                            Lit::Str(feature) if NON_PRODUCTION_FEATURES.contains(&feature.value().as_str())
+                        )
+                )
+        }
+        Meta::List(_) => false,
+    };
+
+    if is_non_production_atom(condition) {
+        return true;
     }
 
-    let compact = trimmed.split_whitespace().collect::<String>();
-    compact.contains("cfg(test)")
-        || compact.contains("(test,")
-        || compact.contains(",test)")
-        || compact.contains(",test,")
-        || trimmed.contains("feature = \"runtime-benchmarks\"")
-        || trimmed.contains("feature = \"try-runtime\"")
-        || trimmed.contains("feature = \"test-helpers\"")
-        || trimmed.contains("feature = \"remote-test\"")
-        || trimmed.contains("feature = \"integrity-test\"")
+    let Meta::List(list) = condition else {
+        return false;
+    };
+    let Ok(conditions) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+    else {
+        return false;
+    };
+
+    if list.path.is_ident("all") {
+        // A conjunction is non-production when at least one required clause is.
+        conditions.iter().any(cfg_is_non_production)
+    } else if list.path.is_ident("any") {
+        // Every alternative must be non-production before the whole condition is.
+        conditions.iter().all(cfg_is_non_production)
+    } else {
+        // `not(...)` and unknown predicates can enable production code.
+        false
+    }
 }
 
 fn item_mask_by_attr<F>(content: &str, is_masking_attr: F) -> Vec<bool>

@@ -10,6 +10,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | --- | --- | --- |
 | VAL001 stops at multiline signatures | Keep scanning until the function body has opened and closed; support restricted visibility functions. | `val001_detects_multiline_dispatchable_signatures` |
 | `#[cfg(test)]` masks the rest of a file | Recognize additional block item forms and do not leave a pending mask after an inline attribute/item. | `sec008_does_not_mask_production_after_cfg_test_const_fn` |
+| Negated test cfg conditions mask production code | Parse cfg predicates and mask only conditions whose every enabled branch is non-production; `cfg(not(any(test, ...)))` remains linted. | `sec008_does_not_mask_production_after_negated_test_cfg`, `sec008_masks_test_cfg_when_test_is_conjoined_with_other_conditions` |
 | Implicit FRAME call indices are omitted | Treat every method in `#[pallet::call]` as a dispatchable; `call_index` is optional metadata. | `sec001_checks_dispatchables_without_explicit_call_indices` |
 | Impl-level FRAME weight providers are ignored | Recognize qualified `#[pallet::call(weight = ...)]` declarations and model their generated per-dispatchable accounting. | `sec001_recognizes_impl_level_call_weight_providers` |
 | Compiler scans silently return zero on a warm target | Add a unique Cargo fingerprint per scan and require the driver to create an invocation marker. | Repeated warm-target compiler pipeline run |
@@ -59,8 +60,9 @@ every listed fix has a regression test that reproduces the reviewed shape.
 
 The review is not fully resolved. The next implementation work should address:
 
-1. Remaining source-rule precision issues, particularly `cfg_attr` handling and the
-   retired parser implementations that are not public production authority.
+1. Remaining source-rule precision issues, particularly multiline/conditional
+   attribute handling and the retired parser implementations that are not public
+   production authority.
 2. Rule-specific compiler-driver regression coverage for public compiler-backed
    SEC/VAL diagnostics. A source-rule test alone does not prove production behavior
    for a rule whose public authority is rustc.
