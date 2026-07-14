@@ -4,7 +4,7 @@ use std::{collections::HashMap, path::Path};
 use crate::diagnostics::Severity;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub general: GeneralConfig,
     pub rules: RulesConfig,
@@ -29,18 +29,16 @@ struct BundledConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct GeneralConfig {
     /// Paths to exclude from scanning
     pub exclude: Vec<String>,
     /// Paths to include (if empty, include everything)
     pub include: Vec<String>,
-    /// Default severity for new rules
-    pub default_severity: String,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RulesConfig {
     /// Map of rule_id -> enabled/disabled
     pub enabled: HashMap<String, bool>,
@@ -49,7 +47,7 @@ pub struct RulesConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ValidationOrderConfig {
     /// Known expensive/heavy operations (function name patterns)
     pub heavy_operations: Vec<String>,
@@ -60,18 +58,16 @@ pub struct ValidationOrderConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TestSmellsConfig {
     /// Patterns indicating internal field access in assertions
     pub internal_field_patterns: Vec<String>,
-    /// Maximum ratio of setup lines to assertion lines before warning
-    pub max_setup_ratio: f64,
     /// Severity for this rule family
     pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MockUsageConfig {
     /// Mock-related patterns to detect
     pub mock_patterns: Vec<String>,
@@ -84,20 +80,16 @@ pub struct MockUsageConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct BenchmarkingConfig {
-    /// Paths that are benchmark-sensitive
-    pub sensitive_paths: Vec<String>,
     /// Expected benchmark verification patterns
     pub verification_patterns: Vec<String>,
-    /// Dispatchable attribute patterns
-    pub dispatchable_patterns: Vec<String>,
     /// Severity for this rule family
     pub severity: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TerminologyConfig {
     /// British English preferred spellings: american -> british
     pub british_english: HashMap<String, String>,
@@ -116,7 +108,6 @@ impl Default for GeneralConfig {
         GeneralConfig {
             exclude: vec!["target/**".to_string(), ".git/**".to_string()],
             include: vec![],
-            default_severity: "warning".to_string(),
         }
     }
 }
@@ -174,7 +165,6 @@ impl Default for TestSmellsConfig {
                 r"\.buffer\b".to_string(),
                 r"\.flag\b".to_string(),
             ],
-            max_setup_ratio: 5.0,
             severity: "warning".to_string(),
         }
     }
@@ -201,20 +191,10 @@ impl Default for MockUsageConfig {
 impl Default for BenchmarkingConfig {
     fn default() -> Self {
         BenchmarkingConfig {
-            sensitive_paths: vec![
-                "pallets/*/src/lib.rs".to_string(),
-                "pallets/*/src/weights.rs".to_string(),
-                "runtime/src/**".to_string(),
-            ],
             verification_patterns: vec![
                 "verify".to_string(),
                 "assert_last_event".to_string(),
                 "assert_has_event".to_string(),
-            ],
-            dispatchable_patterns: vec![
-                "#[pallet::call_index".to_string(),
-                "#[pallet::call]".to_string(),
-                "pub fn ".to_string(),
             ],
             severity: "warning".to_string(),
         }
@@ -255,7 +235,6 @@ impl Config {
                 .map_err(|error| format!("invalid glob pattern `{pattern}`: {error}"))?;
         }
 
-        self.validate_severity("general.default_severity", &self.general.default_severity)?;
         for (rule_id, severity) in &self.rules.severity {
             self.validate_severity(&format!("rules.severity.{rule_id}"), severity)?;
         }
@@ -290,16 +269,6 @@ impl Config {
             .get(rule_id)
             .and_then(|s| s.parse().ok())
             .or_else(|| self.family_severity(rule_id))
-            // This only applies to future rule families. Existing families retain
-            // their rule-specific defaults unless their family config overrides it.
-            .or_else(|| {
-                (!matches!(
-                    rule_id.get(..3),
-                    Some("VAL" | "TST" | "MOK" | "BEN" | "TRM" | "SEM" | "SEC")
-                ))
-                .then(|| self.general.default_severity.parse().ok())
-                .flatten()
-            })
             .unwrap_or(default)
     }
 
@@ -344,6 +313,22 @@ mod tests {
             Some(&"error".to_string())
         );
         assert_eq!(config.general.exclude.first(), Some(&"*.lock".to_string()));
+    }
+
+    #[test]
+    fn project_configuration_uses_the_supported_schema() {
+        let config: Config = toml::from_str(include_str!("../polkadot-linter.toml"))
+            .expect("repository sample configuration must use supported options");
+        config
+            .validate()
+            .expect("repository sample configuration must validate");
+    }
+
+    #[test]
+    fn deserialization_rejects_unknown_configuration_options() {
+        let error = toml::from_str::<Config>("[general]\nmax_setup_ratio = 5.0\n")
+            .expect_err("unknown settings must not be silently ignored");
+        assert!(error.to_string().contains("unknown field"));
     }
 
     #[test]

@@ -50,6 +50,7 @@ every listed fix has a regression test that reproduces the reviewed shape.
 | SEM013 treats every `*Invalidity` enum as a custom transaction invalidity code | Restrict the convention to the documented `CustomInvalidity` and `CustomValidity` enum names. | `sem013_ignores_unrelated_invalidity_enum_names` |
 | TRM001 skips identifiers on lines containing strings or comments | Check sanitized code identifiers alongside configured string and comment text. | `trm001_checks_identifiers_on_lines_with_strings_and_comments` |
 | Test and benchmark path detection assumes POSIX separators | Normalize path separators before applying target-file heuristics. | `target_classification_accepts_windows_path_separators` |
+| Config documents ignored severity, setup, and benchmark options | Remove no-op schema entries and reject unknown configuration keys instead of silently accepting them. | `project_configuration_uses_the_supported_schema`, `deserialization_rejects_unknown_configuration_options` |
 
 ## Still Open
 
