@@ -21,3 +21,14 @@ To feed a code-scanning dashboard, emit SARIF and upload the artifact:
 ```bash
 cargo run --release -- ./pallets -f sarif > polkadot-linter.sarif
 ```
+
+## crates.io releases
+
+Pushing a tag named `v<package-version>` runs the release workflow. It verifies
+the tag against `Cargo.toml`, checks formatting, runs Clippy with warnings
+denied, runs tests, builds the release binary, and performs a `cargo publish
+--dry-run` before publishing to crates.io.
+
+The workflow reads its publishing credential from the repository Actions secret
+`CARGO_REGISTRY_TOKEN`. Never place a crates.io token in the repository, tag,
+or workflow source.
