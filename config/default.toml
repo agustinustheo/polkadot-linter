@@ -55,7 +55,7 @@ cheap_validations = [
 ]
 
 # ---------------------------------------------------------------------------
-# Rule family: Test smells (TST001-TST005)
+# Rule family: Test smells (TST001-TST006)
 # ---------------------------------------------------------------------------
 [test_smells]
 severity = "warning"
@@ -89,7 +89,7 @@ mock_patterns = [
 ]
 
 # ---------------------------------------------------------------------------
-# Rule family: Benchmarking compliance (BEN001-BEN002)
+# Rule family: Benchmarking compliance (BEN001-BEN003)
 # ---------------------------------------------------------------------------
 [benchmarking]
 severity = "warning"
