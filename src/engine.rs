@@ -64,6 +64,7 @@ impl LintEngine {
         no_default_features: bool,
         features: &[String],
     ) -> Vec<Diagnostic> {
+        let _benchmark_cache = rules::benchmarking::ScanCache::begin();
         let mut diagnostics = Vec::new();
         let project_model =
             ProjectModel::discover_with_features(root, no_default_features, features);
