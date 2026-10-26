@@ -530,6 +530,49 @@ use xcm::latest::prelude::{Junction::*, Location, NetworkId};
     );
 }
 
+#[test]
+fn sem004_allows_documented_crate_globs_at_any_module_depth() {
+    let good = r#"
+use crate::*;
+use crate::{types::BalanceOf, *};
+
+pub mod migrations {
+    use crate::*;
+
+    pub mod v1 {
+        use crate::*;
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", good);
+    assert!(
+        !has_rule(&diags, "SEM004"),
+        "SEM004 must honor the documented `use crate::*;` exemption: {diags:?}"
+    );
+}
+
+#[test]
+fn sem004_still_reports_crate_submodule_globs() {
+    let bad = r#"
+use crate::types::*;
+
+pub mod nested {
+    use crate::{helpers, types::*};
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
+    let lines = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "SEM004")
+        .map(|diagnostic| diagnostic.line)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        vec![2, 5],
+        "only the whole-crate glob is exempt, not globs of crate submodules: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM005: Parameterised weight functions
 // ==========================================================================

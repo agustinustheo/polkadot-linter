@@ -1784,6 +1784,17 @@ fn use_tree_has_disallowed_glob(tree: &UseTree) -> bool {
             UseTree::Glob(_) => !allow_glob,
             UseTree::Group(group) => group.items.iter().any(|item| walk(item, allow_glob)),
             UseTree::Name(_) | UseTree::Rename(_) => false,
+            // `use crate::*;` is documented as allowed, also as a member of a
+            // `crate::{..}` group, which imports the same items. Globs of crate
+            // submodules (`use crate::module::*;`) still hide provenance.
+            UseTree::Path(path) if path.ident == "crate" => match &*path.tree {
+                UseTree::Glob(_) => false,
+                UseTree::Group(group) => group
+                    .items
+                    .iter()
+                    .any(|item| !matches!(item, UseTree::Glob(_)) && walk(item, allow_glob)),
+                tree => walk(tree, allow_glob),
+            },
             UseTree::Path(path) => {
                 let allow_nested_glob = allow_glob
                     || path.ident == "super"
