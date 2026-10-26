@@ -71,9 +71,10 @@
 - [Runtime Configuration Rules (RTC)](rules/runtime-config.md)
   - [RTC001 - Placeholder WeightInfo in a Runtime Config](rules/RTC001.md)
   - [RTC002 - Pallet Missing from define_benchmarks!](rules/RTC002.md)
-  - [RTC003 - XCM Delivery Fees Burned or Waived](rules/RTC003.md)
+  - [RTC003 - XCM Fees Waived or Delivery Free](rules/RTC003.md)
   - [RTC004 - Zero Existential or Storage Deposit](rules/RTC004.md)
   - [RTC005 - Insecure Collective-Flip Randomness in the Runtime](rules/RTC005.md)
+  - [RTC006 - XCM Fees Burned](rules/RTC006.md)
 
 # Polkadot SDK Best Practices
 

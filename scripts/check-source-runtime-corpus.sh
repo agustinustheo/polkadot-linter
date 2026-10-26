@@ -5,7 +5,10 @@
 # 1. Scans the SDK runtime roots with the syntax-only engine and compares the
 #    per-root RTC finding counts with benchmarks/polkadot-sdk-source-runtime-baseline.tsv.
 # 2. Checks every RTC row of benchmarks/labels/RTC.tsv: TP rows must be
-#    reported at path:line, FP rows must not be.
+#    reported at path:line, FP rows must not be. FP rows whose evidence starts
+#    with `scope:` are scope assertions (dev/test runtime, not a runtime crate,
+#    cfg(test)) rather than evidence that a reported pattern is benign; they
+#    are checked exactly like FP rows but counted separately.
 
 set -euo pipefail
 
@@ -100,6 +103,12 @@ if [[ "$failures" -ne 0 ]]; then
 else
   echo "all $checked RTC labels match"
 fi
+awk -F'\t' 'NR > 1 && $1 != "" {
+    kind = ($4 == "FP" && index($5, "scope:") == 1) ? "scope" : $4
+    count[$1 "\t" kind]++
+  }
+  END { for (key in count) print key "\t" count[key] }' "$LABELS" | sort |
+  awk -F'\t' '{ printf "  %s %s: %s\n", $1, $2, $3 }'
 
 # Every reported finding must be labeled, so new findings get reviewed.
 unlabeled="$(awk -F'\t' 'NR == FNR { if (FNR > 1) seen[$1 "\t" $2 "\t" $3] = 1; next }
