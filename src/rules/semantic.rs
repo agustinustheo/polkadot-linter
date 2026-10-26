@@ -1859,6 +1859,16 @@ impl LintRule for ValidationBeforeHeavyRead {
         let conditional_read_mask = ast
             .map(|ast| val001_if_condition_mask(ast, lines.len()))
             .unwrap_or_else(|| vec![false; lines.len()]);
+        let diagnostic_macro_mask = ast
+            .map(|ast| val001_diagnostic_macro_mask(ast, lines.len()))
+            .unwrap_or_else(|| vec![false; lines.len()]);
+        let heavy_operations = &config.validation_order.heavy_operations;
+        let guard_costs = ast
+            .map(|ast| val001_guard_costs(ast, lines.len(), heavy_operations))
+            .unwrap_or_else(|| vec![Val001GuardCost::default(); lines.len()]);
+        let functions = ast
+            .map(|ast| val001_function_facts(ast, heavy_operations))
+            .unwrap_or_default();
         // Validation order is a production-dispatch concern. Inline test and
         // try-runtime items share source files with production code, so the
         // file-level test check above is not sufficient here.
@@ -1910,7 +1920,9 @@ impl LintRule for ValidationBeforeHeavyRead {
                         if validation_guard_tokens.get(i).is_none_or(String::is_empty)
                             && val001_has_heavy_operation(&code, pattern)
                         {
-                            if conditional_read_mask.get(i).copied().unwrap_or(false) {
+                            if conditional_read_mask.get(i).copied().unwrap_or(false)
+                                || diagnostic_macro_mask.get(i).copied().unwrap_or(false)
+                            {
                                 break;
                             }
                             // Track every local introduced by the read so destructuring patterns
@@ -1958,6 +1970,30 @@ impl LintRule for ValidationBeforeHeavyRead {
                                     consumed_heavy_read = true;
                                     break;
                                 }
+                            }
+
+                            // A guard that reads storage or calls into pallet/config code is
+                            // not a cheap precondition, and one that consumes storage-derived
+                            // or later-computed values, or sits in a deferred closure or a
+                            // sibling branch, cannot be hoisted above the read. Later guards
+                            // in the same window are still considered.
+                            let cost = guard_costs.get(i).cloned().unwrap_or_default();
+                            let guard_text = format!(
+                                "{code} {}",
+                                validation_guard_tokens
+                                    .get(i)
+                                    .map(String::as_str)
+                                    .unwrap_or("")
+                            );
+                            if cost.reads_storage
+                                || cost.opaque_call
+                                || val001_function_at(&functions, heavy_line).is_some_and(
+                                    |function| {
+                                        function.guard_is_not_hoistable(heavy_line, i, &guard_text)
+                                    },
+                                )
+                            {
+                                break;
                             }
 
                             diagnostics.push(Diagnostic {
@@ -2170,6 +2206,506 @@ fn val001_ensure_guard_tokens(ast: &SynFile, line_count: usize) -> Vec<String> {
     };
     visitor.visit_file(ast);
     visitor.tokens_by_line
+}
+
+/// What a cheap guard's condition does beyond comparing locals: a guard that
+/// reads storage itself, or calls into pallet/config code whose cost the
+/// linter cannot see, is not a cheap precondition.
+#[derive(Clone, Default)]
+struct Val001GuardCost {
+    reads_storage: bool,
+    opaque_call: bool,
+}
+
+fn val001_guard_costs(
+    ast: &SynFile,
+    line_count: usize,
+    heavy_operations: &[String],
+) -> Vec<Val001GuardCost> {
+    struct GuardCostVisitor<'a> {
+        costs: Vec<Val001GuardCost>,
+        heavy_operations: &'a [String],
+    }
+
+    impl<'ast> Visit<'ast> for GuardCostVisitor<'_> {
+        fn visit_macro(&mut self, mac: &'ast Macro) {
+            if macro_name(mac).as_deref() == Some("ensure") {
+                let condition = mac
+                    .parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+                    .ok()
+                    .and_then(|arguments| arguments.into_iter().next());
+                if let Some(condition) = condition {
+                    let scan = Val001CallScan::scan(&condition, self.heavy_operations);
+                    let start = span_line(mac.span()).saturating_sub(1);
+                    let end = mac.span().end().line.saturating_sub(1);
+                    for line in start..=end.min(self.costs.len().saturating_sub(1)) {
+                        self.costs[line] = Val001GuardCost {
+                            reads_storage: scan.heavy,
+                            opaque_call: scan.opaque,
+                        };
+                    }
+                }
+            }
+            visit::visit_macro(self, mac);
+        }
+    }
+
+    let mut visitor = GuardCostVisitor {
+        costs: vec![Val001GuardCost::default(); line_count],
+        heavy_operations,
+    };
+    visitor.visit_file(ast);
+    visitor.costs
+}
+
+/// Lines inside debug-only assertions and logging macros. Reads there are
+/// diagnostics (compiled out of release builds or evaluated only when the log
+/// level is enabled), not part of the dispatch's validation order.
+fn val001_diagnostic_macro_mask(ast: &SynFile, line_count: usize) -> Vec<bool> {
+    struct DiagnosticMacroVisitor {
+        mask: Vec<bool>,
+    }
+
+    impl<'ast> Visit<'ast> for DiagnosticMacroVisitor {
+        fn visit_macro(&mut self, mac: &'ast Macro) {
+            let is_log_path = mac
+                .path
+                .segments
+                .first()
+                .is_some_and(|segment| segment.ident == "log");
+            if is_log_path
+                || matches!(
+                    macro_name(mac).as_deref(),
+                    Some(
+                        "debug_assert"
+                            | "debug_assert_eq"
+                            | "debug_assert_ne"
+                            | "log"
+                            | "trace"
+                            | "debug"
+                            | "info"
+                            | "warn"
+                            | "error"
+                    )
+                )
+            {
+                let start = span_line(mac.span()).saturating_sub(1);
+                let end = mac.span().end().line.saturating_sub(1);
+                for line in start..=end.min(self.mask.len().saturating_sub(1)) {
+                    self.mask[line] = true;
+                }
+            }
+            visit::visit_macro(self, mac);
+        }
+    }
+
+    let mut visitor = DiagnosticMacroVisitor {
+        mask: vec![false; line_count],
+    };
+    visitor.visit_file(ast);
+    visitor.mask
+}
+
+/// Calls found in an expression: storage reads matching the configured heavy
+/// patterns, macros whose bodies are not analysed, and calls into pallet or config code
+/// (`Self::..`, `T::..`, `Pallet::<T>::..`, `<T as ..>::..`) whose cost is not
+/// visible at the call site. `T::Constant::get()` is a type-level constant.
+#[derive(Default)]
+struct Val001CallScan<'a> {
+    heavy_operations: &'a [String],
+    heavy: bool,
+    opaque: bool,
+    macro_call: bool,
+}
+
+impl<'a> Val001CallScan<'a> {
+    fn scan(expr: &Expr, heavy_operations: &'a [String]) -> Self {
+        let mut scan = Self {
+            heavy_operations,
+            ..Self::default()
+        };
+        scan.visit_expr(expr);
+        scan
+    }
+}
+
+impl<'ast> Visit<'ast> for Val001CallScan<'_> {
+    fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+        if let Expr::Path(path) = &*call.func {
+            let head = format!("{}(", compact_tokens(&call.func));
+            let full = format!("{head}{})", compact_tokens(&call.args));
+            let is_type_constant = head.starts_with("T::");
+            self.heavy |= self.heavy_operations.iter().any(|pattern| {
+                !(pattern == "::get(" && is_type_constant)
+                    && full
+                        .match_indices(pattern.as_str())
+                        .any(|(index, _)| index < head.len())
+            });
+
+            let segments = &path.path.segments;
+            let first = segments.first().map(|segment| segment.ident.to_string());
+            let is_constant_get = call.args.is_empty()
+                && segments
+                    .last()
+                    .is_some_and(|segment| segment.ident == "get")
+                && (path.qself.is_some() || first.as_deref() == Some("T"));
+            let crosses_pallet_boundary = path.qself.is_some()
+                || matches!(first.as_deref(), Some("Self" | "T"))
+                || segments.iter().any(|segment| segment.ident == "Pallet");
+            self.opaque |= segments.len() > 1 && crosses_pallet_boundary && !is_constant_get;
+        }
+        visit::visit_expr_call(self, call);
+    }
+
+    fn visit_macro(&mut self, _mac: &'ast Macro) {
+        self.macro_call = true;
+    }
+}
+
+const VAL001_STORAGE_MUTATORS: &[&str] = &[
+    "mutate",
+    "try_mutate",
+    "mutate_exists",
+    "try_mutate_exists",
+    "mutate_extant",
+    "try_mutate_extant",
+];
+
+struct Val001Binding {
+    name: String,
+    line: usize,
+    /// Produced by storage, pallet/config code, or an unanalysed macro; pure
+    /// arithmetic on arguments can move along with the guard that uses it.
+    computed: bool,
+}
+
+/// Per-function facts deciding whether a later guard could be hoisted above a
+/// heavy read. Lines are zero-based and inclusive.
+#[derive(Default)]
+struct Val001FunctionFacts {
+    start: usize,
+    end: usize,
+    /// Locals whose value (transitively) comes from a storage read, including
+    /// parameters of closures over storage values or passed to `try_mutate`.
+    storage_bindings: HashSet<String>,
+    bindings: Vec<Val001Binding>,
+    /// Bodies of closures that may run zero or many times. Closures passed to
+    /// storage mutators run exactly once and are not recorded.
+    deferred_closures: Vec<(usize, usize)>,
+    /// Mutually exclusive branches: `if`/`else` arms and `match` arms.
+    branch_groups: Vec<Vec<(usize, usize)>>,
+}
+
+impl Val001FunctionFacts {
+    /// Whether the guard at `guard_line` is not an independent precondition
+    /// of the read at `heavy_line`: it consumes storage-derived data, a value
+    /// computed after the read, or it lives where it cannot be hoisted from.
+    fn guard_is_not_hoistable(&self, heavy_line: usize, guard_line: usize, guard: &str) -> bool {
+        let references = |name: &str| val001_references_binding(guard, name);
+        if self.storage_bindings.iter().any(|name| references(name)) {
+            return true;
+        }
+        if self.bindings.iter().any(|binding| {
+            binding.computed
+                && binding.line > heavy_line
+                && binding.line <= guard_line
+                && references(&binding.name)
+        }) {
+            return true;
+        }
+        let within = |(start, end): (usize, usize), line: usize| start <= line && line <= end;
+        if self
+            .deferred_closures
+            .iter()
+            .any(|&range| within(range, guard_line) && !within(range, heavy_line))
+        {
+            return true;
+        }
+        self.branch_groups.iter().any(|branches| {
+            let heavy_branch = branches.iter().position(|&range| within(range, heavy_line));
+            let guard_branch = branches.iter().position(|&range| within(range, guard_line));
+            matches!((heavy_branch, guard_branch), (Some(heavy), Some(guard)) if heavy != guard)
+        })
+    }
+}
+
+fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val001FunctionFacts> {
+    struct Site {
+        names: Vec<String>,
+        source: String,
+        reads_storage: bool,
+    }
+
+    #[derive(Clone, Default)]
+    struct ClosureContext {
+        /// The call's source text without the closure argument.
+        source: String,
+        /// The call reads storage or is a storage mutator.
+        reads_storage: bool,
+        /// Storage mutators run their closure exactly once, synchronously.
+        runs_once: bool,
+    }
+
+    struct BodyVisitor<'a> {
+        heavy_operations: &'a [String],
+        facts: Val001FunctionFacts,
+        sites: Vec<Site>,
+        /// Closure argument context keyed by the closure's start position.
+        closure_context: HashMap<(usize, usize), ClosureContext>,
+    }
+
+    fn line_range<T: Spanned>(node: &T) -> (usize, usize) {
+        let span = node.span();
+        (
+            span_line(span).saturating_sub(1),
+            span.end().line.saturating_sub(1),
+        )
+    }
+
+    fn position_key<T: Spanned>(node: &T) -> (usize, usize) {
+        let start = node.span().start();
+        (start.line, start.column)
+    }
+
+    impl BodyVisitor<'_> {
+        fn record(&mut self, names: Vec<String>, source: &Expr, line: usize) {
+            if names.is_empty() {
+                return;
+            }
+            let scan = Val001CallScan::scan(source, self.heavy_operations);
+            for name in &names {
+                self.facts.bindings.push(Val001Binding {
+                    name: name.clone(),
+                    line,
+                    computed: scan.heavy || scan.opaque || scan.macro_call,
+                });
+            }
+            self.sites.push(Site {
+                names,
+                source: compact_tokens(source),
+                reads_storage: scan.heavy,
+            });
+        }
+
+        fn register_closure_arguments<'e>(
+            &mut self,
+            callee: String,
+            arguments: impl Iterator<Item = &'e Expr> + Clone,
+            mutates_storage: bool,
+            storage_receiver: bool,
+        ) {
+            let mut source = callee;
+            let mut reads_storage = mutates_storage || storage_receiver;
+            for argument in arguments.clone() {
+                if !matches!(argument, Expr::Closure(_)) {
+                    source.push_str(&compact_tokens(argument));
+                    reads_storage |= Val001CallScan::scan(argument, self.heavy_operations).heavy;
+                }
+            }
+            for argument in arguments {
+                if let Expr::Closure(closure) = argument {
+                    self.closure_context.insert(
+                        position_key(closure),
+                        ClosureContext {
+                            source: source.clone(),
+                            reads_storage,
+                            runs_once: mutates_storage,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    impl<'ast> Visit<'ast> for BodyVisitor<'_> {
+        fn visit_local(&mut self, local: &'ast Local) {
+            if let Some(init) = &local.init {
+                let line = span_line(local.span()).saturating_sub(1);
+                self.record(val001_pat_binding_names(&local.pat), &init.expr, line);
+            }
+            visit::visit_local(self, local);
+        }
+
+        fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
+            let line = span_line(expr.span()).saturating_sub(1);
+            self.record(val001_pat_binding_names(&expr.pat), &expr.expr, line);
+            visit::visit_expr_let(self, expr);
+        }
+
+        fn visit_expr_for_loop(&mut self, expr: &'ast ExprForLoop) {
+            let line = span_line(expr.span()).saturating_sub(1);
+            self.record(val001_pat_binding_names(&expr.pat), &expr.expr, line);
+            visit::visit_expr_for_loop(self, expr);
+        }
+
+        fn visit_expr_match(&mut self, expr: &'ast syn::ExprMatch) {
+            let mut branches = Vec::new();
+            for arm in &expr.arms {
+                let line = span_line(arm.span()).saturating_sub(1);
+                self.record(val001_pat_binding_names(&arm.pat), &expr.expr, line);
+                branches.push(line_range(arm));
+            }
+            self.facts.branch_groups.push(branches);
+            visit::visit_expr_match(self, expr);
+        }
+
+        fn visit_expr_if(&mut self, expr: &'ast ExprIf) {
+            let mut branches = vec![line_range(&expr.then_branch)];
+            if let Some((_, else_branch)) = &expr.else_branch {
+                branches.push(line_range(else_branch));
+            }
+            self.facts.branch_groups.push(branches);
+            visit::visit_expr_if(self, expr);
+        }
+
+        fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+            let mutates_storage = matches!(
+                &*call.func,
+                Expr::Path(path) if path_last_ident(&path.path)
+                    .is_some_and(|name| VAL001_STORAGE_MUTATORS.contains(&name.as_str()))
+            );
+            self.register_closure_arguments(
+                compact_tokens(&call.func),
+                call.args.iter(),
+                mutates_storage,
+                false,
+            );
+            visit::visit_expr_call(self, call);
+        }
+
+        fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
+            let method = call.method.to_string();
+            let mutates_storage = VAL001_STORAGE_MUTATORS.contains(&method.as_str());
+            let receiver_reads_storage =
+                Val001CallScan::scan(&call.receiver, self.heavy_operations).heavy;
+            self.register_closure_arguments(
+                format!("{}.{method}", compact_tokens(&call.receiver)),
+                call.args.iter(),
+                mutates_storage,
+                receiver_reads_storage,
+            );
+            visit::visit_expr_method_call(self, call);
+        }
+
+        fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
+            let context = self
+                .closure_context
+                .get(&position_key(closure))
+                .cloned()
+                .unwrap_or_default();
+            let names = closure
+                .inputs
+                .iter()
+                .flat_map(val001_pat_binding_names)
+                .collect::<Vec<_>>();
+            let line = span_line(closure.span()).saturating_sub(1);
+            for name in &names {
+                self.facts.bindings.push(Val001Binding {
+                    name: name.clone(),
+                    line,
+                    computed: true,
+                });
+            }
+            if !names.is_empty() {
+                self.sites.push(Site {
+                    names,
+                    source: context.source,
+                    reads_storage: context.reads_storage,
+                });
+            }
+            if !context.runs_once {
+                self.facts.deferred_closures.push(line_range(&closure.body));
+            }
+            visit::visit_expr_closure(self, closure);
+        }
+    }
+
+    fn analyze(block: &syn::Block, heavy_operations: &[String]) -> Val001FunctionFacts {
+        let (start, end) = line_range(block);
+        let mut visitor = BodyVisitor {
+            heavy_operations,
+            facts: Val001FunctionFacts {
+                start,
+                end,
+                ..Val001FunctionFacts::default()
+            },
+            sites: Vec::new(),
+            closure_context: HashMap::new(),
+        };
+        visitor.visit_block(block);
+
+        // Propagate storage provenance through bindings until nothing changes.
+        let mut storage_bindings = HashSet::new();
+        loop {
+            let mut changed = false;
+            for site in &visitor.sites {
+                if site
+                    .names
+                    .iter()
+                    .all(|name| storage_bindings.contains(name))
+                {
+                    continue;
+                }
+                let derived = site.reads_storage
+                    || storage_bindings
+                        .iter()
+                        .any(|name: &String| val001_references_binding(&site.source, name));
+                if derived {
+                    storage_bindings.extend(site.names.iter().cloned());
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        visitor.facts.storage_bindings = storage_bindings;
+        visitor.facts
+    }
+
+    struct FunctionVisitor<'a> {
+        heavy_operations: &'a [String],
+        functions: Vec<Val001FunctionFacts>,
+    }
+
+    impl<'ast> Visit<'ast> for FunctionVisitor<'_> {
+        fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+            self.functions
+                .push(analyze(&item.block, self.heavy_operations));
+            visit::visit_item_fn(self, item);
+        }
+
+        fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+            self.functions
+                .push(analyze(&item.block, self.heavy_operations));
+            visit::visit_impl_item_fn(self, item);
+        }
+
+        fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+            if let Some(block) = &item.default {
+                self.functions.push(analyze(block, self.heavy_operations));
+            }
+            visit::visit_trait_item_fn(self, item);
+        }
+    }
+
+    let mut visitor = FunctionVisitor {
+        heavy_operations,
+        functions: Vec::new(),
+    };
+    visitor.visit_file(ast);
+    visitor.functions
+}
+
+/// The innermost function body containing `line`.
+fn val001_function_at(
+    functions: &[Val001FunctionFacts],
+    line: usize,
+) -> Option<&Val001FunctionFacts> {
+    functions
+        .iter()
+        .filter(|function| function.start <= line && line <= function.end)
+        .min_by_key(|function| function.end - function.start)
 }
 
 // ---------------------------------------------------------------------------
