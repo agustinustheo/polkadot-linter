@@ -7790,6 +7790,10 @@ bench-demo = { path = "benchmarking" }
         "#[benchmark] fn missing() {}",
     )
     .unwrap();
+    let decoy = dir.path().join("pallet/benchmarking-extra");
+    std::fs::create_dir_all(decoy.join("src")).unwrap();
+    std::fs::write(decoy.join("Cargo.toml"), "[package]\nname = \"pallet-other-benchmarking\"\nversion = \"0.1.0\"\n[dependencies]\npallet-demo = { path = \"..\" }\n").unwrap();
+    std::fs::write(decoy.join("src/lib.rs"), "#[benchmark] fn missing() {}").unwrap();
     let calls = r#"#[pallet::call] impl<T: Config> Pallet<T> {
         pub fn covered() {} pub fn inline() {} pub fn missing() {}
     }
@@ -7843,15 +7847,13 @@ mod benchmarks { #[benchmark] fn real_bench() {} }
         .collect::<Vec<_>>();
     assert_eq!(benches.len(), 1);
     assert!(benches[0].message.contains("real_bench"));
-    for path in [
-        "pallets/examples/demo/src/weights.rs",
-        "pallets/integration-tests/src/weights.rs",
-    ] {
-        assert!(!has_rule(
-            &check_fixture(path, "trait WeightInfo { fn fake(); }"),
-            "BEN001"
-        ));
-    }
+    assert!(!has_rule(
+        &check_fixture(
+            "pallets/integration-tests/src/weights.rs",
+            "trait WeightInfo { fn fake(); }"
+        ),
+        "BEN001"
+    ));
 }
 // === End BEN discovery and recall guard ===
 
@@ -7901,3 +7903,213 @@ fn ben003_resolves_dispatched_call_bindings_without_counting_setup_calls() {
     }
 }
 // === End BEN measured-call binding regression ===
+
+// Round 2: exercise actual Cargo module trees and scan lifetimes.
+#[test]
+fn ben_scan_under_tests_directory_and_example_library_crates() {
+    use polkadot_linter::{config::Config, engine::LintEngine};
+    let dir = tempfile::tempdir().unwrap();
+    for folder in ["tests/ws", "substrate/frame/examples/demo"] {
+        let root = dir.path().join(folder);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "mod weights; #[pallet::call] impl Pallet { pub fn missing() {} } #[benchmark] fn unverified() { #[block] {} }").unwrap();
+        std::fs::write(
+            root.join("src/weights.rs"),
+            "trait WeightInfo { fn missing(); }",
+        )
+        .unwrap();
+        let mut engine = LintEngine::new(Config::default());
+        engine.filter_rules(&["BEN".into()]);
+        let findings = engine.scan(&root);
+        for rule in ["BEN001", "BEN002", "BEN003"] {
+            assert!(has_rule(&findings, rule), "{folder} {rule}: {findings:?}");
+        }
+        // A real Cargo example target, including a custom path, is excluded.
+        std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n[[example]]\nname = \"custom\"\npath = \"custom/lib.rs\"\n").unwrap();
+        std::fs::create_dir_all(root.join("custom")).unwrap();
+        std::fs::create_dir_all(root.join("examples")).unwrap();
+        let code =
+            "#[pallet::call] impl Pallet { pub fn missing() {} } #[benchmark] fn unverified() {}";
+        std::fs::write(root.join("custom/lib.rs"), code).unwrap();
+        std::fs::write(root.join("examples/demo.rs"), code).unwrap();
+        let findings = engine.scan(&root);
+        assert!(
+            findings
+                .iter()
+                .all(|d| !d.file.starts_with(root.join("examples"))
+                    && !d.file.starts_with(root.join("custom"))),
+            "{findings:?}"
+        );
+    }
+}
+
+#[test]
+fn ben_module_ancestry_and_cache_refresh() {
+    use polkadot_linter::{config::Config, engine::LintEngine};
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::create_dir(root.join("src")).unwrap();
+    std::fs::create_dir(root.join("src/nested")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/lib.rs"),
+        r#"
+        mod weights;
+        #[cfg(test)] mod test_benches;
+        #[cfg(feature = "runtime-benchmarks")] #[path = "nested/../live.rs"] mod benchmarking;
+        #[pallet::call] impl Pallet { pub fn dead() {} pub fn test_only() {} pub fn live() {} }
+    "#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/weights.rs"),
+        "trait WeightInfo { fn dead(); fn test_only(); fn live(); }",
+    )
+    .unwrap();
+    for (file, name) in [
+        ("old_benches.rs", "dead"),
+        ("test_benches.rs", "test_only"),
+        ("live.rs", "live"),
+    ] {
+        std::fs::write(
+            root.join("src").join(file),
+            format!("#[benchmark] fn {name}() {{ #[extrinsic_call] _(); }}"),
+        )
+        .unwrap();
+    }
+    let mut engine = LintEngine::new(Config::default());
+    engine.filter_rules(&["BEN".into()]);
+    let findings = engine.scan(root);
+    for rule in ["BEN001", "BEN003"] {
+        let missing = findings
+            .iter()
+            .filter(|d| d.rule_id == rule)
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        assert!(missing.iter().any(|d| d.message.contains("`dead`")));
+        assert!(missing.iter().any(|d| d.message.contains("`test_only`")));
+    }
+    assert_eq!(
+        findings.iter().filter(|d| d.rule_id == "BEN002").count(),
+        1,
+        "{findings:?}"
+    );
+    std::fs::write(root.join("src/live.rs"), "").unwrap();
+    let findings = engine.scan(root);
+    assert_eq!(findings.iter().filter(|d| d.rule_id == "BEN003").count(), 3);
+}
+
+#[test]
+fn ben003_requires_owning_receiver_and_dispatch() {
+    for syntax in ["v1", "v2"] {
+        for measured in [
+            "OtherPallet::<T>::transfer()",
+            "T::Currency::transfer()",
+            "Value::<T>::transfer()",
+            "Foo::<T>::transfer()",
+            "Call::<T>::transfer {}",
+            "{ let call = Call::<T>::transfer {}; }",
+            "foreign.dispatch(origin)",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let body = format!("let foreign = OtherCall::<T>::transfer {{}}; {measured};");
+            let bench = if syntax == "v1" {
+                format!("benchmarks! {{ renamed {{ let foreign = OtherCall::<T>::transfer {{}}; }}: {{ {body} }} verify {{ assert!(true); }} }}")
+            } else {
+                format!("#[benchmark] fn renamed() {{ let foreign = OtherCall::<T>::transfer {{}}; #[block] {{ {body} }} assert!(true); }}")
+            };
+            std::fs::write(dir.path().join("benchmarking.rs"), bench).unwrap();
+            let code = "#[pallet::call] impl Pallet { pub fn transfer() {} }";
+            let path = dir.path().join("lib.rs");
+            std::fs::write(&path, code).unwrap();
+            assert!(
+                has_rule(&check_fixture(path.to_str().unwrap(), code), "BEN003"),
+                "{syntax}: {measured}"
+            );
+        }
+    }
+    // Names overlapping storage and other pallets never confer ownership.
+    let source = r#"use other_pallet::Pallet as Other;
+        type Storage<T> = Value<T>;
+        #[benchmark] fn set_variant() { #[block] { Other::<T>::set(); Storage::<T>::set(); T::Currency::set(); } }
+    "#;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("benchmarking.rs"), source).unwrap();
+    let code = "#[pallet::call] impl Pallet { pub fn set() {} }";
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, code).unwrap();
+    assert!(has_rule(
+        &check_fixture(path.to_str().unwrap(), code),
+        "BEN003"
+    ));
+}
+
+#[test]
+fn ben003_resolves_owning_aliases_and_assertion_arguments() {
+    for expression in [
+        "Pallet::<T>::transfer()",
+        "Self::transfer()",
+        "Membership::<T>::transfer()",
+        "Local::<T>::transfer()",
+        "assert!(Membership::<T>::transfer().is_ok(),)",
+        "assert_eq!(Membership::<T>::transfer(), Ok(()),)",
+        "assert_ne!(Local::<T>::transfer(), Err(()),)",
+        "debug_assert!(Local::<T>::transfer().is_ok(),)",
+        "debug_assert_eq!(Local::<T>::transfer(), Ok(()),)",
+        "debug_assert_ne!(Local::<T>::transfer(), Err(()),)",
+    ] {
+        for syntax in ["v1", "v2"] {
+            let dir = tempfile::tempdir().unwrap();
+            let measured = format!("{{ {expression}; }}");
+            let source = if syntax == "v1" {
+                format!("use super::Pallet as Membership; type Local<T> = Membership<T>; benchmarks! {{ renamed {{}}: {measured} verify {{ assert!(true); }} }}")
+            } else {
+                format!("use super::Pallet as Membership; type Local<T> = Membership<T>; #[benchmark] fn renamed() {{ #[block] {measured} assert!(true); }}")
+            };
+            std::fs::write(dir.path().join("benchmarking.rs"), source).unwrap();
+            let code = "#[pallet::call] impl Pallet { pub fn transfer() {} }";
+            let path = dir.path().join("lib.rs");
+            std::fs::write(&path, code).unwrap();
+            assert!(
+                !has_rule(&check_fixture(path.to_str().unwrap(), code), "BEN003"),
+                "{syntax}: {expression}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ben002_empty_verify_is_not_verification() {
+    let code = "benchmarks! { empty {}: _() verify { /* no check */ } nonempty {}: _() verify { check_state(); } }";
+    let findings = check_fixture("pallets/demo/src/benchmarking.rs", code);
+    let findings = findings
+        .iter()
+        .filter(|d| d.rule_id == "BEN002")
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].message.contains("`empty`"));
+}
+
+#[test]
+fn ben003_foreign_imports_can_shadow_conventional_names() {
+    for source in [
+        "use other_pallet::Pallet; #[benchmark] fn renamed() { #[block] { Pallet::<T>::transfer(); } }",
+        "use other_pallet::Call; #[benchmark] fn renamed() { let call = Call::<T>::transfer {}; #[block] { call.dispatch(origin); } }",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("benchmarking.rs"), source).unwrap();
+        let code = "#[pallet::call] impl Pallet { pub fn transfer() {} }";
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, code).unwrap();
+        assert!(has_rule(&check_fixture(path.to_str().unwrap(), code), "BEN003"), "{source}");
+    }
+}

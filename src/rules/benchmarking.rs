@@ -2,8 +2,10 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use regex::Regex;
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    rc::Rc,
 };
 use syn::{
     spanned::Spanned,
@@ -218,15 +220,26 @@ fn test_only(attrs: &[Attribute]) -> bool {
     })
 }
 
+fn crate_root(path: &Path) -> Option<&Path> {
+    if !path.is_file() {
+        return None;
+    }
+    path.parent()?
+        .ancestors()
+        .find(|dir| dir.join("Cargo.toml").is_file())
+}
+
 fn excluded_context(ctx: &FileContext) -> bool {
     use crate::project_model::SourceTargetKind;
-    ctx.is_test_file
-        || ctx.path.components().any(|part| {
-            matches!(
-                part.as_os_str().to_str(),
-                Some("examples" | "tests" | "test" | "integration-tests" | "integration_tests")
-            )
-        })
+    // The engine's historical is_test_file flag examines absolute paths. Do
+    // our own crate-relative classification so a checkout under tests/ works.
+    let relative = crate_root(&ctx.path)
+        .and_then(|root| ctx.path.strip_prefix(root).ok())
+        .unwrap_or(&ctx.rel_path);
+    crate::engine::LintEngine::is_test_file(relative, ctx.content)
+        || (!ctx.rel_path.is_absolute()
+            && crate::engine::LintEngine::is_test_file(&ctx.rel_path, ctx.content))
+        || (crate_root(&ctx.path).is_some() && relative.starts_with("examples"))
         || ctx.source_target_kinds.iter().any(|kind| {
             matches!(
                 kind,
@@ -234,6 +247,122 @@ fn excluded_context(ctx: &FileContext) -> bool {
             )
         })
         || ctx.ast.as_ref().is_some_and(|ast| test_only(&ast.attrs))
+}
+
+#[derive(Clone)]
+struct Owners {
+    modules: HashSet<String>,
+    pallets: HashSet<String>,
+    calls: HashSet<String>,
+}
+
+impl Owners {
+    fn new(modules: HashSet<String>) -> Self {
+        Self {
+            modules,
+            pallets: ["Pallet", "Self"].into_iter().map(str::to_owned).collect(),
+            calls: ["Call"].into_iter().map(str::to_owned).collect(),
+        }
+    }
+
+    fn owns_type(&self, path: &syn::Path, call: bool) -> bool {
+        let parts = path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect::<Vec<_>>();
+        let names = if call { &self.calls } else { &self.pallets };
+        let canonical = if call { "Call" } else { "Pallet" };
+        match parts.as_slice() {
+            [name] => names.contains(name),
+            [module, name] => {
+                self.modules.contains(module) && (name == canonical || names.contains(name))
+            }
+            [module, pallet, name] => {
+                self.modules.contains(module)
+                    && pallet == "pallet"
+                    && (name == canonical || names.contains(name))
+            }
+            _ => false,
+        }
+    }
+
+    fn variant(&self, path: &syn::Path) -> Option<String> {
+        let mut receiver = path.clone();
+        let name = receiver.segments.pop()?.into_value().ident.to_string();
+        self.owns_type(&receiver, true).then_some(name)
+    }
+
+    fn in_scope(&self, items: &[syn::Item]) -> Self {
+        fn imports(tree: &syn::UseTree, prefix: Vec<String>, out: &mut Vec<(syn::Path, String)>) {
+            match tree {
+                syn::UseTree::Path(p) => {
+                    let mut prefix = prefix;
+                    prefix.push(p.ident.to_string());
+                    imports(&p.tree, prefix, out);
+                }
+                syn::UseTree::Group(g) => {
+                    for t in &g.items {
+                        imports(t, prefix.clone(), out);
+                    }
+                }
+                syn::UseTree::Name(n) => {
+                    let mut prefix = prefix;
+                    prefix.push(n.ident.to_string());
+                    if let Ok(path) = syn::parse_str(&prefix.join("::")) {
+                        out.push((path, n.ident.to_string()));
+                    }
+                }
+                syn::UseTree::Rename(r) => {
+                    let mut prefix = prefix;
+                    prefix.push(r.ident.to_string());
+                    if let Ok(path) = syn::parse_str(&prefix.join("::")) {
+                        out.push((path, r.rename.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut aliases = Vec::new();
+        for item in items {
+            match item {
+                syn::Item::Use(u) if !test_only(&u.attrs) => {
+                    imports(&u.tree, Vec::new(), &mut aliases)
+                }
+                syn::Item::Type(t) if !test_only(&t.attrs) => {
+                    if let syn::Type::Path(p) = &*t.ty {
+                        if p.qself.is_none() {
+                            aliases.push((p.path.clone(), t.ident.to_string()));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut owners = self.clone();
+        // Explicit imports/type aliases can shadow inherited names, including
+        // the conventional Pallet and Call names.
+        for (path, alias) in &aliases {
+            if !self.owns_type(path, false) {
+                owners.pallets.remove(alias);
+            }
+            if !self.owns_type(path, true) {
+                owners.calls.remove(alias);
+            }
+        }
+        // Resolve chains of local aliases independently of declaration order.
+        for _ in 0..=aliases.len() {
+            for (path, alias) in &aliases {
+                if owners.owns_type(path, false) {
+                    owners.pallets.insert(alias.clone());
+                }
+                if owners.owns_type(path, true) {
+                    owners.calls.insert(alias.clone());
+                }
+            }
+        }
+        owners
+    }
 }
 
 fn measured_statement(stmt: &syn::Stmt) -> bool {
@@ -260,11 +389,15 @@ fn called_names(
     tokens: TokenStream,
     benchmark: &str,
     bindings: &HashMap<String, String>,
+    owners: &Owners,
+    extrinsic_marker: bool,
 ) -> HashSet<String> {
     struct Calls<'a> {
         names: HashSet<String>,
         benchmark: &'a str,
         bindings: &'a HashMap<String, String>,
+        owners: &'a Owners,
+        extrinsic_marker: bool,
     }
     impl<'ast> Visit<'ast> for Calls<'_> {
         fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
@@ -284,29 +417,29 @@ fn called_names(
             }
             visit::visit_expr_method_call(self, call);
         }
-        fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
-            if expr
-                .path
-                .segments
-                .iter()
-                .any(|s| s.ident.to_string().ends_with("Call"))
-            {
-                if let Some(name) = path_last_ident(&expr.path) {
-                    self.names.insert(name);
-                }
-            }
-            visit::visit_expr_struct(self, expr);
-        }
-
         fn visit_macro(&mut self, mac: &'ast syn::Macro) {
             if mac.path.segments.last().is_some_and(|s| {
                 matches!(
                     s.ident.to_string().as_str(),
-                    "assert_ok" | "assert_err" | "assert_noop"
+                    "assert_ok"
+                        | "assert_err"
+                        | "assert_noop"
+                        | "assert"
+                        | "assert_eq"
+                        | "assert_ne"
+                        | "debug_assert"
+                        | "debug_assert_eq"
+                        | "debug_assert_ne"
                 )
             }) {
-                if let Ok(inner) = syn::parse2::<syn::Expr>(mac.tokens.clone()) {
-                    self.visit_expr(&inner);
+                use syn::parse::Parser;
+                if let Ok(args) =
+                    syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated
+                        .parse2(mac.tokens.clone())
+                {
+                    for arg in args {
+                        self.visit_expr(&arg);
+                    }
                 }
             }
         }
@@ -316,19 +449,32 @@ fn called_names(
                     self.names.insert(self.benchmark.to_string());
                 }
                 syn::Expr::Path(path) => {
-                    if let Some(name) = path_last_ident(&path.path) {
-                        self.names.insert(name);
+                    let mut receiver = path.path.clone();
+                    let name = receiver
+                        .segments
+                        .pop()
+                        .map(|p| p.into_value().ident.to_string());
+                    if path.qself.is_none()
+                        && (self.owners.owns_type(&receiver, false)
+                            || (self.extrinsic_marker && path.path.segments.len() == 1))
+                    {
+                        self.names.extend(name);
                     }
                 }
                 _ => {}
             }
+            let marker = self.extrinsic_marker;
+            self.extrinsic_marker = false;
             visit::visit_expr_call(self, call);
+            self.extrinsic_marker = marker;
         }
     }
     let mut calls = Calls {
         names: HashSet::new(),
         benchmark,
         bindings,
+        owners,
+        extrinsic_marker,
     };
     if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
         calls.visit_block(&block);
@@ -338,7 +484,7 @@ fn called_names(
 
 // Resolve only simple local Call bindings that are later dispatched in the
 // measured block. Setup calls themselves are never benchmark coverage.
-fn call_bindings(tokens: TokenStream) -> HashMap<String, String> {
+fn call_bindings(tokens: TokenStream, owners: &Owners) -> HashMap<String, String> {
     let tokens = tokens.into_iter().collect::<Vec<_>>();
     let mut bindings = HashMap::new();
     for start in 0..tokens.len() {
@@ -361,22 +507,15 @@ fn call_bindings(tokens: TokenStream) -> HashMap<String, String> {
             continue;
         };
         if let syn::Expr::Struct(expr) = &*init.expr {
-            if expr
-                .path
-                .segments
-                .iter()
-                .any(|s| s.ident.to_string().ends_with("Call"))
-            {
-                if let Some(name) = path_last_ident(&expr.path) {
-                    bindings.insert(binding.ident.to_string(), name);
-                }
+            if let Some(name) = owners.variant(&expr.path) {
+                bindings.insert(binding.ident.to_string(), name);
             }
         }
     }
     bindings
 }
 
-fn legacy_benchmarks(tokens: TokenStream) -> Vec<Benchmark> {
+fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
     let tokens = tokens.into_iter().collect::<Vec<_>>();
     let starts = tokens
         .windows(3)
@@ -412,7 +551,13 @@ fn legacy_benchmarks(tokens: TokenStream) -> Vec<Benchmark> {
                 TokenTree::Group(group) => group.stream(),
                 _ => TokenStream::new(),
             };
-            calls.extend(called_names(block.stream(), &name, &call_bindings(setup)));
+            calls.extend(called_names(
+                block.stream(),
+                &name,
+                &call_bindings(setup, owners),
+                owners,
+                false,
+            ));
         }
         let end_line = verify
             .map(|i| measured[i + 1].span().end().line)
@@ -431,7 +576,12 @@ fn legacy_benchmarks(tokens: TokenStream) -> Vec<Benchmark> {
             calls,
             name_only: false,
             verification: verify
-                .map(|i| measured[i..i + 2].iter().cloned().collect())
+                .map(|i| match &measured[i + 1] {
+                    TokenTree::Group(group) if !group.stream().is_empty() => {
+                        measured[i..i + 2].iter().cloned().collect()
+                    }
+                    _ => TokenStream::new(),
+                })
                 .unwrap_or_default(),
         });
     }
@@ -439,13 +589,25 @@ fn legacy_benchmarks(tokens: TokenStream) -> Vec<Benchmark> {
 }
 
 fn collect_benchmarks(content: &str) -> Vec<Benchmark> {
+    parse_ast(content)
+        .map(|ast| collect_benchmarks_ast(&ast, &Owners::new(HashSet::new())))
+        .unwrap_or_default()
+}
+
+fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
     struct Benchmarks {
         entries: Vec<Benchmark>,
+        owners: Owners,
     }
     impl<'ast> Visit<'ast> for Benchmarks {
         fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
             if !test_only(&module.attrs) {
+                let previous = self.owners.clone();
+                if let Some((_, items)) = &module.content {
+                    self.owners = self.owners.in_scope(items);
+                }
                 visit::visit_item_mod(self, module);
+                self.owners = previous;
             }
         }
         fn visit_item_fn(&mut self, function: &'ast ItemFn) {
@@ -470,7 +632,12 @@ fn collect_benchmarks(content: &str) -> Vec<Benchmark> {
                                     .iter()
                                     .flat_map(ToTokens::to_token_stream)
                                     .collect(),
+                                &self.owners,
                             ),
+                            &self.owners,
+                            stmt.to_token_stream()
+                                .to_string()
+                                .contains("extrinsic_call"),
                         ));
                         after_measurement = true;
                         verification = TokenStream::new();
@@ -503,17 +670,16 @@ fn collect_benchmarks(content: &str) -> Vec<Benchmark> {
                 })
             {
                 self.entries
-                    .extend(legacy_benchmarks(item.mac.tokens.clone()));
+                    .extend(legacy_benchmarks(item.mac.tokens.clone(), &self.owners));
             }
         }
     }
     let mut visitor = Benchmarks {
         entries: Vec::new(),
+        owners: owners.in_scope(&ast.items),
     };
-    if let Some(ast) = parse_ast(content) {
-        if !test_only(&ast.attrs) {
-            visitor.visit_file(&ast);
-        }
+    if !test_only(&ast.attrs) {
+        visitor.visit_file(ast);
     }
     visitor.entries
 }
@@ -550,8 +716,22 @@ fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
     false
 }
 
-fn manifest(path: &Path) -> Option<toml::Value> {
-    std::fs::read_to_string(path).ok()?.parse().ok()
+fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
+    if let Some(found) =
+        MANIFEST_CACHE.with(|cache| cache.borrow().as_ref().and_then(|c| c.get(path).cloned()))
+    {
+        return found;
+    }
+    let found = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map(Rc::new);
+    MANIFEST_CACHE.with(|cache| {
+        if let Some(cache) = cache.borrow_mut().as_mut() {
+            cache.insert(path.to_path_buf(), found.clone());
+        }
+    });
+    found
 }
 
 fn benchmark_sources(root: &Path) -> Vec<PathBuf> {
@@ -577,20 +757,21 @@ fn benchmark_sources(root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-fn owned_benchmarks(path: &Path) -> Vec<Benchmark> {
+fn discover_benchmarks(path: &Path) -> Discovery {
     let Some(parent) = path.parent() else {
-        return Vec::new();
+        return Discovery::default();
     };
-    let crate_root = parent
-        .ancestors()
-        .find(|dir| dir.join("Cargo.toml").is_file());
-    let mut roots = vec![crate_root
-        .map(|dir| dir.join("src"))
-        .unwrap_or_else(|| parent.to_path_buf())];
+    let crate_root = crate_root(path);
+    let mut roots = vec![crate_root.unwrap_or(parent).to_path_buf()];
+    let mut modules = ["crate", "self", "super"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
     if let Some(crate_root) = crate_root {
         if let Some(package_name) = manifest(&crate_root.join("Cargo.toml"))
             .and_then(|m| m.get("package")?.get("name")?.as_str().map(str::to_owned))
         {
+            modules.insert(package_name.replace('-', "_"));
             // Resolve companion crates through Cargo's declared path dependency,
             // never through a globally shared benchmark name.
             let workspace = crate_root
@@ -609,9 +790,23 @@ fn owned_benchmarks(path: &Path) -> Vec<Benchmark> {
                         .cloned()
                 })
                 .unwrap_or_default();
+            let mut companion_names = vec![format!("{package_name}-benchmarking")];
+            // SDK's frame-election-provider-support uses a pallet- prefixed
+            // companion. Require the same complete stem and declared dependency.
+            if let Some(stem) = package_name.strip_prefix("frame-") {
+                companion_names.push(format!("pallet-{stem}-benchmarking"));
+            }
             let mut candidates = deps
-                .values()
-                .filter_map(|dep| dep.get("path")?.as_str().map(|p| workspace.join(p)))
+                .iter()
+                .filter(|(alias, dep)| {
+                    companion_names.iter().any(|name| {
+                        dep.get("package")
+                            .and_then(toml::Value::as_str)
+                            .unwrap_or(alias)
+                            == name
+                    })
+                })
+                .filter_map(|(_, dep)| dep.get("path")?.as_str().map(|p| workspace.join(p)))
                 .collect::<Vec<_>>();
             // Nested companions (e.g. session/benchmarking) and standalone
             // fixture crates need not be listed as workspace dependencies.
@@ -632,16 +827,11 @@ fn owned_benchmarks(path: &Path) -> Vec<Benchmark> {
                 let Some(companion) = manifest(&candidate.join("Cargo.toml")) else {
                     continue;
                 };
-                if !companion
+                if companion
                     .get("package")
                     .and_then(|p| p.get("name"))
                     .and_then(toml::Value::as_str)
-                    .is_some_and(|name| {
-                        name == format!("{package_name}-benchmarking")
-                            || (name.contains("benchmark")
-                                && candidate.parent().and_then(|p| p.canonicalize().ok())
-                                    == crate_root.canonicalize().ok())
-                    })
+                    .is_none_or(|name| !companion_names.iter().any(|expected| expected == name))
                 {
                     continue;
                 }
@@ -682,19 +872,179 @@ fn owned_benchmarks(path: &Path) -> Vec<Benchmark> {
                         })
                     });
                 if owns {
-                    roots.push(candidate.join("src"));
+                    if let Some(dependencies) = companion
+                        .get("dependencies")
+                        .and_then(toml::Value::as_table)
+                    {
+                        for (alias, dep) in dependencies {
+                            if dep
+                                .get("package")
+                                .and_then(toml::Value::as_str)
+                                .unwrap_or(alias)
+                                == package_name
+                            {
+                                modules.insert(alias.replace('-', "_"));
+                            }
+                        }
+                    }
+                    roots.push(candidate);
                 }
             }
         }
     }
-    let mut files = HashSet::new();
-    roots
-        .into_iter()
-        .flat_map(|root| benchmark_sources(&root))
-        .filter(|file| files.insert(file.clone()))
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .flat_map(|content| collect_benchmarks(&content))
-        .collect()
+    let mut discovery = Discovery::default();
+    let owners = Owners::new(modules);
+    for root in roots {
+        if crate_root.is_some() {
+            let cargo = manifest(&root.join("Cargo.toml"));
+            let lib = cargo
+                .as_ref()
+                .and_then(|c| c.get("lib")?.get("path")?.as_str())
+                .unwrap_or("src/lib.rs");
+            discover_module(&root.join(lib), &owners, &mut discovery);
+        } else {
+            // Standalone source snippets have no Cargo module root.
+            for file in benchmark_sources(&root) {
+                discover_module(&file, &owners, &mut discovery);
+            }
+        }
+    }
+    discovery
+}
+
+#[derive(Default)]
+struct Discovery {
+    files: HashSet<PathBuf>,
+    benchmarks: Vec<Benchmark>,
+}
+
+impl Discovery {
+    fn contains_source(&self, path: &Path) -> bool {
+        path.canonicalize()
+            .ok()
+            .is_some_and(|path| self.files.contains(&path))
+    }
+}
+
+fn discover_module(file: &Path, owners: &Owners, discovery: &mut Discovery) {
+    let Ok(canonical) = file.canonicalize() else {
+        return;
+    };
+    let file = canonical.as_path();
+    if discovery.files.contains(file) {
+        return;
+    }
+    let Some(ast) = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|s| parse_ast(&s))
+    else {
+        return;
+    };
+    if test_only(&ast.attrs) {
+        return;
+    }
+    discovery.files.insert(file.to_path_buf());
+    discovery
+        .benchmarks
+        .extend(collect_benchmarks_ast(&ast, owners));
+    let parent = file.parent().unwrap_or(Path::new("."));
+    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let module_dir = if matches!(stem, "lib" | "main" | "mod") {
+        parent.to_path_buf()
+    } else {
+        parent.join(stem)
+    };
+    discover_children(&ast.items, &module_dir, parent, owners, discovery);
+}
+
+fn discover_children(
+    items: &[syn::Item],
+    dir: &Path,
+    path_base: &Path,
+    owners: &Owners,
+    discovery: &mut Discovery,
+) {
+    let owners = owners.in_scope(items);
+    for item in items {
+        let syn::Item::Mod(module) = item else {
+            continue;
+        };
+        if test_only(&module.attrs) {
+            continue;
+        }
+        let explicit = module.attrs.iter().find_map(|a| {
+            if !a.path().is_ident("path") {
+                return None;
+            }
+            let syn::Meta::NameValue(value) = &a.meta else {
+                return None;
+            };
+            let syn::Expr::Lit(lit) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(path) = &lit.lit else {
+                return None;
+            };
+            Some(path.value())
+        });
+        if let Some((_, items)) = &module.content {
+            let child_dir = explicit
+                .map(|p| dir.join(p))
+                .unwrap_or_else(|| dir.join(module.ident.to_string()));
+            discover_children(items, &child_dir, &child_dir, &owners, discovery);
+        } else {
+            let file = explicit.map(|p| path_base.join(p)).unwrap_or_else(|| {
+                let flat = dir.join(format!("{}.rs", module.ident));
+                if flat.is_file() {
+                    flat
+                } else {
+                    dir.join(module.ident.to_string()).join("mod.rs")
+                }
+            });
+            discover_module(&file, &owners, discovery);
+        }
+    }
+}
+
+thread_local! {
+    static SCAN_CACHE: RefCell<Option<HashMap<PathBuf, Rc<Discovery>>>> = const { RefCell::new(None) };
+    static MANIFEST_CACHE: RefCell<Option<HashMap<PathBuf, Option<Rc<toml::Value>>>>> = const { RefCell::new(None) };
+}
+
+// Cache only for an engine scan, so subsequent scans observe filesystem edits.
+// proc_macro2 tokens remain on the scanning thread.
+pub(crate) struct ScanCache;
+impl ScanCache {
+    pub(crate) fn begin() -> Self {
+        SCAN_CACHE.with(|cache| *cache.borrow_mut() = Some(HashMap::new()));
+        MANIFEST_CACHE.with(|cache| *cache.borrow_mut() = Some(HashMap::new()));
+        Self
+    }
+}
+impl Drop for ScanCache {
+    fn drop(&mut self) {
+        SCAN_CACHE.with(|cache| *cache.borrow_mut() = None);
+        MANIFEST_CACHE.with(|cache| *cache.borrow_mut() = None);
+    }
+}
+
+fn owned_benchmarks(path: &Path) -> Rc<Discovery> {
+    let key = crate_root(path)
+        .or_else(|| path.parent())
+        .unwrap_or(path)
+        .to_path_buf();
+    if let Some(found) =
+        SCAN_CACHE.with(|cache| cache.borrow().as_ref().and_then(|c| c.get(&key).cloned()))
+    {
+        return found;
+    }
+    let found = Rc::new(discover_benchmarks(path));
+    SCAN_CACHE.with(|cache| {
+        if let Some(cache) = cache.borrow_mut().as_mut() {
+            cache.insert(key, Rc::clone(&found));
+        }
+    });
+    found
 }
 
 // ---------------------------------------------------------------------------
@@ -734,9 +1084,14 @@ impl LintRule for BenchmarkForWeightFunction {
             return None;
         }
 
-        let benchmark_names = owned_benchmarks(&ctx.path)
-            .into_iter()
-            .map(|bench| bench.name)
+        let discovery = owned_benchmarks(&ctx.path);
+        if crate_root(&ctx.path).is_some() && !discovery.contains_source(&ctx.path) {
+            return None;
+        }
+        let benchmark_names = discovery
+            .benchmarks
+            .iter()
+            .map(|bench| &bench.name)
             .collect::<HashSet<_>>();
 
         let mut diagnostics = Vec::new();
@@ -798,8 +1153,21 @@ impl LintRule for BenchmarkVerification {
         if !ctx.is_rust || excluded_context(ctx) {
             return None;
         }
+        let benchmarks = ctx
+            .ast
+            .as_ref()
+            .map(|ast| collect_benchmarks_ast(ast, &Owners::new(HashSet::new())))
+            .unwrap_or_else(|| collect_benchmarks(ctx.content));
+        if benchmarks.is_empty() {
+            return None;
+        }
+        if crate_root(&ctx.path).is_some()
+            && !owned_benchmarks(&ctx.path).contains_source(&ctx.path)
+        {
+            return None;
+        }
         let mut diagnostics = Vec::new();
-        for benchmark in collect_benchmarks(ctx.content) {
+        for benchmark in benchmarks {
             if !has_verification(
                 benchmark.verification,
                 &config.benchmarking.verification_patterns,
@@ -865,10 +1233,13 @@ impl LintRule for ExtrinsicWithoutBenchmark {
             return None;
         }
 
-        let benchmarks = owned_benchmarks(&ctx.path);
+        let discovery = owned_benchmarks(&ctx.path);
+        if crate_root(&ctx.path).is_some() && !discovery.contains_source(&ctx.path) {
+            return None;
+        }
         let mut diagnostics = Vec::new();
         for (fn_name, line) in &extrinsic_fns {
-            if !benchmarks.iter().any(|benchmark| {
+            if !discovery.benchmarks.iter().any(|benchmark| {
                 benchmark.calls.contains(fn_name)
                     || (benchmark.name_only
                         && benchmark

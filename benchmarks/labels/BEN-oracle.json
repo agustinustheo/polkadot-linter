@@ -4,621 +4,295 @@
   "checks": [
     {
       "package": "pallet-membership",
-      "compiler": [
-        "add_member",
-        "change_key",
-        "clear_prime",
-        "remove_member",
-        "reset_members",
-        "set_prime",
-        "swap_member"
-      ],
-      "oracle": [
-        "add_member",
-        "change_key",
-        "clear_prime",
-        "remove_member",
-        "reset_members",
-        "set_prime",
-        "swap_member"
-      ],
-      "missing": [],
-      "extra": [],
       "measured_calls": {
-        "add_member": {
-          "compiler": [
-            "add_member"
-          ],
-          "oracle": [
-            "add_member"
-          ],
-          "match": true
-        },
-        "remove_member": {
-          "compiler": [
-            "remove_member"
-          ],
-          "oracle": [
-            "remove_member"
-          ],
-          "match": true
-        },
-        "swap_member": {
-          "compiler": [
-            "swap_member"
-          ],
-          "oracle": [
-            "swap_member"
-          ],
-          "match": true
-        },
-        "reset_members": {
-          "compiler": [
-            "reset_members"
-          ],
-          "oracle": [
-            "reset_members"
-          ],
-          "match": true
-        },
-        "change_key": {
-          "compiler": [
-            "change_key"
-          ],
-          "oracle": [
-            "change_key"
-          ],
-          "match": true
-        },
-        "set_prime": {
-          "compiler": [
-            "set_prime"
-          ],
-          "oracle": [
-            "set_prime"
-          ],
-          "match": true
-        },
-        "clear_prime": {
-          "compiler": [
-            "clear_prime"
-          ],
-          "oracle": [
-            "clear_prime"
-          ],
-          "match": true
-        }
-      }
+        "add_member": [
+          "add_member"
+        ],
+        "remove_member": [
+          "remove_member"
+        ],
+        "swap_member": [
+          "swap_member"
+        ],
+        "reset_members": [
+          "reset_members"
+        ],
+        "change_key": [
+          "change_key"
+        ],
+        "set_prime": [
+          "set_prime"
+        ],
+        "clear_prime": [
+          "clear_prime"
+        ]
+      },
+      "benchmarks": [
+        "add_member",
+        "change_key",
+        "clear_prime",
+        "remove_member",
+        "reset_members",
+        "set_prime",
+        "swap_member"
+      ],
+      "verification": [
+        "add_member",
+        "change_key",
+        "clear_prime",
+        "remove_member",
+        "reset_members",
+        "set_prime",
+        "swap_member"
+      ]
     },
     {
       "package": "pallet-assets",
-      "compiler": [
-        "allowance",
-        "approve_transfer",
-        "balance",
-        "block",
-        "burn",
-        "cancel_approval",
-        "clear_metadata",
-        "create",
-        "destroy_accounts",
-        "destroy_approvals",
-        "finish_destroy",
-        "force_asset_status",
-        "force_cancel_approval",
-        "force_clear_metadata",
-        "force_create",
-        "force_set_metadata",
-        "force_transfer",
-        "freeze",
-        "freeze_asset",
-        "get_metadata",
-        "migration_v2_foreign_asset_set_reserve_weight",
-        "mint",
-        "refund",
-        "refund_other",
-        "set_metadata",
-        "set_min_balance",
-        "set_reserves",
-        "set_team",
-        "start_destroy",
-        "thaw",
-        "thaw_asset",
-        "total_issuance",
-        "touch",
-        "touch_other",
-        "transfer",
-        "transfer_all",
-        "transfer_approved",
-        "transfer_keep_alive",
-        "transfer_ownership"
-      ],
-      "oracle": [
-        "allowance",
-        "approve_transfer",
-        "balance",
-        "block",
-        "burn",
-        "cancel_approval",
-        "clear_metadata",
-        "create",
-        "destroy_accounts",
-        "destroy_approvals",
-        "finish_destroy",
-        "force_asset_status",
-        "force_cancel_approval",
-        "force_clear_metadata",
-        "force_create",
-        "force_set_metadata",
-        "force_transfer",
-        "freeze",
-        "freeze_asset",
-        "get_metadata",
-        "migration_v2_foreign_asset_set_reserve_weight",
-        "mint",
-        "refund",
-        "refund_other",
-        "set_metadata",
-        "set_min_balance",
-        "set_reserves",
-        "set_team",
-        "start_destroy",
-        "thaw",
-        "thaw_asset",
-        "total_issuance",
-        "touch",
-        "touch_other",
-        "transfer",
-        "transfer_all",
-        "transfer_approved",
-        "transfer_keep_alive",
-        "transfer_ownership"
-      ],
-      "missing": [],
-      "extra": [],
       "measured_calls": {
-        "create": {
-          "compiler": [
-            "create"
-          ],
-          "oracle": [
-            "create"
-          ],
-          "match": true
-        },
-        "force_create": {
-          "compiler": [
-            "force_create"
-          ],
-          "oracle": [
-            "force_create"
-          ],
-          "match": true
-        },
-        "start_destroy": {
-          "compiler": [
-            "start_destroy"
-          ],
-          "oracle": [
-            "start_destroy"
-          ],
-          "match": true
-        },
-        "destroy_accounts": {
-          "compiler": [
-            "destroy_accounts"
-          ],
-          "oracle": [
-            "destroy_accounts"
-          ],
-          "match": true
-        },
-        "destroy_approvals": {
-          "compiler": [
-            "destroy_approvals"
-          ],
-          "oracle": [
-            "destroy_approvals"
-          ],
-          "match": true
-        },
-        "finish_destroy": {
-          "compiler": [
-            "finish_destroy"
-          ],
-          "oracle": [
-            "finish_destroy"
-          ],
-          "match": true
-        },
-        "mint": {
-          "compiler": [
-            "mint"
-          ],
-          "oracle": [
-            "mint"
-          ],
-          "match": true
-        },
-        "burn": {
-          "compiler": [
-            "burn"
-          ],
-          "oracle": [
-            "burn"
-          ],
-          "match": true
-        },
-        "transfer": {
-          "compiler": [
-            "transfer"
-          ],
-          "oracle": [
-            "transfer"
-          ],
-          "match": true
-        },
-        "transfer_keep_alive": {
-          "compiler": [
-            "transfer_keep_alive"
-          ],
-          "oracle": [
-            "transfer_keep_alive"
-          ],
-          "match": true
-        },
-        "force_transfer": {
-          "compiler": [
-            "force_transfer"
-          ],
-          "oracle": [
-            "force_transfer"
-          ],
-          "match": true
-        },
-        "freeze": {
-          "compiler": [
-            "freeze"
-          ],
-          "oracle": [
-            "freeze"
-          ],
-          "match": true
-        },
-        "thaw": {
-          "compiler": [
-            "thaw"
-          ],
-          "oracle": [
-            "thaw"
-          ],
-          "match": true
-        },
-        "freeze_asset": {
-          "compiler": [
-            "freeze_asset"
-          ],
-          "oracle": [
-            "freeze_asset"
-          ],
-          "match": true
-        },
-        "thaw_asset": {
-          "compiler": [
-            "thaw_asset"
-          ],
-          "oracle": [
-            "thaw_asset"
-          ],
-          "match": true
-        },
-        "transfer_ownership": {
-          "compiler": [
-            "transfer_ownership"
-          ],
-          "oracle": [
-            "transfer_ownership"
-          ],
-          "match": true
-        },
-        "set_team": {
-          "compiler": [
-            "set_team"
-          ],
-          "oracle": [
-            "set_team"
-          ],
-          "match": true
-        },
-        "set_reserves": {
-          "compiler": [
-            "set_reserves"
-          ],
-          "oracle": [
-            "set_reserves"
-          ],
-          "match": true
-        },
-        "set_metadata": {
-          "compiler": [
-            "set_metadata"
-          ],
-          "oracle": [
-            "set_metadata"
-          ],
-          "match": true
-        },
-        "clear_metadata": {
-          "compiler": [
-            "clear_metadata"
-          ],
-          "oracle": [
-            "clear_metadata"
-          ],
-          "match": true
-        },
-        "force_set_metadata": {
-          "compiler": [
-            "force_set_metadata"
-          ],
-          "oracle": [
-            "force_set_metadata"
-          ],
-          "match": true
-        },
-        "force_clear_metadata": {
-          "compiler": [
-            "force_clear_metadata"
-          ],
-          "oracle": [
-            "force_clear_metadata"
-          ],
-          "match": true
-        },
-        "force_asset_status": {
-          "compiler": [
-            "force_asset_status"
-          ],
-          "oracle": [
-            "force_asset_status"
-          ],
-          "match": true
-        },
-        "approve_transfer": {
-          "compiler": [
-            "approve_transfer"
-          ],
-          "oracle": [
-            "approve_transfer"
-          ],
-          "match": true
-        },
-        "transfer_approved": {
-          "compiler": [
-            "transfer_approved"
-          ],
-          "oracle": [
-            "transfer_approved"
-          ],
-          "match": true
-        },
-        "cancel_approval": {
-          "compiler": [
-            "cancel_approval"
-          ],
-          "oracle": [
-            "cancel_approval"
-          ],
-          "match": true
-        },
-        "force_cancel_approval": {
-          "compiler": [
-            "force_cancel_approval"
-          ],
-          "oracle": [
-            "force_cancel_approval"
-          ],
-          "match": true
-        },
-        "set_min_balance": {
-          "compiler": [
-            "set_min_balance"
-          ],
-          "oracle": [
-            "set_min_balance"
-          ],
-          "match": true
-        },
-        "touch": {
-          "compiler": [
-            "touch"
-          ],
-          "oracle": [
-            "touch"
-          ],
-          "match": true
-        },
-        "touch_other": {
-          "compiler": [
-            "touch_other"
-          ],
-          "oracle": [
-            "touch_other"
-          ],
-          "match": true
-        },
-        "refund": {
-          "compiler": [
-            "refund"
-          ],
-          "oracle": [
-            "refund"
-          ],
-          "match": true
-        },
-        "refund_other": {
-          "compiler": [
-            "refund_other"
-          ],
-          "oracle": [
-            "refund_other"
-          ],
-          "match": true
-        },
-        "block": {
-          "compiler": [
-            "block"
-          ],
-          "oracle": [
-            "block"
-          ],
-          "match": true
-        },
-        "transfer_all": {
-          "compiler": [
-            "transfer_all"
-          ],
-          "oracle": [
-            "transfer_all"
-          ],
-          "match": true
-        },
-        "total_issuance": {
-          "compiler": [],
-          "oracle": [],
-          "match": true
-        },
-        "balance": {
-          "compiler": [],
-          "oracle": [],
-          "match": true
-        },
-        "allowance": {
-          "compiler": [],
-          "oracle": [],
-          "match": true
-        },
-        "migration_v2_foreign_asset_set_reserve_weight": {
-          "compiler": [],
-          "oracle": [],
-          "match": true
-        },
-        "get_metadata": {
-          "compiler": [],
-          "oracle": [],
-          "match": true
-        }
-      }
+        "create": [
+          "create"
+        ],
+        "force_create": [
+          "force_create"
+        ],
+        "start_destroy": [
+          "start_destroy"
+        ],
+        "destroy_accounts": [
+          "destroy_accounts"
+        ],
+        "destroy_approvals": [
+          "destroy_approvals"
+        ],
+        "finish_destroy": [
+          "finish_destroy"
+        ],
+        "mint": [
+          "mint"
+        ],
+        "burn": [
+          "burn"
+        ],
+        "transfer": [
+          "transfer"
+        ],
+        "transfer_keep_alive": [
+          "transfer_keep_alive"
+        ],
+        "force_transfer": [
+          "force_transfer"
+        ],
+        "freeze": [
+          "freeze"
+        ],
+        "thaw": [
+          "thaw"
+        ],
+        "freeze_asset": [
+          "freeze_asset"
+        ],
+        "thaw_asset": [
+          "thaw_asset"
+        ],
+        "transfer_ownership": [
+          "transfer_ownership"
+        ],
+        "set_team": [
+          "set_team"
+        ],
+        "set_reserves": [
+          "set_reserves"
+        ],
+        "set_metadata": [
+          "set_metadata"
+        ],
+        "clear_metadata": [
+          "clear_metadata"
+        ],
+        "force_set_metadata": [
+          "force_set_metadata"
+        ],
+        "force_clear_metadata": [
+          "force_clear_metadata"
+        ],
+        "force_asset_status": [
+          "force_asset_status"
+        ],
+        "approve_transfer": [
+          "approve_transfer"
+        ],
+        "transfer_approved": [
+          "transfer_approved"
+        ],
+        "cancel_approval": [
+          "cancel_approval"
+        ],
+        "force_cancel_approval": [
+          "force_cancel_approval"
+        ],
+        "set_min_balance": [
+          "set_min_balance"
+        ],
+        "touch": [
+          "touch"
+        ],
+        "touch_other": [
+          "touch_other"
+        ],
+        "refund": [
+          "refund"
+        ],
+        "refund_other": [
+          "refund_other"
+        ],
+        "block": [
+          "block"
+        ],
+        "transfer_all": [
+          "transfer_all"
+        ],
+        "total_issuance": [],
+        "balance": [],
+        "allowance": [],
+        "migration_v2_foreign_asset_set_reserve_weight": [],
+        "get_metadata": []
+      },
+      "benchmarks": [
+        "allowance",
+        "approve_transfer",
+        "balance",
+        "block",
+        "burn",
+        "cancel_approval",
+        "clear_metadata",
+        "create",
+        "destroy_accounts",
+        "destroy_approvals",
+        "finish_destroy",
+        "force_asset_status",
+        "force_cancel_approval",
+        "force_clear_metadata",
+        "force_create",
+        "force_set_metadata",
+        "force_transfer",
+        "freeze",
+        "freeze_asset",
+        "get_metadata",
+        "migration_v2_foreign_asset_set_reserve_weight",
+        "mint",
+        "refund",
+        "refund_other",
+        "set_metadata",
+        "set_min_balance",
+        "set_reserves",
+        "set_team",
+        "start_destroy",
+        "thaw",
+        "thaw_asset",
+        "total_issuance",
+        "touch",
+        "touch_other",
+        "transfer",
+        "transfer_all",
+        "transfer_approved",
+        "transfer_keep_alive",
+        "transfer_ownership"
+      ],
+      "verification": [
+        "allowance",
+        "approve_transfer",
+        "balance",
+        "block",
+        "burn",
+        "cancel_approval",
+        "clear_metadata",
+        "create",
+        "destroy_accounts",
+        "destroy_approvals",
+        "finish_destroy",
+        "force_asset_status",
+        "force_cancel_approval",
+        "force_clear_metadata",
+        "force_create",
+        "force_set_metadata",
+        "force_transfer",
+        "freeze",
+        "freeze_asset",
+        "get_metadata",
+        "migration_v2_foreign_asset_set_reserve_weight",
+        "mint",
+        "refund",
+        "refund_other",
+        "set_metadata",
+        "set_min_balance",
+        "set_reserves",
+        "set_team",
+        "start_destroy",
+        "thaw",
+        "thaw_asset",
+        "total_issuance",
+        "touch",
+        "touch_other",
+        "transfer",
+        "transfer_all",
+        "transfer_approved",
+        "transfer_keep_alive",
+        "transfer_ownership"
+      ]
     },
     {
       "package": "pallet-vesting",
-      "compiler": [
-        "force_remove_vesting_schedule",
-        "force_vested_transfer",
-        "not_unlocking_merge_schedules",
-        "unlocking_merge_schedules",
-        "vest_locked",
-        "vest_other_locked",
-        "vest_other_unlocked",
-        "vest_unlocked",
-        "vested_transfer"
-      ],
-      "oracle": [
-        "force_remove_vesting_schedule",
-        "force_vested_transfer",
-        "not_unlocking_merge_schedules",
-        "unlocking_merge_schedules",
-        "vest_locked",
-        "vest_other_locked",
-        "vest_other_unlocked",
-        "vest_unlocked",
-        "vested_transfer"
-      ],
-      "missing": [],
-      "extra": [],
       "measured_calls": {
-        "vest_locked": {
-          "compiler": [
-            "vest"
-          ],
-          "oracle": [
-            "vest"
-          ],
-          "match": true
-        },
-        "vest_unlocked": {
-          "compiler": [
-            "vest"
-          ],
-          "oracle": [
-            "vest"
-          ],
-          "match": true
-        },
-        "vest_other_locked": {
-          "compiler": [
-            "vest_other"
-          ],
-          "oracle": [
-            "vest_other"
-          ],
-          "match": true
-        },
-        "vest_other_unlocked": {
-          "compiler": [
-            "vest_other"
-          ],
-          "oracle": [
-            "vest_other"
-          ],
-          "match": true
-        },
-        "vested_transfer": {
-          "compiler": [
-            "vested_transfer"
-          ],
-          "oracle": [
-            "vested_transfer"
-          ],
-          "match": true
-        },
-        "force_vested_transfer": {
-          "compiler": [
-            "force_vested_transfer"
-          ],
-          "oracle": [
-            "force_vested_transfer"
-          ],
-          "match": true
-        },
-        "not_unlocking_merge_schedules": {
-          "compiler": [
-            "merge_schedules"
-          ],
-          "oracle": [
-            "merge_schedules"
-          ],
-          "match": true
-        },
-        "unlocking_merge_schedules": {
-          "compiler": [
-            "merge_schedules"
-          ],
-          "oracle": [
-            "merge_schedules"
-          ],
-          "match": true
-        },
-        "force_remove_vesting_schedule": {
-          "compiler": [
-            "force_remove_vesting_schedule"
-          ],
-          "oracle": [
-            "force_remove_vesting_schedule"
-          ],
-          "match": true
-        }
-      }
+        "vest_locked": [
+          "vest"
+        ],
+        "vest_unlocked": [
+          "vest"
+        ],
+        "vest_other_locked": [
+          "vest_other"
+        ],
+        "vest_other_unlocked": [
+          "vest_other"
+        ],
+        "vested_transfer": [
+          "vested_transfer"
+        ],
+        "force_vested_transfer": [
+          "force_vested_transfer"
+        ],
+        "not_unlocking_merge_schedules": [
+          "merge_schedules"
+        ],
+        "unlocking_merge_schedules": [
+          "merge_schedules"
+        ],
+        "force_remove_vesting_schedule": [
+          "force_remove_vesting_schedule"
+        ]
+      },
+      "benchmarks": [
+        "force_remove_vesting_schedule",
+        "force_vested_transfer",
+        "not_unlocking_merge_schedules",
+        "unlocking_merge_schedules",
+        "vest_locked",
+        "vest_other_locked",
+        "vest_other_unlocked",
+        "vest_unlocked",
+        "vested_transfer"
+      ],
+      "verification": [
+        "force_remove_vesting_schedule",
+        "force_vested_transfer",
+        "not_unlocking_merge_schedules",
+        "unlocking_merge_schedules",
+        "vest_locked",
+        "vest_other_locked",
+        "vest_other_unlocked",
+        "vest_unlocked",
+        "vested_transfer"
+      ]
     }
   ]
 }
