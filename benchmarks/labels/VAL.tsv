@@ -1,0 +1,37 @@
+rule_id	path	line	label	evidence	note
+VAL001	substrate/frame/broker/src/dispatchable_impls.rs	259	TP	manual	Status::get L259 precedes ensure!(pivot > region_id.begin) L267; pivot (L265) = region_id.begin.saturating_add(pivot_offset), arguments only, so the guard can move above both reads
+VAL001	substrate/frame/broker/src/dispatchable_impls.rs	291	TP	manual	Status::get L291 and Regions::get L292 precede ensure!((pivot & !region_id.mask).is_void()) L298; pivot and region_id are arguments
+VAL001	substrate/frame/election-provider-multi-block/src/signed/mod.rs	569	TP	manual	SubmissionMetadataStorage::get L569 precedes ensure!(page < T::Pages::get()) L570; page is an argument and T::Pages a Get constant
+VAL001	substrate/frame/asset-conversion/src/lib.rs	721	FP	manual	ensure! L737 checks amount2_optimal from Self::quote L734 over reserves read via Self::get_balance L725-726 after the Pools::get lookup; not hoistable
+VAL001	substrate/frame/assets/src/functions.rs	670	FP	manual	ensure! L678 is inside the Asset::try_mutate closure (L673) and compares details.admin from the mutated storage value (L674)
+VAL001	substrate/frame/assets/src/lib.rs	1593	FP	manual	ensure_signed L1597 runs inside the or_else closure only when ForceOrigin fails (L1594-1596); the next guard L1598 compares d.admin from the L1593 read
+VAL001	substrate/frame/broker/src/utility_impls.rs	112	FP	manual	only guard after the reads is ensure! L116 comparing check_owner with region.owner from Regions::get L113
+VAL001	substrate/frame/delegated-staking/src/lib.rs	573	FP	manual	ensure! L576 checks existing_delegation bound by if-let on Delegation::get L575
+VAL001	substrate/frame/delegated-staking/src/lib.rs	611	FP	manual	ensure! L615-616 check delegation from Delegation::get L612
+VAL001	substrate/frame/election-provider-multi-block/src/signed/mod.rs	711	FP	manual	in sanity_check_round (L703): ensure! L718 runs inside the map closure over iter_prefix L711 and checks matches from SortedScores::get L713
+VAL001	substrate/frame/election-provider-multi-phase/src/unsigned.rs	206	FP	manual	ensure! L208 checks desired_targets from DesiredTargets::get L207
+VAL001	substrate/frame/identity/src/lib.rs	593	FP	manual	ensure!(not_other_sub) L598; not_other_sub (L596-597) is computed from SuperOf::get reads
+VAL001	substrate/frame/identity/src/lib.rs	1292	FP	manual	ensure!(who == authority_account) L1297; authority_account from AuthorityOf::get L1294
+VAL001	substrate/frame/message-queue/src/lib.rs	1438	FP	manual	in do_try_state (L1413); the guard L1441-1444 is itself BookStateFor::contains_key inside a while-let loop over bump_service_head
+VAL001	substrate/frame/nfts/src/features/approvals.rs	56	FP	manual	ensure! L59 checks collection_config from Self::get_collection_config L58, which reads CollectionConfigOf (settings.rs:127)
+VAL001	substrate/frame/nfts/src/features/metadata.rs	58	FP	manual	ensure! L61 checks item_config from Self::get_item_config L60, which reads ItemConfigOf (settings.rs:143)
+VAL001	substrate/frame/nfts/src/features/metadata.rs	252	FP	manual	ensure! L255 needs collection_config from Self::get_collection_config L253 (CollectionConfigOf read, settings.rs:127)
+VAL001	substrate/frame/nis/src/lib.rs	674	FP	manual	ensure! L677 compares proportion with receipt.proportion; receipt from Receipts::get L665-666
+VAL001	substrate/frame/nomination-pools/src/lib.rs	2420	FP	manual	ensure! L2444 checks withdrawn_points = member.withdraw_unlocked(..) L2443; member from PoolMembers::get L2413-2414
+VAL001	substrate/frame/nomination-pools/src/lib.rs	2646	FP	manual	guard L2648 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	2862	FP	manual	guard L2864 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	2976	FP	manual	guard L2978 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3015	FP	manual	guard L3017 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3040	FP	manual	guard L3042 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3110	FP	manual	guard L3112 calls Self::api_pool_needs_delegate_migration, which reads BondedPools::contains_key (L4263), the map BondedPool::get (L1040) just read; not a cheap guard
+VAL001	substrate/frame/nomination-pools/src/lib.rs	2802	FP	manual	BondedPool::get L2802 is in the Ok(()) match arm; ensure_signed L2804 is in the sibling Err arm
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3526	FP	manual	PoolMembers::get L3526 is inside debug_assert_eq! (debug builds only); no production read precedes ensure! L3529
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3970	FP	manual	do_try_state (cfg try-runtime/fuzzing/test/debug_assertions, L3917); ensure! L3972 checks d, the PoolMembers::iter closure item
+VAL001	substrate/frame/nomination-pools/src/lib.rs	3990	FP	manual	do_try_state; ensure! L4019 runs inside a different closure (BondedPools::iter().try_for_each L4016) and checks pool data
+VAL001	substrate/frame/nomination-pools/src/lib.rs	4045	FP	manual	MinCreateBond::get L4045 is a log! argument; ensure! L4049 checks bonded_pool from the BondedPools::iter closure
+VAL001	substrate/frame/nomination-pools/src/lib.rs	4065	FP	manual	MinCreateBond::get L4065 is a log! argument; the guard L4070-4071 is itself MaxPoolMembers::get
+VAL001	substrate/frame/preimage/src/lib.rs	409	FP	manual	ensure! L411 compares owner bound by the match arm on RequestStatusFor::get L409
+VAL001	substrate/frame/salary/src/lib.rs	250	FP	manual	guard L252 is itself !Claimant::contains_key, a storage read
+VAL001	substrate/frame/staking/src/pallet/mod.rs	1998	FP	manual	MinNominatorBond::get L1998 is in the then-branch; ensure! L2003 is in the else-if branch and checks max_validator_count from MaxValidatorsCount::get L2001
+VAL001	substrate/frame/uniques/src/lib.rs	755	FP	manual	ensure! L758 checks collection_details.freezer from Collection::get L757
+VAL001	substrate/frame/uniques/src/lib.rs	787	FP	manual	ensure! L790 checks collection_details.admin from Collection::get L789
