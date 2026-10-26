@@ -28,6 +28,10 @@ jobs:
             /opt/hostedtoolcache/CodeQL /usr/share/swift
           sudo docker image prune --all --force > /dev/null
           df -h /
+          # /tmp has its own quota on ubuntu-26.04 runners; keep mktemp target
+          # dirs on the root disk instead.
+          df -h /tmp "$RUNNER_TEMP"
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Checkout repository and SDK submodule
         uses: actions/checkout@v4
