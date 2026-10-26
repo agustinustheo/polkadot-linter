@@ -1,12 +1,16 @@
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use quote::ToTokens;
 use regex::Regex;
-use std::collections::HashSet;
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
     Attribute, File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, TraitItem,
 };
 
-use super::semantic::SourceSanitizer;
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
@@ -51,7 +55,13 @@ fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
 }
 
 fn parse_ast(content: &str) -> Option<SynFile> {
-    syn::parse_file(content).ok()
+    syn::parse_file(content).ok().or_else(|| {
+        // Also tolerate the legacy `verify {}` notation in authored v2 examples.
+        let source = Regex::new(r"\bverify\s*\{")
+            .unwrap()
+            .replace_all(content, "verify! {");
+        syn::parse_file(&source).ok()
+    })
 }
 
 fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
@@ -61,10 +71,22 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
         }
 
         impl<'ast> Visit<'ast> for WeightFnVisitor {
+            fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+                if !test_only(&module.attrs) {
+                    visit::visit_item_mod(self, module);
+                }
+            }
+
             fn visit_item_trait(&mut self, item_trait: &'ast ItemTrait) {
+                if test_only(&item_trait.attrs) {
+                    return;
+                }
                 if item_trait.ident == "WeightInfo" {
                     for item in &item_trait.items {
                         if let TraitItem::Fn(trait_fn) = item {
+                            if test_only(&trait_fn.attrs) {
+                                continue;
+                            }
                             self.names
                                 .push((trait_fn.sig.ident.to_string(), span_line(trait_fn.span())));
                         }
@@ -74,6 +96,9 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
             }
 
             fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                if test_only(&item_impl.attrs) {
+                    return;
+                }
                 let implements_weight_info = item_impl
                     .trait_
                     .as_ref()
@@ -83,6 +108,9 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
                 if implements_weight_info {
                     for item in &item_impl.items {
                         if let ImplItem::Fn(item_fn) = item {
+                            if test_only(&item_fn.attrs) {
+                                continue;
+                            }
                             self.names
                                 .push((item_fn.sig.ident.to_string(), span_line(item_fn.span())));
                         }
@@ -104,110 +132,7 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
         }
     }
 
-    let weight_fn_re = Regex::new(r"fn\s+(\w+)\s*\(").unwrap();
-    let mut weight_fns = Vec::new();
-    let mut in_trait = false;
-    let mut brace_depth = 0_i32;
-    for (i, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.contains("trait WeightInfo")
-            || trimmed.contains("impl<T: frame_system::Config> WeightInfo")
-            || trimmed.contains("impl<T: frame_system::Config>") && trimmed.contains("WeightInfo")
-        {
-            in_trait = true;
-            brace_depth = brace_delta(trimmed);
-            continue;
-        }
-        if in_trait {
-            if let Some(captures) = weight_fn_re.captures(trimmed) {
-                let fn_name = captures.get(1).unwrap().as_str().to_string();
-                weight_fns.push((fn_name, i + 1));
-            }
-            brace_depth += brace_delta(trimmed);
-            if brace_depth <= 0 {
-                in_trait = false;
-            }
-        }
-    }
-    weight_fns
-}
-
-fn collect_benchmark_names(content: &str) -> HashSet<String> {
-    let mut benchmark_names = HashSet::new();
-
-    if let Some(ast) = parse_ast(content) {
-        struct BenchmarkFnVisitor {
-            names: HashSet<String>,
-        }
-
-        impl<'ast> Visit<'ast> for BenchmarkFnVisitor {
-            fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
-                if has_attr(&item_fn.attrs, &["benchmark"]) {
-                    self.names.insert(item_fn.sig.ident.to_string());
-                }
-                visit::visit_item_fn(self, item_fn);
-            }
-        }
-
-        let mut visitor = BenchmarkFnVisitor {
-            names: HashSet::new(),
-        };
-        visitor.visit_file(&ast);
-        benchmark_names.extend(visitor.names);
-    }
-
-    let bench_lines: Vec<&str> = content.lines().collect();
-    let mut in_benchmarks_macro = false;
-    let mut next_fn_is_benchmark = false;
-    let fn_re = Regex::new(r"fn\s+(\w+)").unwrap();
-    let bare_fn_re = Regex::new(r"^(\w+)\s*\{").unwrap();
-
-    for line in &bench_lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with("benchmarks!")
-            || trimmed.contains("benchmarks! {")
-            || trimmed == "#[benchmarks]"
-        {
-            in_benchmarks_macro = true;
-        }
-        if trimmed == "#[benchmark]" {
-            next_fn_is_benchmark = true;
-            continue;
-        }
-        if next_fn_is_benchmark {
-            if let Some(caps) = fn_re.captures(trimmed) {
-                benchmark_names.insert(caps.get(1).unwrap().as_str().to_string());
-                next_fn_is_benchmark = false;
-                continue;
-            }
-            if trimmed.starts_with('#') || trimmed.is_empty() {
-                continue;
-            }
-            next_fn_is_benchmark = false;
-        }
-        if in_benchmarks_macro && !trimmed.starts_with("//") {
-            if let Some(caps) = bare_fn_re.captures(trimmed) {
-                let name = caps.get(1).unwrap().as_str();
-                if !matches!(
-                    name,
-                    "mod" | "use" | "impl" | "pub" | "fn" | "let" | "if" | "for" | "where" | "type"
-                ) {
-                    benchmark_names.insert(name.to_string());
-                }
-            }
-        }
-    }
-
-    benchmark_names
-}
-
-fn has_matching_benchmark_name(benchmark_names: &HashSet<String>, target_name: &str) -> bool {
-    benchmark_names.iter().any(|benchmark_name| {
-        benchmark_name == target_name
-            || benchmark_name
-                .strip_prefix(target_name)
-                .is_some_and(|suffix| suffix.starts_with('_'))
-    })
+    Vec::new()
 }
 
 fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
@@ -217,10 +142,22 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
         }
 
         impl<'ast> Visit<'ast> for ExtrinsicVisitor {
+            fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+                if !test_only(&module.attrs) {
+                    visit::visit_item_mod(self, module);
+                }
+            }
+
             fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+                if test_only(&item_impl.attrs) {
+                    return;
+                }
                 if has_attr(&item_impl.attrs, &["pallet", "call"]) {
                     for item in &item_impl.items {
                         if let ImplItem::Fn(item_fn) = item {
+                            if test_only(&item_fn.attrs) {
+                                continue;
+                            }
                             // FRAME assigns positional call indices when the attribute is
                             // omitted, so every method in a pallet call impl is an extrinsic.
                             self.names
@@ -239,195 +176,525 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
         }
     }
 
-    let call_index_re = Regex::new(r"#\[pallet::call_index\s*\(").unwrap();
-    let fn_re = Regex::new(r"pub fn\s+(\w+)").unwrap();
-    let lines: Vec<&str> = content.lines().collect();
-    let mut extrinsic_fns = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        if call_index_re.is_match(line) {
-            for (j, line) in lines
-                .iter()
-                .enumerate()
-                .take((i + 33).min(lines.len()))
-                .skip(i + 1)
-            {
-                if let Some(caps) = fn_re.captures(line) {
-                    extrinsic_fns.push((caps.get(1).unwrap().as_str().to_string(), j + 1));
-                    break;
-                }
+    Vec::new()
+}
+
+// Syntax is intentionally kept here: these macros consume authored verification
+// and call markers before compiler expansion.
+struct Benchmark {
+    name: String,
+    line: usize,
+    end_line: usize,
+    calls: HashSet<String>,
+    verification: TokenStream,
+    name_only: bool,
+}
+
+fn test_only(attrs: &[Attribute]) -> bool {
+    fn requires_test(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(path) => path.is_ident("test") || path.is_ident("doctest"),
+            syn::Meta::List(list) => {
+                let Ok(predicates) = list.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                ) else {
+                    return false;
+                };
+                (list.path.is_ident("all") && predicates.iter().any(requires_test))
+                    || (list.path.is_ident("any")
+                        && !predicates.is_empty()
+                        && predicates.iter().all(requires_test))
             }
+            _ => false,
         }
     }
-    extrinsic_fns
-}
-
-fn parse_fn_name_line(line: &str) -> Option<String> {
-    let trimmed = line.trim_start();
-    let rest = trimmed.strip_prefix("fn ")?;
-    let name: String = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-        .collect();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
-}
-
-fn parse_macro_benchmark_name(line: &str) -> Option<String> {
-    let trimmed = line.trim();
-    let brace_idx = trimmed.find('{')?;
-    let candidate = trimmed[..brace_idx].trim();
-    if candidate.is_empty()
-        || candidate.contains(' ')
-        || candidate.contains('(')
-        || candidate.ends_with('!')
-    {
-        return None;
-    }
-    if matches!(
-        candidate,
-        "mod"
-            | "use"
-            | "impl"
-            | "pub"
-            | "fn"
-            | "let"
-            | "if"
-            | "for"
-            | "where"
-            | "type"
-            | "benchmarks"
-            | "verify"
-    ) {
-        return None;
-    }
-    Some(candidate.to_string())
-}
-
-fn starts_benchmarks_macro(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some(marker) = trimmed.find("benchmarks!") else {
-        return false;
-    };
-    let prefix = &trimmed[..marker];
-    prefix
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | ':'))
-        && trimmed[marker + "benchmarks!".len()..]
-            .trim_start()
-            .starts_with('{')
-}
-
-fn brace_delta(line: &str) -> i32 {
-    line.chars().filter(|&c| c == '{').count() as i32
-        - line.chars().filter(|&c| c == '}').count() as i32
-}
-
-fn find_block_end_from(lines: &[&str], start: usize) -> usize {
-    let mut depth: i32 = 0;
-    let mut body_started = false;
-    for (idx, line) in lines.iter().enumerate().skip(start) {
-        depth += line.chars().filter(|&c| c == '{').count() as i32;
-        if depth > 0 {
-            body_started = true;
-        }
-        depth -= line.chars().filter(|&c| c == '}').count() as i32;
-        if body_started && depth == 0 {
-            return idx;
-        }
-    }
-    lines.len().saturating_sub(1)
-}
-
-fn macro_benchmark_end(lines: &[&str], body_end: usize) -> usize {
-    let Some(next) = lines
-        .iter()
-        .enumerate()
-        .skip(body_end + 1)
-        .find_map(|(index, line)| (!line.trim().is_empty()).then_some(index))
-    else {
-        return body_end;
-    };
-    if lines[next].trim_start().starts_with("verify") {
-        find_block_end_from(lines, next)
-    } else {
-        body_end
-    }
-}
-
-fn has_verification_in_text(body_lines: &[&str], verification_patterns: &[String]) -> bool {
-    let body_outside_measured_blocks = body_lines_outside_measured_blocks(body_lines);
-    let mut sanitizer = SourceSanitizer::default();
-    let sanitized_body = body_outside_measured_blocks
-        .iter()
-        .map(|line| sanitizer.strip_line(line))
-        .collect::<Vec<_>>();
-
-    sanitized_body.iter().any(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with("verify ") || trimmed == "verify{" || trimmed.starts_with("verify{")
-    }) || sanitized_body.iter().any(|line| {
-        verification_patterns.iter().any(|pattern| {
-            line.contains(&format!("{pattern}(")) || line.contains(&format!("{pattern} {{"))
-        })
-    }) || sanitized_body.iter().any(|line| {
-        line.contains("assert!(")
-            || line.contains("assert_eq!(")
-            || line.contains("assert_ne!(")
-            || line.contains("assert_ok!(")
-            || line.contains("assert_noop!(")
-            || line.contains("assert_err!(")
-            || line.contains("ensure!(")
-            || line.contains("assert_last_event(")
-            || line.contains("assert_has_event(")
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Meta>()
+                    .ok()
+                    .is_some_and(|meta| requires_test(&meta)))
     })
 }
 
-fn body_lines_outside_measured_blocks<'a>(body_lines: &'a [&'a str]) -> Vec<&'a str> {
-    let mut kept = Vec::with_capacity(body_lines.len());
-    let mut pending_block = false;
-    let mut in_block = false;
-    let mut block_depth: i32 = 0;
+fn excluded_context(ctx: &FileContext) -> bool {
+    use crate::project_model::SourceTargetKind;
+    ctx.is_test_file
+        || ctx.path.components().any(|part| {
+            matches!(
+                part.as_os_str().to_str(),
+                Some("examples" | "tests" | "test" | "integration-tests" | "integration_tests")
+            )
+        })
+        || ctx.source_target_kinds.iter().any(|kind| {
+            matches!(
+                kind,
+                SourceTargetKind::Test | SourceTargetKind::Example | SourceTargetKind::Bench
+            )
+        })
+        || ctx.ast.as_ref().is_some_and(|ast| test_only(&ast.attrs))
+}
 
-    for line in body_lines {
-        let trimmed = line.trim();
-        if trimmed.starts_with("#[block]") {
-            pending_block = true;
-            continue;
+fn measured_statement(stmt: &syn::Stmt) -> bool {
+    let tokens = stmt.to_token_stream().into_iter().collect::<Vec<_>>();
+    for pair in tokens.chunks_exact(2) {
+        let (TokenTree::Punct(pound), TokenTree::Group(group)) = (&pair[0], &pair[1]) else {
+            break;
+        };
+        if pound.as_char() != '#' || group.delimiter() != Delimiter::Bracket {
+            break;
         }
+        if let Ok(meta) = syn::parse2::<syn::Meta>(group.stream()) {
+            if meta.path().segments.last().is_some_and(|segment| {
+                segment.ident == "block" || segment.ident == "extrinsic_call"
+            }) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
-        if pending_block {
-            let open = line.chars().filter(|&c| c == '{').count() as i32;
-            let close = line.chars().filter(|&c| c == '}').count() as i32;
-            if open > 0 {
-                in_block = true;
-                pending_block = false;
-                block_depth += open;
-                block_depth -= close;
-                if block_depth <= 0 {
-                    in_block = false;
-                    block_depth = 0;
+fn called_names(
+    tokens: TokenStream,
+    benchmark: &str,
+    bindings: &HashMap<String, String>,
+) -> HashSet<String> {
+    struct Calls<'a> {
+        names: HashSet<String>,
+        benchmark: &'a str,
+        bindings: &'a HashMap<String, String>,
+    }
+    impl<'ast> Visit<'ast> for Calls<'_> {
+        fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+            if matches!(
+                call.method.to_string().as_str(),
+                "dispatch" | "dispatch_bypass_filter"
+            ) {
+                if let syn::Expr::Path(receiver) = &*call.receiver {
+                    if let Some(name) = receiver
+                        .path
+                        .get_ident()
+                        .and_then(|id| self.bindings.get(&id.to_string()))
+                    {
+                        self.names.insert(name.clone());
+                    }
                 }
             }
-            continue;
+            visit::visit_expr_method_call(self, call);
         }
-
-        if in_block {
-            block_depth += line.chars().filter(|&c| c == '{').count() as i32;
-            block_depth -= line.chars().filter(|&c| c == '}').count() as i32;
-            if block_depth <= 0 {
-                in_block = false;
-                block_depth = 0;
+        fn visit_expr_struct(&mut self, expr: &'ast syn::ExprStruct) {
+            if expr
+                .path
+                .segments
+                .iter()
+                .any(|s| s.ident.to_string().ends_with("Call"))
+            {
+                if let Some(name) = path_last_ident(&expr.path) {
+                    self.names.insert(name);
+                }
             }
-            continue;
+            visit::visit_expr_struct(self, expr);
         }
 
-        kept.push(*line);
+        fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+            if mac.path.segments.last().is_some_and(|s| {
+                matches!(
+                    s.ident.to_string().as_str(),
+                    "assert_ok" | "assert_err" | "assert_noop"
+                )
+            }) {
+                if let Ok(inner) = syn::parse2::<syn::Expr>(mac.tokens.clone()) {
+                    self.visit_expr(&inner);
+                }
+            }
+        }
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            match &*call.func {
+                syn::Expr::Infer(_) => {
+                    self.names.insert(self.benchmark.to_string());
+                }
+                syn::Expr::Path(path) => {
+                    if let Some(name) = path_last_ident(&path.path) {
+                        self.names.insert(name);
+                    }
+                }
+                _ => {}
+            }
+            visit::visit_expr_call(self, call);
+        }
     }
+    let mut calls = Calls {
+        names: HashSet::new(),
+        benchmark,
+        bindings,
+    };
+    if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
+        calls.visit_block(&block);
+    }
+    calls.names
+}
 
-    kept
+// Resolve only simple local Call bindings that are later dispatched in the
+// measured block. Setup calls themselves are never benchmark coverage.
+fn call_bindings(tokens: TokenStream) -> HashMap<String, String> {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let mut bindings = HashMap::new();
+    for start in 0..tokens.len() {
+        if !matches!(&tokens[start], TokenTree::Ident(id) if id == "let") {
+            continue;
+        }
+        let Some(end) = (start..tokens.len())
+            .find(|&i| matches!(&tokens[i], TokenTree::Punct(p) if p.as_char() == ';'))
+        else {
+            continue;
+        };
+        let local: TokenStream = tokens[start..=end].iter().cloned().collect();
+        let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #local })) else {
+            continue;
+        };
+        let Some(syn::Stmt::Local(local)) = block.stmts.first() else {
+            continue;
+        };
+        let (syn::Pat::Ident(binding), Some(init)) = (&local.pat, &local.init) else {
+            continue;
+        };
+        if let syn::Expr::Struct(expr) = &*init.expr {
+            if expr
+                .path
+                .segments
+                .iter()
+                .any(|s| s.ident.to_string().ends_with("Call"))
+            {
+                if let Some(name) = path_last_ident(&expr.path) {
+                    bindings.insert(binding.ident.to_string(), name);
+                }
+            }
+        }
+    }
+    bindings
+}
+
+fn legacy_benchmarks(tokens: TokenStream) -> Vec<Benchmark> {
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    let starts = tokens
+        .windows(3)
+        .enumerate()
+        .filter_map(|(index, window)| {
+            let [TokenTree::Ident(_), TokenTree::Group(setup), TokenTree::Punct(colon)] = window
+            else {
+                return None;
+            };
+            (setup.delimiter() == Delimiter::Brace && colon.as_char() == ':').then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let mut benchmarks = Vec::new();
+    for (index, &start) in starts.iter().enumerate() {
+        let name = tokens[start].to_string();
+        let end = starts.get(index + 1).copied().unwrap_or(tokens.len());
+        let measured = &tokens[start + 3..end];
+        let verify = measured.windows(2).position(|pair| {
+            let [TokenTree::Ident(id), TokenTree::Group(group)] = pair else {
+                return false;
+            };
+            id == "verify" && group.delimiter() == Delimiter::Brace
+        });
+        let mut calls = HashSet::new();
+        if let Some(TokenTree::Ident(call)) = measured.first() {
+            calls.insert(if call == "_" {
+                name.clone()
+            } else {
+                call.to_string()
+            });
+        } else if let Some(TokenTree::Group(block)) = measured.first() {
+            let setup = match &tokens[start + 1] {
+                TokenTree::Group(group) => group.stream(),
+                _ => TokenStream::new(),
+            };
+            calls.extend(called_names(block.stream(), &name, &call_bindings(setup)));
+        }
+        let end_line = verify
+            .map(|i| measured[i + 1].span().end().line)
+            .unwrap_or_else(|| {
+                measured
+                    .iter()
+                    .take_while(|token| !matches!(token, TokenTree::Punct(p) if p.as_char() == '#'))
+                    .last()
+                    .map(|token| token.span().end().line)
+                    .unwrap_or_else(|| span_line(tokens[start].span()))
+            });
+        benchmarks.push(Benchmark {
+            name,
+            line: span_line(tokens[start].span()),
+            end_line,
+            calls,
+            name_only: false,
+            verification: verify
+                .map(|i| measured[i..i + 2].iter().cloned().collect())
+                .unwrap_or_default(),
+        });
+    }
+    benchmarks
+}
+
+fn collect_benchmarks(content: &str) -> Vec<Benchmark> {
+    struct Benchmarks {
+        entries: Vec<Benchmark>,
+    }
+    impl<'ast> Visit<'ast> for Benchmarks {
+        fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+            if !test_only(&module.attrs) {
+                visit::visit_item_mod(self, module);
+            }
+        }
+        fn visit_item_fn(&mut self, function: &'ast ItemFn) {
+            if test_only(&function.attrs) {
+                return;
+            }
+            if has_attr(&function.attrs, &["benchmark"]) {
+                let name = function.sig.ident.to_string();
+                let mut calls = HashSet::new();
+                let mut verification = TokenStream::new();
+                let has_measured = function.block.stmts.iter().any(measured_statement);
+                let mut after_measurement = !has_measured;
+                for stmt in &function.block.stmts {
+                    if measured_statement(stmt) {
+                        calls.extend(called_names(
+                            stmt.to_token_stream(),
+                            &name,
+                            &call_bindings(
+                                function
+                                    .block
+                                    .stmts
+                                    .iter()
+                                    .flat_map(ToTokens::to_token_stream)
+                                    .collect(),
+                            ),
+                        ));
+                        after_measurement = true;
+                        verification = TokenStream::new();
+                    } else if after_measurement {
+                        verification.extend(stmt.to_token_stream());
+                    }
+                }
+                // Legacy authored fixtures and block-only benchmark variants may
+                // have no explicit dispatch marker. Preserve name coverage there.
+                if !has_measured {
+                    calls.insert(name.clone());
+                }
+                self.entries.push(Benchmark {
+                    name,
+                    line: span_line(function.sig.fn_token.span),
+                    end_line: function.block.span().end().line,
+                    calls,
+                    verification,
+                    name_only: !has_measured,
+                });
+            }
+        }
+        fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+            if !test_only(&item.attrs)
+                && item.mac.path.segments.last().is_some_and(|s| {
+                    matches!(
+                        s.ident.to_string().as_str(),
+                        "benchmarks" | "benchmarks_instance" | "benchmarks_instance_pallet"
+                    )
+                })
+            {
+                self.entries
+                    .extend(legacy_benchmarks(item.mac.tokens.clone()));
+            }
+        }
+    }
+    let mut visitor = Benchmarks {
+        entries: Vec::new(),
+    };
+    if let Some(ast) = parse_ast(content) {
+        if !test_only(&ast.attrs) {
+            visitor.visit_file(&ast);
+        }
+    }
+    visitor.entries
+}
+
+fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
+    // Token trees exclude comments and keep string contents opaque. Turbofish
+    // arguments and qualified helper calls do not change the terminal name.
+    let tokens = tokens.into_iter().collect::<Vec<_>>();
+    for (i, token) in tokens.iter().enumerate() {
+        if let TokenTree::Ident(name) = token {
+            let name = name.to_string();
+            let accepted = patterns.iter().any(|pattern| pattern == &name)
+                || matches!(
+                    name.as_str(),
+                    "assert"
+                        | "assert_eq"
+                        | "assert_ne"
+                        | "assert_ok"
+                        | "assert_noop"
+                        | "assert_err"
+                        | "ensure"
+                        | "assert_last_event"
+                        | "assert_has_event"
+                        | "verify"
+                );
+            if accepted && tokens.get(i+1).is_some_and(|next| matches!(next, TokenTree::Group(_)) || matches!(next, TokenTree::Punct(p) if p.as_char() == '!' || p.as_char() == ':')) { return true; }
+        }
+        if let TokenTree::Group(group) = token {
+            if has_verification(group.stream(), patterns) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn manifest(path: &Path) -> Option<toml::Value> {
+    std::fs::read_to_string(path).ok()?.parse().ok()
+}
+
+fn benchmark_sources(root: &Path) -> Vec<PathBuf> {
+    walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.file_type().is_dir()
+                || !matches!(
+                    entry.file_name().to_str(),
+                    Some("target" | ".git" | "tests" | "examples")
+                )
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry.path().extension().is_some_and(|ext| ext == "rs")
+                && !matches!(
+                    entry.file_name().to_str(),
+                    Some("tests.rs" | "mock.rs" | "test.rs")
+                )
+        })
+        .map(|entry| entry.into_path())
+        .collect()
+}
+
+fn owned_benchmarks(path: &Path) -> Vec<Benchmark> {
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+    let crate_root = parent
+        .ancestors()
+        .find(|dir| dir.join("Cargo.toml").is_file());
+    let mut roots = vec![crate_root
+        .map(|dir| dir.join("src"))
+        .unwrap_or_else(|| parent.to_path_buf())];
+    if let Some(crate_root) = crate_root {
+        if let Some(package_name) = manifest(&crate_root.join("Cargo.toml"))
+            .and_then(|m| m.get("package")?.get("name")?.as_str().map(str::to_owned))
+        {
+            // Resolve companion crates through Cargo's declared path dependency,
+            // never through a globally shared benchmark name.
+            let workspace = crate_root
+                .ancestors()
+                .find(|dir| {
+                    manifest(&dir.join("Cargo.toml"))
+                        .is_some_and(|cargo| cargo.get("workspace").is_some())
+                })
+                .unwrap_or(crate_root);
+            let deps = manifest(&workspace.join("Cargo.toml"))
+                .and_then(|cargo| {
+                    cargo
+                        .get("workspace")?
+                        .get("dependencies")?
+                        .as_table()
+                        .cloned()
+                })
+                .unwrap_or_default();
+            let mut candidates = deps
+                .values()
+                .filter_map(|dep| dep.get("path")?.as_str().map(|p| workspace.join(p)))
+                .collect::<Vec<_>>();
+            // Nested companions (e.g. session/benchmarking) and standalone
+            // fixture crates need not be listed as workspace dependencies.
+            for base in [Some(crate_root), crate_root.parent()]
+                .into_iter()
+                .flatten()
+            {
+                if let Ok(entries) = std::fs::read_dir(base) {
+                    candidates.extend(
+                        entries
+                            .flatten()
+                            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                            .map(|e| e.path()),
+                    );
+                }
+            }
+            for candidate in candidates {
+                let Some(companion) = manifest(&candidate.join("Cargo.toml")) else {
+                    continue;
+                };
+                if !companion
+                    .get("package")
+                    .and_then(|p| p.get("name"))
+                    .and_then(toml::Value::as_str)
+                    .is_some_and(|name| {
+                        name == format!("{package_name}-benchmarking")
+                            || (name.contains("benchmark")
+                                && candidate.parent().and_then(|p| p.canonicalize().ok())
+                                    == crate_root.canonicalize().ok())
+                    })
+                {
+                    continue;
+                }
+                let owns = companion
+                    .get("dependencies")
+                    .and_then(toml::Value::as_table)
+                    .is_some_and(|dependencies| {
+                        dependencies.iter().any(|(alias, dependency)| {
+                            let dep_package = dependency
+                                .get("package")
+                                .and_then(toml::Value::as_str)
+                                .unwrap_or(alias);
+                            if dep_package != package_name {
+                                return false;
+                            }
+                            let declared =
+                                if dependency.get("workspace").and_then(toml::Value::as_bool)
+                                    == Some(true)
+                                {
+                                    deps.get(alias)
+                                } else {
+                                    Some(dependency)
+                                };
+                            let base = if dependency.get("workspace").and_then(toml::Value::as_bool)
+                                == Some(true)
+                            {
+                                workspace
+                            } else {
+                                &candidate
+                            };
+                            declared
+                                .and_then(|d| d.get("path"))
+                                .and_then(toml::Value::as_str)
+                                .is_some_and(|p| {
+                                    base.join(p).canonicalize().ok()
+                                        == crate_root.canonicalize().ok()
+                                })
+                        })
+                    });
+                if owns {
+                    roots.push(candidate.join("src"));
+                }
+            }
+        }
+    }
+    let mut files = HashSet::new();
+    roots
+        .into_iter()
+        .flat_map(|root| benchmark_sources(&root))
+        .filter(|file| files.insert(file.clone()))
+        .filter_map(|file| std::fs::read_to_string(file).ok())
+        .flat_map(|content| collect_benchmarks(&content))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -450,12 +717,12 @@ impl LintRule for BenchmarkForWeightFunction {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        if !ctx.is_rust {
+        if !ctx.is_rust || excluded_context(ctx) {
             return None;
         }
 
         // This rule works on weights.rs files to find weight functions
-        // and cross-references with benchmarking.rs in the same directory
+        // and cross-references benchmarks owned by the same pallet.
         let path_str = ctx.rel_path.to_string_lossy();
         if !path_str.ends_with("weights.rs") {
             return None;
@@ -467,44 +734,10 @@ impl LintRule for BenchmarkForWeightFunction {
             return None;
         }
 
-        // Try to find the corresponding benchmarking.rs or benchmarks.rs
-        let parent = ctx.path.parent()?;
-        let bench_path = if parent.join("benchmarking.rs").exists() {
-            parent.join("benchmarking.rs")
-        } else {
-            parent.join("benchmarks.rs")
-        };
-
-        let bench_content = match std::fs::read_to_string(&bench_path) {
-            Ok(c) => c,
-            Err(_) => {
-                // FIX #1: benchmarking.rs is absent — report ALL weight fns as missing
-                let mut diagnostics = Vec::new();
-                for (fn_name, line) in &weight_fns {
-                    diagnostics.push(Diagnostic {
-                        rule_id: self.id().to_string(),
-                        rule_name: self.name().to_string(),
-                        category: RuleCategory::Benchmark,
-                        severity: config.rule_severity(self.id(), Severity::Warning),
-                        file: ctx.path.clone(),
-                        line: *line,
-                        column: None,
-                        end_line: None,
-                        message: format!(
-                            "Weight function `{}` has no benchmark — `benchmarking.rs` not found in the same directory",
-                            fn_name
-                        ),
-                        explanation: "Every weight function must have a matching benchmark. \
-                            No `benchmarking.rs` file was found alongside this `weights.rs`."
-                            .to_string(),
-                        suggestion: Some("Create a `benchmarking.rs` with benchmarks for all weight functions".to_string()),
-                    });
-                }
-                return Some(diagnostics);
-            }
-        };
-
-        let benchmark_names = collect_benchmark_names(&bench_content);
+        let benchmark_names = owned_benchmarks(&ctx.path)
+            .into_iter()
+            .map(|bench| bench.name)
+            .collect::<HashSet<_>>();
 
         let mut diagnostics = Vec::new();
 
@@ -520,7 +753,7 @@ impl LintRule for BenchmarkForWeightFunction {
                     column: None,
                     end_line: None,
                     message: format!(
-                        "Weight function `{}` has no corresponding benchmark in `benchmarking.rs`",
+                        "Weight function `{}` has no corresponding benchmark in the pallet or its benchmarking crate",
                         fn_name
                     ),
                     explanation: "Every weight function must have a matching benchmark. \
@@ -562,91 +795,31 @@ impl LintRule for BenchmarkVerification {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        if !ctx.is_rust || !ctx.is_benchmark_file {
+        if !ctx.is_rust || excluded_context(ctx) {
             return None;
         }
-
         let mut diagnostics = Vec::new();
-        let lines: Vec<&str> = ctx.content.lines().collect();
-
-        let mut in_benchmarks_macro = false;
-        let mut macro_depth: i32 = 0;
-        let mut i = 0;
-        while i < lines.len() {
-            let trimmed = lines[i].trim();
-
-            if starts_benchmarks_macro(trimmed) {
-                in_benchmarks_macro = true;
-                macro_depth = brace_delta(trimmed);
-                i += 1;
-                continue;
-            }
-
-            let is_proc_benchmark = trimmed.starts_with("#[benchmark") && trimmed.ends_with(']');
-            let is_macro_benchmark = in_benchmarks_macro
-                && !is_proc_benchmark
-                && parse_macro_benchmark_name(trimmed).is_some();
-
-            if is_proc_benchmark || is_macro_benchmark {
-                let (fn_name, fn_start) = if is_proc_benchmark {
-                    let fs = (i + 1..lines.len())
-                        .find(|&j| parse_fn_name_line(lines[j]).is_some())
-                        .unwrap_or(i + 1);
-                    (
-                        parse_fn_name_line(lines.get(fs).copied().unwrap_or(""))
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        fs,
-                    )
-                } else {
-                    (
-                        parse_macro_benchmark_name(trimmed)
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        i,
-                    )
-                };
-
-                let body_end = find_block_end_from(&lines, fn_start);
-                let benchmark_end = if is_macro_benchmark {
-                    macro_benchmark_end(&lines, body_end)
-                } else {
-                    body_end
-                };
-                let body_lines = &lines[fn_start..=benchmark_end];
-                if !has_verification_in_text(body_lines, &config.benchmarking.verification_patterns)
-                {
-                    diagnostics.push(Diagnostic {
-                        rule_id: self.id().to_string(),
-                        rule_name: self.name().to_string(),
-                        category: RuleCategory::Benchmark,
-                        severity: config.rule_severity(self.id(), Severity::Warning),
-                        file: ctx.path.clone(),
-                        line: fn_start + 1,
-                        column: None,
-                        end_line: Some(benchmark_end + 1),
-                        message: format!(
-                            "Benchmark `{}` has no verification/postcondition check",
-                            fn_name
-                        ),
-                        explanation: "Benchmarks should include a `verify` block that asserts \
-                            the expected state change occurred. Without verification, a benchmark \
-                            can silently measure a no-op."
-                            .to_string(),
-                        suggestion: Some(
-                            "Add a `verify { ... }` block with assertions like `assert_last_event` \
-                            or `assert_has_event`"
-                                .to_string(),
-                        ),
-                    });
-                }
-                i = benchmark_end + 1;
-            } else {
-                if in_benchmarks_macro {
-                    macro_depth += brace_delta(lines[i]);
-                    if macro_depth <= 0 {
-                        in_benchmarks_macro = false;
-                    }
-                }
-                i += 1;
+        for benchmark in collect_benchmarks(ctx.content) {
+            if !has_verification(
+                benchmark.verification,
+                &config.benchmarking.verification_patterns,
+            ) {
+                diagnostics.push(Diagnostic {
+                    rule_id: self.id().to_string(),
+                    rule_name: self.name().to_string(),
+                    category: RuleCategory::Benchmark,
+                    severity: config.rule_severity(self.id(), Severity::Warning),
+                    file: ctx.path.clone(),
+                    line: benchmark.line,
+                    column: None,
+                    end_line: Some(benchmark.end_line),
+                    message: format!(
+                        "Benchmark `{}` has no verification/postcondition check",
+                        benchmark.name
+                    ),
+                    explanation: "Benchmarks should verify the expected state after the measured call or block.".to_string(),
+                    suggestion: Some("Add postcondition assertions after the measured code, or a v1 `verify { ... }` block".to_string()),
+                });
             }
         }
 
@@ -678,7 +851,7 @@ impl LintRule for ExtrinsicWithoutBenchmark {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        if !ctx.is_rust || ctx.is_test_file || ctx.is_benchmark_file {
+        if !ctx.is_rust || excluded_context(ctx) || ctx.is_benchmark_file {
             return None;
         }
 
@@ -692,48 +865,17 @@ impl LintRule for ExtrinsicWithoutBenchmark {
             return None;
         }
 
-        let parent = ctx.path.parent()?;
-        let bench_path = if parent.join("benchmarking.rs").exists() {
-            parent.join("benchmarking.rs")
-        } else if parent.join("benchmarks.rs").exists() {
-            parent.join("benchmarks.rs")
-        } else {
-            let mut diagnostics = Vec::new();
-            for (fn_name, line) in &extrinsic_fns {
-                diagnostics.push(Diagnostic {
-                    rule_id: self.id().to_string(),
-                    rule_name: self.name().to_string(),
-                    category: RuleCategory::Benchmark,
-                    severity: config.rule_severity(self.id(), Severity::Warning),
-                    file: ctx.path.clone(),
-                    line: *line,
-                    column: None,
-                    end_line: None,
-                    message: format!(
-                        "Extrinsic `{}` has no benchmark — no benchmarking file found",
-                        fn_name
-                    ),
-                    explanation:
-                        "Every dispatchable extrinsic needs a benchmark for accurate weights."
-                            .to_string(),
-                    suggestion: Some(
-                        "Create `benchmarking.rs` with benchmarks for all extrinsics".to_string(),
-                    ),
-                });
-            }
-            return Some(diagnostics);
-        };
-
-        let bench_content = match std::fs::read_to_string(&bench_path) {
-            Ok(c) => c,
-            Err(_) => return None,
-        };
-
-        let benchmark_names = collect_benchmark_names(&bench_content);
-
+        let benchmarks = owned_benchmarks(&ctx.path);
         let mut diagnostics = Vec::new();
         for (fn_name, line) in &extrinsic_fns {
-            if !has_matching_benchmark_name(&benchmark_names, fn_name) {
+            if !benchmarks.iter().any(|benchmark| {
+                benchmark.calls.contains(fn_name)
+                    || (benchmark.name_only
+                        && benchmark
+                            .name
+                            .strip_prefix(fn_name)
+                            .is_some_and(|suffix| suffix.starts_with('_')))
+            }) {
                 diagnostics.push(Diagnostic {
                     rule_id: self.id().to_string(),
                     rule_name: self.name().to_string(),
@@ -744,7 +886,7 @@ impl LintRule for ExtrinsicWithoutBenchmark {
                     column: None,
                     end_line: None,
                     message: format!(
-                        "Extrinsic `{}` has no matching benchmark in `benchmarking.rs`",
+                        "Extrinsic `{}` has no benchmark measuring it in the pallet or its benchmarking crate",
                         fn_name
                     ),
                     explanation:
