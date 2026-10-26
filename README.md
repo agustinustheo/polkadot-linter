@@ -43,6 +43,7 @@ Polkadot Linter groups checks by family so teams can enable, disable, or filter 
 | `BEN` | Benchmark coverage and verification |
 | `TRM` | Terminology and text conventions |
 | `SEC` | Security-focused rules |
+| `RTC` | Runtime configuration (`impl Config for Runtime`, XCM, deposits, benchmarks) |
 
 ## Rule Matrix
 
@@ -78,6 +79,11 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `BEN001` | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. |
 | `BEN002` | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. |
 | `BEN003` | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. |
+| `RTC001` | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
+| `RTC002` | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
+| `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `()`/`WaiveDeliveryFees`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
+| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, ...) is configured as zero. |
+| `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip`. |
 | `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
 | `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. |
 | `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. |
@@ -122,7 +128,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 - [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
 - `[rules.enabled]` is optional. Rules without an explicit `false` override remain enabled.
 - `[rules.severity]` lets you promote or demote individual rules without changing the implementation. It takes precedence over a family severity. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
-- `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
+- `[validation_order]`, `[test_smells]`, `[mock_usage]`, `[benchmarking]`, and `[runtime_config]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
 - `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.
 
 The full schema and defaults remain in [`config/default.toml`](config/default.toml).
@@ -139,7 +145,9 @@ Use `--no-default-features` and `--features feature_a,feature_b` to select the
 Cargo feature configuration for both source and compiler-backed analysis.
 
 For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
-data-driven `scripts/check-sdk-benchmarks.sh` baseline used by CI.
+data-driven `scripts/check-sdk-benchmarks.sh` baseline used by CI. The runtime
+configuration rules have their own pinned-SDK baseline and labeled findings,
+checked by `scripts/check-source-runtime-corpus.sh`.
 
 ## Output Formats
 

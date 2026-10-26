@@ -37,6 +37,7 @@ Rules are grouped into families by prefix. Pass whole families or specific IDs t
 | `BEN` | Benchmark coverage and verification |
 | `TRM` | Terminology and text conventions |
 | `SEC` | Security-focused rules |
+| `RTC` | Runtime configuration (`impl Config for Runtime`, XCM, deposits, benchmarks) |
 
 ```bash
 # Run only the security family
