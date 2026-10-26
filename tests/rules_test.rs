@@ -649,6 +649,51 @@ fn tst002_allows_proper_nested_check() {
     );
 }
 
+#[test]
+fn tst002_detects_apply_extrinsic_paths_and_methods() {
+    let bad = r#"
+#[test]
+fn apply_extrinsic_helpers() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(Executive::apply_extrinsic(xt.clone()));
+        assert_ok!(apply_extrinsic(xt.clone()));
+        assert_ok!(block_builder.apply_extrinsic(xt));
+    });
+}
+"#;
+    let diags = check_fixture("tests/test.rs", bad);
+    let count = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "TST002")
+        .count();
+    assert_eq!(
+        count, 3,
+        "TST002 must flag apply_extrinsic called as a path or a method: {diags:?}"
+    );
+}
+
+#[test]
+fn tst002_ignores_identifiers_that_only_contain_apply_extrinsic() {
+    let good = r#"
+#[test]
+fn apply_extrinsics_returns_single_result() {
+    new_test_ext().execute_with(|| {
+        assert_ok!(Executive::apply_extrinsics(Block::default().extrinsics(), 1, ()), ());
+        assert_ok!(apply_extrinsic_with_weight(xt), ());
+        assert_ok!(Pallet::submit(origin), apply_extrinsic);
+        assert_ok!(Executive::apply_extrinsic(xt.clone()).unwrap());
+        assert_ok!(Executive::apply_extrinsic(xt).expect("valid extrinsic"));
+        assert_ok!(Executive::apply_extrinsics(mode, xts, |xt, _| Executive::apply_extrinsic(xt)), ());
+    });
+}
+"#;
+    let diags = check_fixture("tests/test.rs", good);
+    assert!(
+        !has_rule(&diags, "TST002"),
+        "TST002 must match the apply_extrinsic identifier exactly, and accept results whose outer layer is unwrapped: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // TST003: Imports inside closures
 // ==========================================================================
