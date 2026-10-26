@@ -71,10 +71,10 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEM016` | Semantic | `missing-authorizecall-in-create-authorized-transaction` | `warning` | `CreateAuthorizedTransaction::create_extension()` should include `AuthorizeCall::new()` so authorized transactions do not bypass authorize-stage routing. |
 | `TST001` | Test smell | `prefer-assert-noop` | `warning` | Tests manually check for failure instead of using `assert_noop!`, which also verifies storage is unchanged. |
 | `TST002` | Test smell | `apply-extrinsic-assert-ok` | `error` | `assert_ok!` is used on `apply_extrinsic`, which can hide the inner `DispatchError`. |
-| `TST003` | Test smell | `imports-inside-closures` | `advisory` | `use` imports appear inside functions or closures instead of at module scope. |
-| `TST004` | Test smell | `pays-yes-error-path` | `advisory` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. |
-| `TST005` | Test smell | `implementation-detail-assertions` | `advisory` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. |
-| `TST006` | Test smell | `extrinsic-without-event` | `advisory` | A storage-mutating extrinsic does not emit an event for external observers. |
+| `TST003` | Test smell | `imports-inside-closures` | `warning` | `use` imports appear inside functions or closures instead of at module scope. |
+| `TST004` | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. |
+| `TST005` | Test smell | `implementation-detail-assertions` | `warning` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. |
+| `TST006` | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. |
 | `MOK001` | Mock usage | `excessive-mock-setup` | `warning` | Test setup is dominated by mocks and scaffolding relative to actual assertions. |
 | `BEN001` | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. |
 | `BEN002` | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. |
@@ -96,13 +96,13 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. |
 | `SEC009` | Security | `raw-arithmetic-in-fallible` | `advisory` | Fallible functions use raw arithmetic operators where overflow handling should be explicit. |
 | `SEC010` | Security | `missing-transactional-in-hook` | `warning` | A hook performs multiple storage writes without a transactional storage layer. |
-| `SEC011` | Security | `unbounded-storage-iteration` | `warning` | Dispatchable or hook code iterates storage in a state-size-dependent way. |
+| `SEC011` | Security | `storage-iteration-in-dispatchables` | `warning` | Dispatchable or hook code iterates storage in a state-size-dependent way. |
 | `SEC012` | Security | `unbounded-clear-prefix` | `warning` | Trie cleanup uses an effectively unbounded `clear_prefix` or related call. |
 | `SEC013` | Security | `unbounded-storage-collections` | `warning` | Storage types use unbounded collections without explicitly marking them as unbounded. |
 | `SEC014` | Security | `identity-hasher-on-common-keys` | `warning` | `Identity` hashing is used with common key types that should not be stored unhashed. |
-| `SEC015` | Security | `dispatch-bypass-filter` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
-| `SEC016` | Security | `unguarded-migration` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. |
-| `SEC017` | Security | `unbounded-vec-in-event` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
+| `SEC015` | Security | `dispatch-bypass-filter-in-production` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
+| `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. |
+| `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
 | `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. |
 
 ## Configuration
