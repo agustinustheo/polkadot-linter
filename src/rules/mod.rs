@@ -1,5 +1,6 @@
 pub mod benchmarking;
 pub mod mock_usage;
+pub mod runtime_config;
 pub mod semantic;
 pub mod terminology;
 pub mod test_smells;
@@ -82,6 +83,12 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(benchmarking::ExtrinsicWithoutBenchmark),
         // Terminology rules
         Box::new(terminology::SpellingConventions),
+        // Runtime configuration rules
+        Box::new(runtime_config::PlaceholderWeightInfoInRuntime),
+        Box::new(runtime_config::PalletMissingFromDefineBenchmarks),
+        Box::new(runtime_config::XcmFeesWaived),
+        Box::new(runtime_config::ZeroDepositConfig),
+        Box::new(runtime_config::InsecureRandomnessInRuntime),
     ];
 
     // Filter disabled rules

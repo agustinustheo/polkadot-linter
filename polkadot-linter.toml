@@ -6,6 +6,7 @@ include = []
 
 [rules.severity]
 TST002 = "error"
+RTC003 = "error"
 
 [validation_order]
 severity = "warning"
@@ -68,6 +69,26 @@ verification_patterns = [
 	"assert_last_event",
 	"verify",
 ]
+
+[runtime_config]
+severity = "warning"
+include_dev_runtimes = false
+dev_runtime_packages = [
+	"kitchensink-runtime",
+	"pallet-staking-async-parachain-runtime",
+	"pallet-staking-async-rc-runtime",
+	"penpal-runtime",
+	"rococo-parachain-runtime",
+	"yet-another-parachain-runtime",
+]
+unit_weight_info_allowlist = [
+	"pallet_babe",
+	"pallet_beefy",
+	"pallet_grandpa",
+]
+flag_substrate_weight = false
+substrate_weight_severity = "advisory"
+
 [terminology]
 severity = "advisory"
 check_identifiers = false

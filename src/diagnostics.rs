@@ -43,6 +43,8 @@ pub enum RuleCategory {
     Benchmark,
     /// Text and terminology rules
     Terminology,
+    /// Runtime configuration rules
+    RuntimeConfig,
 }
 
 impl fmt::Display for RuleCategory {
@@ -52,6 +54,7 @@ impl fmt::Display for RuleCategory {
             RuleCategory::TestSmell => write!(f, "test-smell"),
             RuleCategory::Benchmark => write!(f, "benchmark"),
             RuleCategory::Terminology => write!(f, "terminology"),
+            RuleCategory::RuntimeConfig => write!(f, "runtime-config"),
         }
     }
 }

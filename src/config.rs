@@ -13,6 +13,7 @@ pub struct Config {
     pub mock_usage: MockUsageConfig,
     pub benchmarking: BenchmarkingConfig,
     pub terminology: TerminologyConfig,
+    pub runtime_config: RuntimeConfigConfig,
 }
 
 /// Mirrors the complete bundled TOML schema without invoking `Config::default`
@@ -26,6 +27,7 @@ struct BundledConfig {
     mock_usage: MockUsageConfig,
     benchmarking: BenchmarkingConfig,
     terminology: TerminologyConfig,
+    runtime_config: RuntimeConfigConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +103,47 @@ pub struct TerminologyConfig {
     pub check_strings: bool,
     /// Severity for this rule family
     pub severity: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RuntimeConfigConfig {
+    /// Severity for this rule family
+    pub severity: String,
+    /// Also lint runtimes listed in `dev_runtime_packages`
+    pub include_dev_runtimes: bool,
+    /// Cargo package names of development runtimes that are not meant for production
+    pub dev_runtime_packages: Vec<String>,
+    /// Pallets whose `impl WeightInfo for ()` is the intended production weight source
+    pub unit_weight_info_allowlist: Vec<String>,
+    /// Report upstream `<pallet>::weights::SubstrateWeight<Runtime>` bindings (RTC001)
+    pub flag_substrate_weight: bool,
+    /// Severity for the `SubstrateWeight` variant of RTC001
+    pub substrate_weight_severity: String,
+}
+
+impl Default for RuntimeConfigConfig {
+    fn default() -> Self {
+        RuntimeConfigConfig {
+            severity: "warning".to_string(),
+            include_dev_runtimes: false,
+            dev_runtime_packages: vec![
+                "kitchensink-runtime".to_string(),
+                "pallet-staking-async-parachain-runtime".to_string(),
+                "pallet-staking-async-rc-runtime".to_string(),
+                "penpal-runtime".to_string(),
+                "rococo-parachain-runtime".to_string(),
+                "yet-another-parachain-runtime".to_string(),
+            ],
+            unit_weight_info_allowlist: vec![
+                "pallet_babe".to_string(),
+                "pallet_beefy".to_string(),
+                "pallet_grandpa".to_string(),
+            ],
+            flag_substrate_weight: false,
+            substrate_weight_severity: "advisory".to_string(),
+        }
+    }
 }
 
 impl Default for GeneralConfig {
@@ -243,6 +286,11 @@ impl Config {
             ("mock_usage.severity", &self.mock_usage.severity),
             ("benchmarking.severity", &self.benchmarking.severity),
             ("terminology.severity", &self.terminology.severity),
+            ("runtime_config.severity", &self.runtime_config.severity),
+            (
+                "runtime_config.substrate_weight_severity",
+                &self.runtime_config.substrate_weight_severity,
+            ),
         ] {
             self.validate_severity(section, severity)?;
         }
@@ -278,6 +326,7 @@ impl Config {
             Some("MOK") => &self.mock_usage.severity,
             Some("BEN") => &self.benchmarking.severity,
             Some("TRM") => &self.terminology.severity,
+            Some("RTC") => &self.runtime_config.severity,
             _ => return None,
         };
         severity.parse().ok()
@@ -296,6 +345,7 @@ impl Default for Config {
             mock_usage: defaults.mock_usage,
             benchmarking: defaults.benchmarking,
             terminology: defaults.terminology,
+            runtime_config: defaults.runtime_config,
         }
     }
 }
