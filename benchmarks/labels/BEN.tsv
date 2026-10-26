@@ -1,0 +1,42 @@
+rule_id	path	line	label	evidence	note
+BEN001	substrate/frame/assets/src/weights.rs	74	FP	oracle:macro-expansion	pallet-assets compiler SelectedBenchmark contains create; source benchmarks_instance_pallet! at benchmarking.rs:158
+BEN001	substrate/frame/assets/src/weights.rs	94	FP	oracle:macro-expansion	pallet-assets compiler SelectedBenchmark contains force_set_metadata; source benchmarks_instance_pallet! at benchmarking.rs:158
+BEN001	substrate/frame/contracts/src/weights.rs	115	FP	oracle:source-regex-inventory	seal_terminate exists at substrate/frame/contracts/src/benchmarking/mod.rs:924; crate ownership verified from Cargo path/workspace dependency
+BEN001	substrate/frame/contracts/src/weights.rs	75	FP	oracle:source-regex-inventory	on_process_deletion_queue_batch exists at substrate/frame/contracts/src/benchmarking/mod.rs:233; crate ownership verified from Cargo path/workspace dependency
+BEN001	substrate/frame/membership/src/weights.rs	78	FP	oracle:macro-expansion	pallet-membership compiler SelectedBenchmark contains reset_members; measured Membership::reset_members at benchmarking.rs:114
+BEN001	substrate/frame/node-authorization/src/weights.rs	27	TP	manual	add_well_known_node has a hardcoded 50000000 weight in weights.rs:39-43; node-authorization has no benchmark definitions or companion benchmark crate in pinned SDK
+BEN001	substrate/frame/node-authorization/src/weights.rs	31	TP	manual	claim_node has a hardcoded 50000000 weight in weights.rs:39-43; node-authorization has no benchmark definitions or companion benchmark crate in pinned SDK
+BEN001	substrate/frame/nomination-pools/src/weights.rs	66	FP	oracle:source-regex-inventory	chill exists at substrate/frame/nomination-pools/benchmarking/src/inner.rs:752; crate ownership verified from Cargo path/workspace dependency
+BEN001	substrate/frame/offences/src/weights.rs	75	FP	oracle:source-regex-inventory	report_offence_grandpa exists at substrate/frame/offences/benchmarking/src/inner.rs:216; crate ownership verified from Cargo path/workspace dependency
+BEN001	substrate/frame/people/src/weights.rs	51	TP	oracle:source-regex-inventory	WeightInfo::reset_root declared at weights.rs:51; absent from complete pallet-people inventory and no companion benchmark package
+BEN001	substrate/frame/people/src/weights.rs	62	TP	oracle:source-regex-inventory	WeightInfo::remove_suspended_people declared at weights.rs:62; absent from complete pallet-people inventory and no companion benchmark package
+BEN001	substrate/frame/session/src/weights.rs	75	FP	oracle:source-regex-inventory	set_keys exists at substrate/frame/session/benchmarking/src/inner.rs:61; crate ownership verified from Cargo path/workspace dependency
+BEN001	substrate/frame/staking-async/integration-tests/src/ah/weights.rs	38	FP	oracle:test-context	Integration-test crate; intentional unreachable!() implementation at weights.rs:38-43, excluded by BEN001 documented test-context exemption
+BEN001	substrate/frame/staking-async/integration-tests/src/ah/weights.rs	41	FP	oracle:test-context	Integration-test crate; intentional unreachable!() implementation at weights.rs:38-43, excluded by BEN001 documented test-context exemption
+BEN001	substrate/frame/state-trie-migration/src/weights.rs	81	FP	oracle:source-regex-inventory	Inline #[benchmarks] module in lib.rs contains #[benchmark] fn process_top_key at L1143; runtime-benchmarks cfg is valid evidence
+BEN002	cumulus/pallets/collator-selection/src/benchmarking.rs	110	FP	manual	Const generic signature L111; measured call L121-122 followed by assert_last_event::<T> at L125
+BEN002	cumulus/pallets/xcmp-queue/src/benchmarking.rs	116	FP	manual	Const generic signature L117; post-measurement cfg(not(test)) checks fp_after.ready_pages with assert_eq!
+BEN002	polkadot/runtime/parachains/src/hrmp/benchmarking.rs	158	FP	manual	Measured call L175-176 followed by assert_last_event::<T> at L178
+BEN002	polkadot/runtime/parachains/src/paras/benchmarking.rs	93	FP	manual	Measured call L100-101 followed by assert_last_event::<T> at L103
+BEN002	substrate/frame/accumulate-and-forward/src/benchmarking.rs	32	TP	manual	v2 send_native L32 ends immediately after measured Forwarder::forward block L41-44; no postcondition
+BEN002	substrate/frame/assets/src/benchmarking.rs	159	FP	oracle:macro-expansion	v1 create at L159 has a separate verify section at L167; compiler expansion runs assert_last_event only after recording.stop()
+BEN002	substrate/frame/bags-list/src/benchmarks.rs	34	TP	manual	v1 iter L34 has assertions only in setup and the measured block L60-64; no subsequent verify section
+BEN002	substrate/frame/bags-list/src/benchmarks.rs	68	TP	manual	v1 iter_take L68 has assertions only in setup and measured block; no subsequent verify section
+BEN002	substrate/frame/beefy-mmr/src/benchmarking.rs	55	TP	manual	v2 benchmark L55 has setup assert_eq! at L62, followed by measured block L64-67 and no verification
+BEN002	substrate/frame/benchmarking/src/tests.rs	150	FP	oracle:test-context	framework macro test fixture in src/tests.rs; BEN002 explicitly excludes test files
+BEN002	substrate/frame/dap/src/benchmarking.rs	31	FP	oracle:source-regex-inventory	L25 #[benchmarks(where ...)] annotates module; helper fn at L31 has no #[benchmark] and is absent from independent inventory
+BEN002	substrate/frame/recovery/src/benchmarking.rs	202	FP	manual	Measured extrinsic at L231-232 is followed by assert_last_event::<T> at L234-236
+BEN002	substrate/frame/vesting/src/benchmarking.rs	203	FP	oracle:macro-expansion	Expanded pallet-vesting vested_transfer has verification guarded by if verify after recording.stop(); source assertions at L228 and L233
+BEN002	substrate/frame/vesting/src/benchmarking.rs	333	FP	oracle:macro-expansion	Expanded pallet-vesting unlocking_merge_schedules has verification guarded by if verify after recording.stop(); source assertions at L381, L386, L391 and L397
+BEN002	substrate/frame/vesting/src/benchmarking.rs	77	FP	oracle:macro-expansion	Expanded pallet-vesting vest_locked has verification guarded by if verify after recording.stop(); source assertion at L99
+BEN003	substrate/frame/assets/src/lib.rs	760	FP	oracle:macro-expansion	v1 create uses _<T::RuntimeOrigin>(...) at benchmarking.rs:166; compiler constructs new_call_variant_create and independent mapping agrees
+BEN003	substrate/frame/contracts/src/lib.rs	1052	FP	oracle:source-regex-inventory	Owned benchmarking/mod.rs defines instantiate and measures instantiate via #[extrinsic_call]; independent source inventory confirms call
+BEN003	substrate/frame/membership/src/lib.rs	172	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::add_member inside v1 measured block; independent inventory agrees
+BEN003	substrate/frame/membership/src/lib.rs	261	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::reset_members inside v1 measured block; independent inventory agrees
+BEN003	substrate/frame/membership/src/lib.rs	343	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::clear_prime inside v1 measured block; independent inventory agrees
+BEN003	substrate/frame/multi-asset-bounties/src/lib.rs	1046	FP	oracle:source-regex-inventory	benchmarking.rs:521 close_parent_bounty measures Bounties::close_bounty inside assert_ok! at L529; independent regex inventory confirms renamed call
+BEN003	substrate/frame/node-authorization/src/lib.rs	205	TP	manual	Dispatchable add_well_known_node at lib.rs:213/325 has hardcoded WeightInfo weights; no benchmark sources or companion benchmark package in pinned SDK
+BEN003	substrate/frame/node-authorization/src/lib.rs	319	TP	manual	Dispatchable claim_node at lib.rs:213/325 has hardcoded WeightInfo weights; no benchmark sources or companion benchmark package in pinned SDK
+BEN003	substrate/frame/nomination-pools/src/lib.rs	2841	FP	oracle:source-regex-inventory	Companion pallet-nomination-pools-benchmarking depends on pallet-nomination-pools via Cargo workspace; inner.rs benchmark chill measures _(RawOrigin::Signed(...))
+BEN003	substrate/frame/support/src/lib.rs	680	FP	oracle:rustdoc-context	L680 is pub fn text inside /// rustdoc example, not an authored dispatchable; BEN003 documented rustdoc exemption
+BEN003	substrate/frame/vesting/src/lib.rs	412	FP	oracle:macro-expansion	Both unlocking_merge_schedules and not_unlocking_merge_schedules expand to new_call_variant_merge_schedules; independent call mapping agrees

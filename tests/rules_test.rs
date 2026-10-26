@@ -7676,3 +7676,228 @@ pub fn helper() {
         "SEC002 should skip files declared as cargo bench targets even when their path does not match benchmark heuristics"
     );
 }
+
+// === BEN discovery and recall guard (fix/benchmark-discovery) ===
+#[test]
+fn ben_discovery_v1_v2_calls_and_missing_benchmarks() {
+    // Run each syntax separately: unrelated benchmarks must never hide a
+    // missing weight or dispatchable, even when names collide across crates.
+    for (syntax, source) in [
+        (
+            "v1",
+            r#"frame_benchmarking::benchmarks_instance_pallet! {
+            expensive_variant { let x = 1; }: actual_call(RawOrigin::Root, x)
+            verify { assert_eq!(x, 1); }
+            unverified { let x = 1; }: _(RawOrigin::Root, x)
+        }"#,
+        ),
+        (
+            "v2",
+            r#"#[benchmarks(instance)] mod benchmarks {
+            fn helper() {}
+            #[benchmark]
+            fn expensive_variant(n: Linear<0, { T::Limit::get() }>) {
+                #[extrinsic_call]
+                actual_call(RawOrigin::Root, n);
+                assert_last_event::<T>(Event::Done.into());
+            }
+            #[benchmark]
+            fn unverified() {
+                assert!(setup());
+                #[block]
+                { assert_ok!(Pallet::<T>::unverified(RawOrigin::Root)); }
+            }
+        }"#,
+        ),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("benchmarking")).unwrap();
+        std::fs::write(src.join("benchmarking/mod.rs"), source).unwrap();
+        let weights = "pub trait WeightInfo { fn expensive_variant(); fn missing_weight(); }";
+        let weights_path = src.join("weights.rs");
+        std::fs::write(&weights_path, weights).unwrap();
+        let weight_diags = check_fixture(weights_path.to_str().unwrap(), weights);
+        let ben001 = weight_diags
+            .iter()
+            .filter(|d| d.rule_id == "BEN001")
+            .collect::<Vec<_>>();
+        assert_eq!(ben001.len(), 1, "{syntax}: {ben001:?}");
+        assert!(ben001[0].message.contains("missing_weight"));
+        let calls = r#"#[pallet::call] impl<T: Config> Pallet<T> {
+            pub fn actual_call() {} pub fn missing_call() {}
+        }"#;
+        let lib_path = src.join("lib.rs");
+        std::fs::write(&lib_path, calls).unwrap();
+        let call_diags = check_fixture(lib_path.to_str().unwrap(), calls);
+        let ben003 = call_diags
+            .iter()
+            .filter(|d| d.rule_id == "BEN003")
+            .collect::<Vec<_>>();
+        assert_eq!(ben003.len(), 1, "{syntax}: {ben003:?}");
+        assert!(ben003[0].message.contains("missing_call"));
+        let verification = check_fixture("pallets/foo/src/benchmarking/nested.rs", source);
+        let ben002 = verification
+            .iter()
+            .filter(|d| d.rule_id == "BEN002")
+            .collect::<Vec<_>>();
+        assert_eq!(ben002.len(), 1, "{syntax}: {ben002:?}");
+        assert!(ben002[0].message.contains("unverified"));
+    }
+}
+
+#[test]
+fn ben_discovers_inline_and_owned_companion_benchmarks() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        r#"[workspace]
+[workspace.dependencies]
+pallet-demo = { path = "pallet" }
+bench-demo = { path = "benchmarking" }
+"#,
+    )
+    .unwrap();
+    for (folder, name, dependency) in [
+        ("pallet", "pallet-demo", ""),
+        (
+            "benchmarking",
+            "pallet-demo-benchmarking",
+            "pallet-demo = { workspace = true }",
+        ),
+        ("unrelated", "unrelated-benchmarking", ""),
+    ] {
+        let root = dir.path().join(folder);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n[dependencies]\n{dependency}\n"
+            ),
+        )
+        .unwrap();
+    }
+    std::fs::write(
+        dir.path().join("benchmarking/src/lib.rs"),
+        r#"
+        #[cfg(feature = "runtime-benchmarks")]
+        mod benches { #[benchmark] fn external() { #[extrinsic_call] covered(); assert!(true); } }
+    "#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("unrelated/src/lib.rs"),
+        "#[benchmark] fn missing() {}",
+    )
+    .unwrap();
+    let calls = r#"#[pallet::call] impl<T: Config> Pallet<T> {
+        pub fn covered() {} pub fn inline() {} pub fn missing() {}
+    }
+    #[cfg(feature = "runtime-benchmarks")]
+    mod benches { frame_benchmarking::benchmarks! { inline {}: _(RawOrigin::Root) verify {} } }
+    "#;
+    let lib = dir.path().join("pallet/src/lib.rs");
+    std::fs::write(&lib, calls).unwrap();
+    let diags = check_fixture(lib.to_str().unwrap(), calls);
+    let missing = diags
+        .iter()
+        .filter(|d| d.rule_id == "BEN003")
+        .collect::<Vec<_>>();
+    assert_eq!(missing.len(), 1, "{missing:?}");
+    assert!(missing[0].message.contains("missing"));
+    // The same ownership relationship works without workspace dependencies.
+    std::fs::remove_file(dir.path().join("Cargo.toml")).unwrap();
+    std::fs::write(
+        dir.path().join("benchmarking/Cargo.toml"),
+        r#"[package]
+name = "pallet-demo-benchmarking"
+version = "0.1.0"
+[dependencies]
+pallet-demo = { path = "../pallet" }
+"#,
+    )
+    .unwrap();
+    let direct = check_fixture(lib.to_str().unwrap(), calls);
+    assert_eq!(direct.iter().filter(|d| d.rule_id == "BEN003").count(), 1);
+}
+
+#[test]
+fn ben_ignores_docs_tests_and_examples_but_retains_runtime_benchmarks() {
+    let docs = r#"
+/// #[pallet::call_index(0)]
+/// pub fn documented_call() {}
+/// #[benchmark]
+/// fn documented_bench() {}
+#[cfg(all(test, feature = "runtime-benchmarks"))] mod tests {
+    #[pallet::call] impl<T: Config> Pallet<T> { pub fn test_call() {} }
+    #[benchmark] fn test_bench() {}
+}
+#[cfg(feature = "runtime-benchmarks")]
+mod benchmarks { #[benchmark] fn real_bench() {} }
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", docs);
+    assert!(!has_rule(&diags, "BEN003"), "{diags:?}");
+    let benches = diags
+        .iter()
+        .filter(|d| d.rule_id == "BEN002")
+        .collect::<Vec<_>>();
+    assert_eq!(benches.len(), 1);
+    assert!(benches[0].message.contains("real_bench"));
+    for path in [
+        "pallets/examples/demo/src/weights.rs",
+        "pallets/integration-tests/src/weights.rs",
+    ] {
+        assert!(!has_rule(
+            &check_fixture(path, "trait WeightInfo { fn fake(); }"),
+            "BEN001"
+        ));
+    }
+}
+// === End BEN discovery and recall guard ===
+
+// === BEN measured-call binding regression ===
+#[test]
+fn ben003_resolves_dispatched_call_bindings_without_counting_setup_calls() {
+    for source in [
+        r#"frame_benchmarking::benchmarks_instance_pallet! {
+            renamed {}: { assert_ok!(Pallet::<T>::actual(RawOrigin::Root)); }
+            verify {}
+        }"#,
+        r#"frame_benchmarking::benchmarks! {
+            renamed {
+                let c in 0 .. 10;
+                Pallet::<T>::setup_only();
+                let call = Call::<T>::actual {};
+            }: { call.dispatch_bypass_filter(origin)? }
+            verify {}
+        }"#,
+        r#"#[benchmarks] mod benchmarks {
+            #[benchmark] fn renamed() {
+                Pallet::<T>::setup_only();
+                let call = Call::<T>::actual {};
+                #[block] { call.dispatch_bypass_filter(origin)?; }
+                assert!(true);
+            }
+            // A same-name benchmark measuring a different call is not evidence.
+            #[benchmark] fn misleading() {
+                #[extrinsic_call] actual();
+            }
+        }"#,
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("benchmarking.rs"), source).unwrap();
+        let calls = r#"#[pallet::call] impl<T: Config> Pallet<T> {
+            pub fn actual() {} pub fn setup_only() {} pub fn misleading() {}
+        }"#;
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, calls).unwrap();
+        let diags = check_fixture(path.to_str().unwrap(), calls);
+        let missing = diags
+            .iter()
+            .filter(|d| d.rule_id == "BEN003")
+            .collect::<Vec<_>>();
+        assert_eq!(missing.len(), 2, "{missing:?}");
+        assert!(missing.iter().all(|d| !d.message.contains("`actual`")));
+    }
+}
+// === End BEN measured-call binding regression ===
