@@ -6,7 +6,6 @@ include = []
 
 [rules.severity]
 TST002 = "error"
-RTC003 = "error"
 
 [validation_order]
 severity = "warning"
@@ -71,7 +70,6 @@ verification_patterns = [
 ]
 
 [runtime_config]
-severity = "warning"
 include_dev_runtimes = false
 dev_runtime_packages = [
 	"kitchensink-runtime",
@@ -81,6 +79,7 @@ dev_runtime_packages = [
 	"rococo-parachain-runtime",
 	"yet-another-parachain-runtime",
 ]
+test_runtime_tokens = ["test", "tests", "mock", "mocks"]
 unit_weight_info_allowlist = [
 	"pallet_babe",
 	"pallet_beefy",

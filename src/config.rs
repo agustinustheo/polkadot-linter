@@ -108,12 +108,16 @@ pub struct TerminologyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfigConfig {
-    /// Severity for this rule family
-    pub severity: String,
+    /// Severity for every rule of this family. Unset by default, so each rule
+    /// keeps its own default (RTC003 is error, the others warning).
+    pub severity: Option<String>,
     /// Also lint runtimes listed in `dev_runtime_packages`
     pub include_dev_runtimes: bool,
     /// Cargo package names of development runtimes that are not meant for production
     pub dev_runtime_packages: Vec<String>,
+    /// Package or crate-directory name tokens (split on `-`/`_`) that mark a
+    /// test runtime, which is always skipped. Set to `[]` to lint them.
+    pub test_runtime_tokens: Vec<String>,
     /// Pallets whose `impl WeightInfo for ()` is the intended production weight source
     pub unit_weight_info_allowlist: Vec<String>,
     /// Report upstream `<pallet>::weights::SubstrateWeight<Runtime>` bindings (RTC001)
@@ -125,7 +129,7 @@ pub struct RuntimeConfigConfig {
 impl Default for RuntimeConfigConfig {
     fn default() -> Self {
         RuntimeConfigConfig {
-            severity: "warning".to_string(),
+            severity: None,
             include_dev_runtimes: false,
             dev_runtime_packages: vec![
                 "kitchensink-runtime".to_string(),
@@ -134,6 +138,12 @@ impl Default for RuntimeConfigConfig {
                 "penpal-runtime".to_string(),
                 "rococo-parachain-runtime".to_string(),
                 "yet-another-parachain-runtime".to_string(),
+            ],
+            test_runtime_tokens: vec![
+                "test".to_string(),
+                "tests".to_string(),
+                "mock".to_string(),
+                "mocks".to_string(),
             ],
             unit_weight_info_allowlist: vec![
                 "pallet_babe".to_string(),
@@ -286,13 +296,15 @@ impl Config {
             ("mock_usage.severity", &self.mock_usage.severity),
             ("benchmarking.severity", &self.benchmarking.severity),
             ("terminology.severity", &self.terminology.severity),
-            ("runtime_config.severity", &self.runtime_config.severity),
             (
                 "runtime_config.substrate_weight_severity",
                 &self.runtime_config.substrate_weight_severity,
             ),
         ] {
             self.validate_severity(section, severity)?;
+        }
+        if let Some(severity) = &self.runtime_config.severity {
+            self.validate_severity("runtime_config.severity", severity)?;
         }
 
         Ok(())
@@ -326,7 +338,7 @@ impl Config {
             Some("MOK") => &self.mock_usage.severity,
             Some("BEN") => &self.benchmarking.severity,
             Some("TRM") => &self.terminology.severity,
-            Some("RTC") => &self.runtime_config.severity,
+            Some("RTC") => self.runtime_config.severity.as_ref()?,
             _ => return None,
         };
         severity.parse().ok()
@@ -416,6 +428,30 @@ severity = "warning"
         assert_eq!(
             config.rule_severity("TST003", Severity::Advisory),
             Severity::Error
+        );
+    }
+
+    #[test]
+    fn minimal_user_config_keeps_per_rule_runtime_config_defaults() {
+        let config: Config =
+            toml::from_str("[rules]\n").expect("minimal configuration must deserialize");
+        config
+            .validate()
+            .expect("minimal configuration must validate");
+        assert_eq!(
+            config.rule_severity("RTC003", Severity::Error),
+            Severity::Error
+        );
+        assert_eq!(
+            config.rule_severity("RTC004", Severity::Warning),
+            Severity::Warning
+        );
+
+        let config: Config = toml::from_str("[runtime_config]\nseverity = \"advisory\"\n")
+            .expect("family severity must deserialize");
+        assert_eq!(
+            config.rule_severity("RTC003", Severity::Error),
+            Severity::Advisory
         );
     }
 
