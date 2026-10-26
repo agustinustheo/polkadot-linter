@@ -7,6 +7,7 @@ parameter_types! {
 	pub const ExistentialDeposit: Balance = EXISTENTIAL_DEPOSIT;
 	pub const ApprovalDeposit: Balance = EXISTENTIAL_DEPOSIT;
 	pub const MaxDeposits: u32 = 0;
+	pub DepositBase: Balance = 10 * UNIT;
 	pub const SubmissionDeposit: Balance = 0;
 	#[cfg(feature = "runtime-benchmarks")]
 	pub const MetadataDepositBase: Balance = 0;
@@ -23,6 +24,13 @@ impl pallet_assets::Config<PoolAssetsInstance> for Runtime {
 	type AssetDeposit = ConstU128<0>;
 	type MetadataDepositBase = ConstU128<0>;
 	type ApprovalDeposit = ApprovalDeposit;
+}
+
+pub type FellowshipAdmin = EitherOf<EnsureRoot<AccountId>, EnsureMember<Runtime, Fellowship, 3>>;
+
+impl pallet_referenda::Config<AmbassadorReferendaInstance> for Runtime {
+	type SubmitOrigin = MapSuccess<FellowshipAdmin, Replace<ConstU16<0>>>;
+	type SubmissionDeposit = ConstU128<0>;
 }
 
 #[cfg(test)]
