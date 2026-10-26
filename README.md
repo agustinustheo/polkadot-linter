@@ -81,9 +81,10 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `BEN003` | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. |
 | `RTC001` | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
 | `RTC002` | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
-| `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `()`/`WaiveDeliveryFees`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
+| `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `WaiveDeliveryFees` or `XcmFeeManagerFromComponents<Everything, _>`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
 | `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, ...) is configured as zero. |
-| `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip`. |
+| `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip` (or its pre-rename `pallet_randomness_collective_flip`). |
+| `RTC006` | Runtime config | `xcm-fees-burned` | `warning` | The XCM executor `FeeManager` is `()`, which charges delivery and export fees and then burns them instead of routing them (older SDKs waived them). |
 | `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
 | `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. |
 | `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. |

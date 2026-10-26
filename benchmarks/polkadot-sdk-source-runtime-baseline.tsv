@@ -13,7 +13,7 @@ RTC002	cumulus/test	0
 RTC002	polkadot/xcm	0
 RTC003	polkadot/runtime	0
 RTC003	cumulus/parachains/runtimes	0
-RTC003	templates	1
+RTC003	templates	0
 RTC003	substrate/bin/node/runtime	0
 RTC003	cumulus/test	0
 RTC003	polkadot/xcm	0
@@ -29,3 +29,9 @@ RTC005	templates	0
 RTC005	substrate/bin/node/runtime	0
 RTC005	cumulus/test	0
 RTC005	polkadot/xcm	0
+RTC006	polkadot/runtime	0
+RTC006	cumulus/parachains/runtimes	0
+RTC006	templates	1
+RTC006	substrate/bin/node/runtime	0
+RTC006	cumulus/test	0
+RTC006	polkadot/xcm	0
