@@ -101,6 +101,9 @@ jobs:
       - name: Check source-rule FRAME corpus baseline
         run: scripts/check-source-rule-corpus.sh .repos/polkadot-sdk
 
+      - name: Check source-rule runtime corpus baseline and RTC labels
+        run: scripts/check-source-runtime-corpus.sh .repos/polkadot-sdk
+
       - name: Upload SEC benchmark output
         uses: actions/upload-artifact@v4
         if: always()
