@@ -17,6 +17,9 @@ TST002 = "error"
 # Retain review hints without treating standard wrappers/config constants as warnings.
 SEC005 = "advisory"
 VAL002 = "advisory"
+# RTC003 (XCM delivery fees burned or waived) is error-level: every SR Labs audit that
+# reported it rated it Critical or High, and the matched forms have a single meaning.
+RTC003 = "error"
 
 # ---------------------------------------------------------------------------
 # Rule family: Validation order (VAL001)
@@ -99,6 +102,44 @@ verification_patterns = [
 	"assert_last_event",
 	"verify",
 ]
+
+# ---------------------------------------------------------------------------
+# Rule family: Runtime configuration (RTC001-RTC005)
+# ---------------------------------------------------------------------------
+# These rules only inspect runtime crates: the Cargo package whose src/lib.rs
+# declares `construct_runtime!`, `#[frame_support::runtime]` or
+# `#[frame_construct_runtime]`. `#[cfg(test)]` code, mock/tests/benches paths
+# and test runtime crates (package or directory name containing "test" or
+# "mock") are always skipped.
+[runtime_config]
+severity = "warning"
+
+# Development runtimes are skipped unless include_dev_runtimes = true. They
+# deliberately use placeholder weights, zero deposits and free XCM delivery.
+include_dev_runtimes = false
+dev_runtime_packages = [
+	"kitchensink-runtime",
+	"pallet-staking-async-parachain-runtime",
+	"pallet-staking-async-rc-runtime",
+	"penpal-runtime",
+	"rococo-parachain-runtime",
+	"yet-another-parachain-runtime",
+]
+
+# RTC001: pallets whose `impl WeightInfo for ()` is a hand-written production
+# weight source (equivocation reporting), so `type WeightInfo = ();` is intended.
+unit_weight_info_allowlist = [
+	"pallet_babe",
+	"pallet_beefy",
+	"pallet_grandpa",
+]
+
+# RTC001: also report upstream `<pallet>::weights::SubstrateWeight<Runtime>`
+# bindings. Off by default: the pinned SDK's production runtimes and templates
+# contain 13 such bindings (59 more in kitchensink), several of them deliberate
+# (pallet_revive, pallet_state_trie_migration), so the signal is advisory only.
+flag_substrate_weight = false
+substrate_weight_severity = "advisory"
 
 # ---------------------------------------------------------------------------
 # Rule family: Terminology (TRM001)
