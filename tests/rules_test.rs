@@ -8190,3 +8190,291 @@ fn ben003_resolves_function_and_block_local_imports() {
     }
     check_ben003_binding_body("use crate::Pallet as Local; #[block] { use other::Pallet as Local; Local::<T>::transfer(); }", true);
 }
+
+
+// ==========================================================================
+// Runtime configuration rules (RTC001-RTC005)
+// ==========================================================================
+
+fn rtc_lines(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -> Vec<usize> {
+    let mut lines = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == rule_id)
+        .map(|diagnostic| diagnostic.line)
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines
+}
+
+fn rtc_findings(diags: &[polkadot_linter::diagnostics::Diagnostic]) -> Vec<String> {
+    diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id.starts_with("RTC"))
+        .map(|diagnostic| format!("{}:{}", diagnostic.rule_id, diagnostic.line))
+        .collect()
+}
+
+/// Write a minimal runtime crate (manifest + lib.rs + extra files) to a temp dir.
+fn rtc_runtime_crate(package: &str, files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("temporary runtime crate should be created");
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        format!("[package]\nname = \"{package}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+    )
+    .expect("manifest should be written");
+    for (path, content) in files {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("source dir should be created");
+        std::fs::write(path, content).expect("source should be written");
+    }
+    dir
+}
+
+fn rtc_scan(
+    root: &std::path::Path,
+    config: polkadot_linter::config::Config,
+) -> Vec<polkadot_linter::diagnostics::Diagnostic> {
+    let mut engine = polkadot_linter::engine::LintEngine::new(config);
+    engine.filter_rules(&["runtime-config".to_string()]);
+    engine.scan(root)
+}
+
+const RTC_RUNTIME_LIB: &str = r#"
+impl pallet_sudo::Config for Runtime {
+    type WeightInfo = ();
+}
+
+construct_runtime!(
+    pub enum Runtime {
+        Sudo: pallet_sudo = 15,
+    }
+);
+"#;
+
+#[test]
+fn rtc001_detects_placeholder_weight_info() {
+    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc001.rs"));
+    assert_eq!(
+        rtc_lines(&diags, "RTC001"),
+        vec![7, 12, 16, 20],
+        "{diags:?}"
+    );
+    assert!(diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "RTC001")
+        .all(|diagnostic| diagnostic.severity == polkadot_linter::diagnostics::Severity::Warning));
+}
+
+#[test]
+fn rtc001_allows_benchmarked_allowlisted_and_test_weights() {
+    let diags = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc001.rs"),
+    );
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc001_reports_substrate_weight_as_advisory_when_enabled() {
+    let mut config = polkadot_linter::config::Config::default();
+    config.runtime_config.flag_substrate_weight = true;
+    let diags = check_fixture_with_config(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc001.rs"),
+        &config,
+    );
+    let findings = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "RTC001")
+        .collect::<Vec<_>>();
+    assert_eq!(findings.len(), 1, "{diags:?}");
+    assert_eq!(findings[0].line, 19);
+    assert_eq!(
+        findings[0].severity,
+        polkadot_linter::diagnostics::Severity::Advisory
+    );
+}
+
+#[test]
+fn rtc_rules_skip_mock_and_test_paths() {
+    let bad = include_str!("fixtures/bad_rtc001.rs");
+    for path in [
+        "runtime/src/mock.rs",
+        "runtime/tests/runtime.rs",
+        "runtime/src/mock/mod.rs",
+        "runtime/benches/weights.rs",
+        "my-test-runtime/src/lib.rs",
+    ] {
+        let diags = check_fixture(path, bad);
+        assert!(rtc_findings(&diags).is_empty(), "{path}: {diags:?}");
+    }
+}
+
+#[test]
+fn rtc_rules_skip_files_outside_runtime_crates() {
+    // A pallet crate's mock-like Config impl without a runtime declaration.
+    let content = r#"
+impl pallet_xcm::Config for Runtime {
+    type WeightInfo = pallet_xcm::TestWeightInfo;
+    type PriceForSiblingDelivery = ();
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", content);
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc002_detects_local_weights_missing_from_define_benchmarks() {
+    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc002.rs"));
+    assert_eq!(rtc_lines(&diags, "RTC002"), vec![10, 14], "{diags:?}");
+}
+
+#[test]
+fn rtc002_accepts_benchmarked_pallets() {
+    let diags = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc002.rs"),
+    );
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc002_reads_define_benchmarks_from_sibling_files_and_requires_it() {
+    let configs = r#"
+impl pallet_balances::Config for Runtime {
+    type WeightInfo = weights::pallet_balances::WeightInfo<Runtime>;
+}
+impl pallet_sudo::Config for Runtime {
+    type WeightInfo = weights::pallet_sudo::WeightInfo<Runtime>;
+}
+"#;
+    let lib = "mod configs;\nmod benchmarks;\nconstruct_runtime!(pub enum Runtime { Balances: pallet_balances = 10 });\n";
+    let benches = "frame_benchmarking::define_benchmarks!(\n    [pallet_balances, Balances]\n);\n";
+    let krate = rtc_runtime_crate(
+        "example-runtime",
+        &[
+            ("src/lib.rs", lib),
+            ("src/configs/mod.rs", configs),
+            ("src/benchmarks.rs", benches),
+        ],
+    );
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert_eq!(
+        rtc_findings(&diags),
+        vec!["RTC002:6".to_string()],
+        "{diags:?}"
+    );
+
+    // Without any define_benchmarks! the precondition is not met.
+    let krate = rtc_runtime_crate(
+        "example-runtime",
+        &[("src/lib.rs", lib), ("src/configs/mod.rs", configs)],
+    );
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc003_detects_waived_xcm_fees() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/bad_rtc003.rs"),
+    );
+    assert_eq!(
+        rtc_lines(&diags, "RTC003"),
+        vec![6, 13, 17, 20],
+        "{diags:?}"
+    );
+    assert!(diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "RTC003")
+        .all(|diagnostic| diagnostic.severity == polkadot_linter::diagnostics::Severity::Error));
+}
+
+#[test]
+fn rtc003_allows_fee_managers_exponential_prices_and_senderless_executors() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/good_rtc003.rs"),
+    );
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc004_detects_zero_deposits() {
+    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc004.rs"));
+    assert_eq!(
+        rtc_lines(&diags, "RTC004"),
+        vec![4, 7, 8, 9, 15, 16, 20, 24],
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn rtc004_allows_non_zero_gated_and_benchmark_only_deposits() {
+    let diags = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc004.rs"),
+    );
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc005_detects_collective_flip_randomness() {
+    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc005.rs"));
+    assert_eq!(rtc_lines(&diags, "RTC005"), vec![9, 15], "{diags:?}");
+}
+
+#[test]
+fn rtc005_allows_vrf_randomness_and_storage_prefix_bytes() {
+    let diags = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc005.rs"),
+    );
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc_rules_skip_dev_runtimes_unless_opted_in() {
+    let krate = rtc_runtime_crate("kitchensink-runtime", &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+
+    let mut config = polkadot_linter::config::Config::default();
+    config.runtime_config.include_dev_runtimes = true;
+    let diags = rtc_scan(krate.path(), config);
+    assert_eq!(
+        rtc_findings(&diags),
+        vec!["RTC001:3".to_string()],
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn rtc_rules_always_skip_test_runtime_packages() {
+    let krate = rtc_runtime_crate("polkadot-test-runtime", &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+    let mut config = polkadot_linter::config::Config::default();
+    config.runtime_config.include_dev_runtimes = true;
+    let diags = rtc_scan(krate.path(), config);
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc_rules_lint_production_runtime_crates_only() {
+    let krate = rtc_runtime_crate("westend-runtime", &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert_eq!(
+        rtc_findings(&diags),
+        vec!["RTC001:3".to_string()],
+        "{diags:?}"
+    );
+
+    // A source file under a virtual workspace manifest is not a runtime crate.
+    let dir = tempfile::tempdir().expect("temporary workspace should be created");
+    std::fs::write(dir.path().join("Cargo.toml"), "[workspace]\nmembers = []\n")
+        .expect("manifest should be written");
+    std::fs::create_dir_all(dir.path().join("orphan/src")).expect("orphan dir");
+    std::fs::write(dir.path().join("orphan/src/lib.rs"), RTC_RUNTIME_LIB).expect("orphan source");
+    let diags = rtc_scan(dir.path(), polkadot_linter::config::Config::default());
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
+}
