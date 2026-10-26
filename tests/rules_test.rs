@@ -397,6 +397,191 @@ pub fn submit(origin: OriginFor<T>, value: u32) -> DispatchResult {
     );
 }
 
+#[test]
+fn val001_ignores_guards_on_values_computed_after_the_read() {
+    // Shape of asset-conversion `do_add_liquidity`: the guard reads a value
+    // computed from balances fetched after the pool lookup.
+    let code = r#"
+pub fn add_liquidity(who: AccountId, amount1_desired: Balance, amount2_min: Balance) -> DispatchResult {
+    let pool = Pools::<T>::get(&pool_id).ok_or(Error::<T>::PoolNotFound)?;
+    let reserve1 = Self::get_balance(&pool_account, asset1.clone());
+    let amount2_optimal = Self::quote(&amount1_desired, &reserve1)?;
+    ensure!(amount2_optimal >= amount2_min, Error::<T>::AssetTwoDepositDidNotMeetMinimum);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "a guard on a value computed from post-read pallet calls cannot be hoisted: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_tracks_storage_values_inside_mutate_closures() {
+    // Shape of assets `do_transfer_with_dust`: the guard checks the storage
+    // value handed to a `try_mutate` closure.
+    let code = r#"
+pub fn transfer(id: AssetId, source: AccountId, maybe_need_admin: Option<AccountId>) -> DispatchResult {
+    let mut source_account = Account::<T, I>::get(&id, &source).ok_or(Error::<T, I>::NoAccount)?;
+    Asset::<T, I>::try_mutate(&id, |maybe_details| -> DispatchResult {
+        let details = maybe_details.as_mut().ok_or(Error::<T, I>::Unknown)?;
+        if let Some(need_admin) = maybe_need_admin {
+            ensure!(need_admin == details.admin, Error::<T, I>::NoPermission);
+        }
+        Ok(())
+    })
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "values produced inside storage mutate closures are storage-derived: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_tracks_storage_values_through_let_chains_and_match_arms() {
+    let code = r#"
+pub fn release(origin: OriginFor<T>, hash: Hash, maybe_owner: Option<AccountId>) -> DispatchResult {
+    let who = ensure_signed(origin)?;
+    let ledger = AgentLedger::<T>::get(&who).ok_or(Error::<T>::NotAgent)?;
+    let delegation = Delegation::<T>::get(&who).ok_or(Error::<T>::NotDelegator)?;
+    let amount = delegation.amount;
+    ensure!(amount >= ledger.total, Error::<T>::NotEnoughFunds);
+    match RequestStatusFor::<T>::get(hash).ok_or(Error::<T>::NotNoted)? {
+        Requested { owner, .. } => {
+            ensure!(maybe_owner.map_or(true, |c| c == owner), Error::<T>::NotAuthorized);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "transitively storage-derived locals and match bindings are data-dependent: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_guards_in_deferred_closures_and_sibling_branches() {
+    let code = r#"
+pub fn set_team(origin: OriginFor<T>, id: AssetId) -> DispatchResult {
+    let d = Asset::<T, I>::get(&id).ok_or(Error::<T, I>::Unknown)?;
+    T::ForceOrigin::try_origin(origin).map(|_| ()).or_else(|origin| -> DispatchResult {
+        let origin = ensure_signed(origin)?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+pub fn update_roles(origin: OriginFor<T>, pool_id: PoolId) -> DispatchResult {
+    let mut bonded_pool = match ensure_root(origin.clone()) {
+        Ok(()) => BondedPool::<T>::get(pool_id).ok_or(Error::<T>::PoolNotFound)?,
+        Err(BadOrigin) => {
+            let who = ensure_signed(origin)?;
+            Default::default()
+        }
+    };
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "guards in closures that may not run, or in branches excluding the read, are not hoistable: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_guards_that_read_storage_or_call_pallet_code() {
+    let code = r#"
+pub fn nominate(origin: OriginFor<T>, pool_id: PoolId) -> DispatchResult {
+    let who = ensure_signed(origin)?;
+    let bonded_pool = BondedPool::<T>::get(pool_id).ok_or(Error::<T>::PoolNotFound)?;
+    ensure!(!Self::api_pool_needs_delegate_migration(pool_id), Error::<T>::NotMigrated);
+    ensure!(!Claimant::<T, I>::contains_key(&who), Error::<T, I>::AlreadyInducted);
+    ensure!(!T::QueuePausedQuery::is_paused(&pool_id), Error::<T>::QueuePaused);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "guards whose own cost is a storage read or opaque pallet/config call are not cheap: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_ignores_reads_inside_debug_assertions_and_logs() {
+    let code = r#"
+pub fn do_reward_payout(member_account: &AccountId, member: &mut PoolMember<T>) -> DispatchResult {
+    debug_assert_eq!(&mut PoolMembers::<T>::get(member_account).unwrap(), member);
+    log!(debug, "min bond {:?}", MinCreateBond::<T>::get());
+    ensure!(!member.active_points().is_zero(), Error::<T>::FullyUnbonding);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "debug-only and logging reads are not part of the validation order: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_still_reports_hoistable_argument_guards() {
+    // Recall guard. Shapes of broker `do_partition` / `do_interlace` and
+    // election-provider-multi-block `submit_page`: argument-only guards after
+    // reads, including after an unrelated storage-dependent guard, after pure
+    // arithmetic on arguments, and inside a `try_mutate` closure.
+    let code = r#"
+pub fn do_interlace(region_id: RegionId, maybe_check_owner: Option<AccountId>, pivot: CoreMask) -> DispatchResult {
+    let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+    let region = Regions::<T>::get(&region_id).ok_or(Error::<T>::UnknownRegion)?;
+    if let Some(check_owner) = maybe_check_owner {
+        ensure!(Some(check_owner) == region.owner, Error::<T>::NotOwner);
+    }
+    ensure!(!pivot.is_void(), Error::<T>::VoidPivot);
+    Ok(())
+}
+
+pub fn do_partition(region_id: RegionId, pivot_offset: Timeslice) -> DispatchResult {
+    let status = Status::<T>::get().ok_or(Error::<T>::Uninitialized)?;
+    let pivot = region_id.begin.saturating_add(pivot_offset);
+    ensure!(pivot > region_id.begin, Error::<T>::PivotTooEarly);
+    Ok(())
+}
+
+pub fn submit_page(round: u32, who: &AccountId, page: PageIndex) -> DispatchResult {
+    let mut metadata = SubmissionMetadataStorage::<T>::get(round, who).ok_or(Error::<T>::NotRegistered)?;
+    ensure!(page < T::Pages::get(), Error::<T>::BadPageIndex);
+    Ok(())
+}
+
+pub fn set_amount(id: AssetId, who: &AccountId, amount: Balance) -> DispatchResult {
+    let account = Account::<T>::get(&id, who).ok_or(Error::<T>::NoAccount)?;
+    Asset::<T>::try_mutate(&id, |maybe_details| -> DispatchResult {
+        ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+        Ok(())
+    })
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    let lines = diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "VAL001")
+        .map(|diagnostic| (diagnostic.line, diagnostic.end_line))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines,
+        vec![(3, Some(8)), (13, Some(15)), (20, Some(21)), (26, Some(28)),],
+        "argument-only guards after heavy reads must keep firing: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================
