@@ -14,6 +14,12 @@ impl pallet_assets::Config<ForeignAssetsInstance> for Runtime {
 	type WeightInfo = crate::weights::pallet_assets_foreign::WeightInfo<Runtime>;
 }
 
+// `[polkadot_runtime_parachains::disputes, ..]` benchmarks the disputes pallet,
+// not its `slashing` sub-pallet.
+impl polkadot_runtime_parachains::disputes::slashing::Config for Runtime {
+	type WeightInfo = weights::polkadot_runtime_parachains_disputes_slashing::WeightInfo<Runtime>;
+}
+
 #[frame_support::runtime]
 mod runtime {
 	#[runtime::runtime]
@@ -32,5 +38,6 @@ mod benches {
 	frame_benchmarking::define_benchmarks!(
 		[frame_system, SystemBench::<Runtime>]
 		[pallet_balances, Balances]
+		[polkadot_runtime_parachains::disputes, ParasDisputes]
 	);
 }

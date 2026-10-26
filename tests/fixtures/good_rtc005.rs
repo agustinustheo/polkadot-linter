@@ -19,5 +19,7 @@ construct_runtime!(
 	pub enum Runtime {
 		System: frame_system = 0,
 		Babe: pallet_babe = 1,
+		#[cfg(test)]
+		RandomnessCollectiveFlip: pallet_insecure_randomness_collective_flip = 2,
 	}
 );

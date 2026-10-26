@@ -24,6 +24,20 @@ parameter_types! {
 	pub const AssetDeposit: Balance = 0;
 }
 
+parameter_types! {
+	pub DepositBase: Balance = 0;
+	pub storage DepositPerItem: Balance = 0 * UNIT;
+}
+
+pub const DEPOSIT_FACTOR: Balance = 0 * CENTS;
+
+pub type PublicSubmissionOrigin = EnsureSigned<AccountId>;
+
+impl pallet_referenda::Config for Runtime {
+	type SubmitOrigin = EitherOfDiverse<EnsureRoot<AccountId>, PublicSubmissionOrigin>;
+	type SubmissionDeposit = ConstU128<0>;
+}
+
 construct_runtime!(
 	pub enum Runtime {
 		Balances: pallet_balances = 10,

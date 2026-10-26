@@ -1,10 +1,13 @@
-// RTC003 negative fixture: fees routed through a fee manager and exponential
-// delivery prices; a sender-less executor cannot incur delivery fees.
+// RTC003/RTC006 negative fixture: fees routed through a fee manager with narrow
+// waived locations and exponential delivery prices; a sender-less executor
+// cannot incur delivery fees.
 
 pub type PriceForSiblingParachainDelivery =
 	ExponentialPrice<FeeAssetId, BaseDeliveryFee, TransactionByteFee, XcmpQueue>;
 pub type PriceForParentDelivery =
 	ExponentialPrice<FeeAssetId, BaseDeliveryFee, TransactionByteFee, ParachainSystem>;
+
+pub type WaivedLocations = (Equals<RootLocation>, RelayOrOtherSystemParachains<AllSiblingSystemParachains, Runtime>);
 
 pub type XcmRouter = (
 	cumulus_primitives_utility::ParentAsUmp<ParachainSystem, PolkadotXcm, PriceForParentDelivery>,
