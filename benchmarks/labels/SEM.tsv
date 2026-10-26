@@ -1,0 +1,36 @@
+rule_id	path	line	label	evidence	note
+SEM004	substrate/frame/democracy/src/migrations/v1.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/election-provider-multi-phase/src/migrations.rs	26	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/message-queue/src/mock_helpers.rs	24	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/multisig/src/migrations.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/common_functions.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/approvals.rs	22	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/atomic_swap.rs	23	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/attributes.rs	23	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/buy_sell.rs	23	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/create_delete_collection.rs	21	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/create_delete_item.rs	21	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/lock.rs	21	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/metadata.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/roles.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/settings.rs	20	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nfts/src/features/transfer.rs	21	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/nomination-pools/src/adapter.rs	18	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/revive/rpc/src/apis/debug_apis.rs	17	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/revive/rpc/src/apis/execution_apis.rs	21	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/revive/rpc/src/apis/health_api.rs	19	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/revive/rpc/src/apis/polkadot_api.rs	19	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/session/src/disabling.rs	18	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/staking-async/ah-client/src/lib.rs	175	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/staking-async/src/reward.rs	31	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/staking-async/src/session_rotation.rs	79	FP	oracle:SEM004-doc-exemption	`use crate::*;` is listed as allowed in docs/rules/SEM004.md (What it detects)
+SEM004	substrate/frame/fast-unstake/src/migrations.rs	19	FP	manual	use crate::{types::BalanceOf, *}; - the glob is the whole-crate glob `crate::*` inside a group, importing the same items as the documented exemption
+SEM004	substrate/frame/staking-async/runtimes/parachain/src/genesis_config_presets.rs	20	FP	manual	use crate::{staking::DapPalletId, *}; - the glob is the whole-crate glob `crate::*` inside a group, importing the same items as the documented exemption
+SEM004	substrate/frame/system/src/lib.rs	302	FP	manual	use crate::{self as frame_system, pallet_prelude::*, *}; - the glob is the whole-crate glob `crate::*` inside a group, importing the same items as the documented exemption
+SEM004	substrate/frame/uniques/src/asset_ops/collection.rs	20	FP	manual	use crate::{..., Collection as CollectionStorage, *}; - the glob is the whole-crate glob `crate::*` inside a group, importing the same items as the documented exemption
+SEM004	substrate/frame/uniques/src/asset_ops/item.rs	20	FP	manual	use crate::{..., Item as ItemStorage, *}; - the glob is the whole-crate glob `crate::*` inside a group, importing the same items as the documented exemption
+SEM004	substrate/frame/contracts/src/lib.rs	121	TP	manual	top-level non-pub `use environmental::*;` in production lib.rs: foreign-crate glob, no exemption applies
+SEM004	substrate/frame/revive/src/lib.rs	68	TP	manual	top-level non-pub `use environmental::*;` in production lib.rs: foreign-crate glob
+SEM004	substrate/frame/revive/src/vm/evm/instructions/mod.rs	21	TP	manual	top-level non-pub `use revm::bytecode::opcode::*;`: foreign-module glob in production code
+SEM004	substrate/frame/fast-unstake/src/lib.rs	150	TP	oracle:SEM004-doc-exemption	`use crate::types::*;` is a crate-submodule glob; the doc exempts only `use super::*;`, `use crate::*;` and preludes
+SEM004	substrate/frame/nfts/src/impl_nonfungibles.rs	21	TP	oracle:SEM004-doc-exemption	grouped import with nested `traits::{tokens::nonfungibles_v2::*, Get}`; the doc lists globs nested in grouped imports as detected
