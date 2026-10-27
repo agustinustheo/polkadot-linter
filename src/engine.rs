@@ -158,6 +158,7 @@ impl LintEngine {
                     || Self::is_benchmark_file(&class_path),
                 source_target_kinds,
                 ast,
+                classification_path: class_path,
             };
 
             for rule in &self.rules {
@@ -208,7 +209,7 @@ impl LintEngine {
 /// higher: directories above both (e.g. a checkout under `~/tests/`) never
 /// classify a file, while scanning a crate's `tests/` or `benches/` directory,
 /// or a single helper file in it, still sees that directory.
-fn classification_path(path: &Path, rel_path: &Path) -> PathBuf {
+pub fn classification_path(path: &Path, rel_path: &Path) -> PathBuf {
     let crate_rel = crate_root(path).and_then(|root| path.strip_prefix(root).ok());
     let rel = match (crate_rel, path.file_name()) {
         (Some(crate_rel), _) if crate_rel.components().count() > rel_path.components().count() => {
@@ -297,13 +298,8 @@ pub struct FileContext<'a> {
     pub is_benchmark_file: bool,
     pub source_target_kinds: Vec<SourceTargetKind>,
     pub ast: Option<SynFile>,
-}
-
-impl FileContext<'_> {
     /// The path test/bench classifiers should match; see [`classification_path`].
-    pub fn classification_path(&self) -> PathBuf {
-        classification_path(&self.path, &self.rel_path)
-    }
+    pub classification_path: PathBuf,
 }
 
 #[cfg(test)]

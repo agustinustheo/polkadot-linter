@@ -186,7 +186,7 @@ fn test_only(attrs: &[Attribute]) -> bool {
 
 fn excluded_context(ctx: &FileContext) -> bool {
     use crate::project_model::SourceTargetKind;
-    crate::engine::LintEngine::is_test_file(&ctx.classification_path(), ctx.content)
+    crate::engine::LintEngine::is_test_file(&ctx.classification_path, ctx.content)
         || crate_root(&ctx.path)
             .and_then(|root| ctx.path.strip_prefix(root).ok())
             .is_some_and(|relative| relative.starts_with("examples"))

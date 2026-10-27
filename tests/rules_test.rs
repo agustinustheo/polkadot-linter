@@ -74,6 +74,7 @@ fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnost
     let is_text = !is_rust;
 
     let ctx = polkadot_linter::engine::FileContext {
+        classification_path: polkadot_linter::engine::classification_path(&path, &rel_path),
         path: path.clone(),
         rel_path,
         content,
@@ -109,6 +110,7 @@ fn check_fixture_with_config(
     let is_rust = filename.ends_with(".rs");
 
     let ctx = polkadot_linter::engine::FileContext {
+        classification_path: polkadot_linter::engine::classification_path(&path, &rel_path),
         path: path.clone(),
         rel_path,
         content,
@@ -142,6 +144,7 @@ fn check_fixture_path(
     let path_str = path.to_string_lossy().to_string();
     let is_rust = path_str.ends_with(".rs");
     let ctx = polkadot_linter::engine::FileContext {
+        classification_path: polkadot_linter::engine::classification_path(&path, &path),
         path: path.clone(),
         rel_path: path.clone(),
         content,
