@@ -2,7 +2,6 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use regex::Regex;
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     rc::Rc,
@@ -16,7 +15,7 @@ use syn::{
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{crate_root, FileContext},
+    engine::{crate_root, scan_cached, FileContext},
     rules::LintRule,
     syn_util::{has_attr, path_last_ident, span_line},
 };
@@ -692,21 +691,12 @@ fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
 }
 
 fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
-    if let Some(found) =
-        MANIFEST_CACHE.with(|cache| cache.borrow().as_ref().and_then(|c| c.get(path).cloned()))
-    {
-        return found;
-    }
-    let found = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .map(Rc::new);
-    MANIFEST_CACHE.with(|cache| {
-        if let Some(cache) = cache.borrow_mut().as_mut() {
-            cache.insert(path.to_path_buf(), found.clone());
-        }
-    });
-    found
+    scan_cached(path.to_path_buf(), |path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Rc::new)
+    })
 }
 
 fn benchmark_sources(root: &Path) -> Vec<PathBuf> {
@@ -976,45 +966,12 @@ fn discover_children(
     }
 }
 
-thread_local! {
-    static SCAN_CACHE: RefCell<Option<HashMap<PathBuf, Rc<Discovery>>>> = const { RefCell::new(None) };
-    static MANIFEST_CACHE: RefCell<Option<HashMap<PathBuf, Option<Rc<toml::Value>>>>> = const { RefCell::new(None) };
-}
-
-// Cache only for an engine scan, so subsequent scans observe filesystem edits.
-// proc_macro2 tokens remain on the scanning thread.
-pub(crate) struct ScanCache;
-impl ScanCache {
-    pub(crate) fn begin() -> Self {
-        SCAN_CACHE.with(|cache| *cache.borrow_mut() = Some(HashMap::new()));
-        MANIFEST_CACHE.with(|cache| *cache.borrow_mut() = Some(HashMap::new()));
-        Self
-    }
-}
-impl Drop for ScanCache {
-    fn drop(&mut self) {
-        SCAN_CACHE.with(|cache| *cache.borrow_mut() = None);
-        MANIFEST_CACHE.with(|cache| *cache.borrow_mut() = None);
-    }
-}
-
 fn owned_benchmarks(path: &Path) -> Rc<Discovery> {
     let key = crate_root(path)
         .or_else(|| path.parent())
         .unwrap_or(path)
         .to_path_buf();
-    if let Some(found) =
-        SCAN_CACHE.with(|cache| cache.borrow().as_ref().and_then(|c| c.get(&key).cloned()))
-    {
-        return found;
-    }
-    let found = Rc::new(discover_benchmarks(path));
-    SCAN_CACHE.with(|cache| {
-        if let Some(cache) = cache.borrow_mut().as_mut() {
-            cache.insert(key, Rc::clone(&found));
-        }
-    });
-    found
+    scan_cached(key, |_| Rc::new(discover_benchmarks(path)))
 }
 
 // ---------------------------------------------------------------------------

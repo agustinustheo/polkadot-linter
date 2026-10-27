@@ -1,8 +1,7 @@
 use std::{
-    cell::RefCell,
     collections::{HashMap, HashSet},
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     rc::Rc,
 };
 
@@ -20,7 +19,7 @@ use syn::{
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{crate_root, FileContext},
+    engine::{crate_root, scan_cached, FileContext},
     frame_model::{
         active_cfg_attr_args, active_cfg_attr_path_matches, collect_dispatchables,
         DispatchableOrigin,
@@ -2445,14 +2444,6 @@ struct Val001Helpers {
 /// the lookup: a deeper chain is unknown, so the guard is suppressed.
 const VAL001_HELPER_DEPTH: usize = 4;
 
-/// Crate helper indexes, keyed by crate directory. The heavy-operation
-/// patterns come from the config and are the same for the whole run.
-type Val001CrateHelperCache = HashMap<PathBuf, Rc<Val001HelperIndex>>;
-
-thread_local! {
-    static VAL001_CRATE_HELPERS: RefCell<Val001CrateHelperCache> = RefCell::default();
-}
-
 impl Val001Helpers {
     fn for_file(ctx: &FileContext, ast: Option<&SynFile>, heavy_operations: &[String]) -> Self {
         let crate_dir = fs::canonicalize(&ctx.path)
@@ -2467,31 +2458,24 @@ impl Val001Helpers {
                 index: Rc::new(index),
             };
         };
-        let index = VAL001_CRATE_HELPERS.with(|cache| {
-            Rc::clone(
-                cache
-                    .borrow_mut()
-                    .entry(crate_dir.clone())
-                    .or_insert_with(|| {
-                        let mut index = Val001HelperIndex::default();
-                        for entry in walkdir::WalkDir::new(crate_dir.join("src"))
-                            .into_iter()
-                            .filter_map(Result::ok)
-                            .filter(|entry| {
-                                entry.file_type().is_file()
-                                    && entry.path().extension().is_some_and(|ext| ext == "rs")
-                            })
-                        {
-                            if let Some(ast) = fs::read_to_string(entry.path())
-                                .ok()
-                                .and_then(|source| syn::parse_file(&source).ok())
-                            {
-                                index.add_file(&ast, heavy_operations);
-                            }
-                        }
-                        Rc::new(index)
-                    }),
-            )
+        let index = scan_cached(crate_dir, |crate_dir| {
+            let mut index = Val001HelperIndex::default();
+            for entry in walkdir::WalkDir::new(crate_dir.join("src"))
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry.file_type().is_file()
+                        && entry.path().extension().is_some_and(|ext| ext == "rs")
+                })
+            {
+                if let Some(ast) = fs::read_to_string(entry.path())
+                    .ok()
+                    .and_then(|source| syn::parse_file(&source).ok())
+                {
+                    index.add_file(&ast, heavy_operations);
+                }
+            }
+            Rc::new(index)
         });
         Self { index }
     }

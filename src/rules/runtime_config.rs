@@ -28,7 +28,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::Arc,
 };
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
@@ -44,7 +44,7 @@ use syn::{
 use crate::{
     config::{Config, RuntimeConfigConfig},
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{crate_root, FileContext},
+    engine::{crate_root, scan_cached, FileContext},
     rules::LintRule,
     syn_util::path_last_ident,
 };
@@ -84,11 +84,6 @@ struct RuntimeCrate {
     modules: HashMap<PathBuf, Gate>,
 }
 
-fn crate_cache() -> &'static Mutex<HashMap<PathBuf, Arc<RuntimeCrate>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<RuntimeCrate>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// Locate the Cargo package owning `path`, or fall back to the file itself
 /// when no manifest exists (single-file fixtures).
 fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
@@ -116,13 +111,7 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
         });
     };
 
-    let mut cache = crate_cache()
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
-    cache
-        .entry(manifest_dir.clone())
-        .or_insert_with(|| Arc::new(load_runtime_crate(&manifest_dir)))
-        .clone()
+    scan_cached(manifest_dir, |dir| Arc::new(load_runtime_crate(dir)))
 }
 
 fn load_runtime_crate(root: &Path) -> RuntimeCrate {
