@@ -144,11 +144,11 @@ impl LintEngine {
                 is_test_file: source_target_kinds
                     .iter()
                     .any(|kind| matches!(kind, SourceTargetKind::Test))
-                    || Self::is_test_file(path, &content),
+                    || Self::is_test_file(&classification_path(path, rel_path), &content),
                 is_benchmark_file: source_target_kinds
                     .iter()
                     .any(|kind| matches!(kind, SourceTargetKind::Bench))
-                    || Self::is_benchmark_file(path),
+                    || Self::is_benchmark_file(&classification_path(path, rel_path)),
                 source_target_kinds,
                 ast,
             };
@@ -193,6 +193,17 @@ impl LintEngine {
             || path_str.ends_with("benchmarking.rs")
             || path_str.ends_with("benchmarks.rs")
     }
+}
+
+/// The path test/bench classifiers see: scan-relative and rooted at `/`, so
+/// `/tests/`-style patterns match the first component but never a directory
+/// above the scan root. A single-file scan falls back to the file name.
+pub(crate) fn classification_path(path: &Path, rel_path: &Path) -> PathBuf {
+    let rel = match path.file_name() {
+        Some(name) if rel_path.as_os_str().is_empty() => Path::new(name),
+        _ => rel_path,
+    };
+    Path::new("/").join(rel)
 }
 
 fn compile_patterns(patterns: &[String]) -> Result<Vec<glob::Pattern>, glob::PatternError> {

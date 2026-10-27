@@ -8955,6 +8955,49 @@ fn rtc_rules_skip_dev_runtimes_unless_opted_in() {
 }
 
 #[test]
+fn findings_ignore_test_named_ancestors_above_scan_root() {
+    let sem = format!("use foo::*;\n{}", include_str!("fixtures/bad_sem003.rs"));
+    let dir = tempfile::tempdir().expect("temporary parent should be created");
+    let scan = |ancestor: &str| {
+        let root = dir.path().join(ancestor).join("westend-runtime");
+        std::fs::create_dir_all(root.join("src")).expect("source dir should be created");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"westend-runtime\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("manifest should be written");
+        std::fs::write(root.join("src/lib.rs"), RTC_RUNTIME_LIB).expect("lib should be written");
+        std::fs::write(root.join("src/sem.rs"), &sem).expect("source should be written");
+        let engine =
+            polkadot_linter::engine::LintEngine::new(polkadot_linter::config::Config::default());
+        let mut findings = engine
+            .scan(&root)
+            .iter()
+            .map(|d| {
+                format!(
+                    "{}:{}:{}",
+                    d.rule_id,
+                    d.file.strip_prefix(&root).unwrap().display(),
+                    d.line
+                )
+            })
+            .collect::<Vec<_>>();
+        findings.sort();
+        findings
+    };
+    let baseline = scan("ok");
+    for rule in ["RTC001", "SEM003", "SEM004"] {
+        assert!(
+            baseline.iter().any(|f| f.starts_with(rule)),
+            "{rule}: {baseline:?}"
+        );
+    }
+    for ancestor in ["test", "tests"] {
+        assert_eq!(scan(ancestor), baseline, "scan root under {ancestor}/");
+    }
+}
+
+#[test]
 fn rtc_rules_always_skip_test_runtime_packages() {
     let krate = rtc_runtime_crate("polkadot-test-runtime", &[("src/lib.rs", RTC_RUNTIME_LIB)]);
     let mut config = polkadot_linter::config::Config::default();

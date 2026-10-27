@@ -455,8 +455,9 @@ impl LintRule for PaysYesErrorPath {
         // Instead, only skip pure test files (tests/ dir, _test.rs suffix).
         // Files like lib.rs that CONTAIN #[cfg(test)] should still be checked
         // for Pays::No in their non-test production code.
-        if crate::engine::LintEngine::is_test_file(&ctx.path, ctx.content)
-            || crate::engine::LintEngine::is_benchmark_file(&ctx.path)
+        let path = crate::engine::classification_path(&ctx.path, &ctx.rel_path);
+        if crate::engine::LintEngine::is_test_file(&path, ctx.content)
+            || crate::engine::LintEngine::is_benchmark_file(&path)
         {
             return None;
         }
