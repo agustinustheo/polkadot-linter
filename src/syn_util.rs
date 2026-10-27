@@ -75,6 +75,22 @@ pub(crate) fn has_exact_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
     })
 }
 
+/// `#[path = "..."]` on a module declaration.
+pub(crate) fn path_attr(attrs: &[Attribute]) -> Option<String> {
+    attrs.iter().find_map(|attr| match &attr.meta {
+        syn::Meta::NameValue(name_value) if name_value.path.is_ident("path") => {
+            match &name_value.value {
+                Expr::Lit(expr) => match &expr.lit {
+                    syn::Lit::Str(path) => Some(path.value()),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        _ => None,
+    })
+}
+
 pub(crate) fn attr_expr(attr: &Attribute) -> Option<Expr> {
     attr.parse_args::<Expr>().ok()
 }

@@ -17,7 +17,7 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_root, scan_cached, FileContext},
     rules::LintRule,
-    syn_util::{has_attr, path_last_ident, span_line},
+    syn_util::{has_attr, path_attr, path_last_ident, span_line},
 };
 
 fn parse_ast(content: &str) -> Option<SynFile> {
@@ -932,21 +932,7 @@ fn discover_children(
         if test_only(&module.attrs) {
             continue;
         }
-        let explicit = module.attrs.iter().find_map(|a| {
-            if !a.path().is_ident("path") {
-                return None;
-            }
-            let syn::Meta::NameValue(value) = &a.meta else {
-                return None;
-            };
-            let syn::Expr::Lit(lit) = &value.value else {
-                return None;
-            };
-            let syn::Lit::Str(path) = &lit.lit else {
-                return None;
-            };
-            Some(path.value())
-        });
+        let explicit = path_attr(&module.attrs);
         if let Some((_, items)) = &module.content {
             let child_dir = explicit
                 .map(|p| dir.join(p))

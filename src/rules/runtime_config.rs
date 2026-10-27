@@ -46,7 +46,7 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_root, scan_cached, FileContext},
     rules::LintRule,
-    syn_util::path_last_ident,
+    syn_util::{path_attr, path_last_ident},
 };
 
 // ---------------------------------------------------------------------------
@@ -272,22 +272,6 @@ impl ModuleTree {
             }
         }
     }
-}
-
-/// `#[path = "..."]` on a module declaration.
-fn path_attr(attrs: &[Attribute]) -> Option<String> {
-    attrs.iter().find_map(|attr| match &attr.meta {
-        Meta::NameValue(name_value) if name_value.path.is_ident("path") => {
-            match &name_value.value {
-                Expr::Lit(expr) => match &expr.lit {
-                    Lit::Str(path) => Some(path.value()),
-                    _ => None,
-                },
-                _ => None,
-            }
-        }
-        _ => None,
-    })
 }
 
 /// `construct_runtime!`, `#[frame_support::runtime]` (or a bare `#[runtime]`
