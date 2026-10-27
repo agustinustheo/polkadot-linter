@@ -3,8 +3,7 @@ use syn::{
     punctuated::Punctuated,
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, Expr, ExprCall, ExprMethodCall, File as SynFile, ImplItem, ItemFn, ItemImpl, Macro,
-    StmtMacro, Token,
+    Expr, ExprCall, ExprMethodCall, ImplItem, ItemFn, ItemImpl, Macro, StmtMacro, Token,
 };
 
 use crate::{
@@ -12,65 +11,17 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
     rules::LintRule,
+    syn_util::{
+        ast_file, compact_tokens, has_exact_attr, macro_name, path_last_ident, span_column,
+        span_line,
+    },
 };
-
-fn ast_file<'a>(ctx: &'a FileContext<'a>) -> Option<&'a SynFile> {
-    ctx.ast.as_ref()
-}
-
-fn span_line(span: proc_macro2::Span) -> usize {
-    span.start().line
-}
-
-fn span_column(span: proc_macro2::Span) -> usize {
-    span.start().column + 1
-}
-
-fn path_last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
-fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
-    let attr_segments = attr
-        .path()
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string());
-    let expected = segments.iter().copied();
-    attr_segments.eq(expected)
-}
-
-fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| attr_path_matches(attr, segments))
-}
-
-fn macro_name(mac: &Macro) -> Option<String> {
-    path_last_ident(&mac.path)
-}
 
 fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
     match &*expr_call.func {
         Expr::Path(expr_path) => path_last_ident(&expr_path.path),
         _ => None,
     }
-}
-
-fn compact_tokens(tokens: &proc_macro2::TokenStream) -> String {
-    tokens
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
-
-fn compact_expr(expr: &Expr) -> String {
-    quote::ToTokens::to_token_stream(expr)
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +426,7 @@ impl LintRule for PaysYesErrorPath {
                     let has_pays_no = expr_call
                         .args
                         .iter()
-                        .any(|arg| compact_expr(arg).contains("Pays::No"));
+                        .any(|arg| compact_tokens(arg).contains("Pays::No"));
                     if has_pays_no {
                         self.lines.push(span_line(expr_call.span()));
                     }
@@ -755,7 +706,7 @@ impl LintRule for ExtrinsicWithoutEvent {
 
         impl<'ast> Visit<'ast> for ExtrinsicEventVisitor<'_> {
             fn visit_item_impl(&mut self, item: &'ast ItemImpl) {
-                if !has_attr(&item.attrs, &["pallet", "call"]) {
+                if !has_exact_attr(&item.attrs, &["pallet", "call"]) {
                     return;
                 }
                 for impl_item in &item.items {
@@ -763,7 +714,7 @@ impl LintRule for ExtrinsicWithoutEvent {
                         ImplItem::Fn(method) => method,
                         _ => continue,
                     };
-                    if !has_attr(&method.attrs, &["pallet", "call_index"]) {
+                    if !has_exact_attr(&method.attrs, &["pallet", "call_index"]) {
                         continue;
                     }
                     let mut body_visitor = BodyVisitor {

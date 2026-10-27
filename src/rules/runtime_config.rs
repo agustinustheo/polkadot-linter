@@ -46,6 +46,7 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
     rules::LintRule,
+    syn_util::path_last_ident,
 };
 
 // ---------------------------------------------------------------------------
@@ -351,7 +352,7 @@ impl Finder<'_> {
 
 impl<'ast> Visit<'ast> for Finder<'_> {
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
-        if last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
+        if path_last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
             self.found(&item.attrs);
         }
     }
@@ -645,12 +646,6 @@ fn production_ast(file: &SynFile) -> SynFile {
 // Small syntax helpers
 // ---------------------------------------------------------------------------
 
-fn last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
 fn path_idents(path: &syn::Path) -> Vec<String> {
     path.segments
         .iter()
@@ -677,10 +672,10 @@ fn type_path(ty: &Type) -> Option<&syn::Path> {
 /// runtime type. Returns the trait path idents.
 fn runtime_config_impl(item_impl: &ItemImpl) -> Option<Vec<String>> {
     let (_, trait_path, _) = item_impl.trait_.as_ref()?;
-    if last_ident(trait_path).as_deref() != Some("Config") || trait_path.segments.len() < 2 {
+    if path_last_ident(trait_path).as_deref() != Some("Config") || trait_path.segments.len() < 2 {
         return None;
     }
-    let self_ident = type_path(&item_impl.self_ty).and_then(last_ident)?;
+    let self_ident = type_path(&item_impl.self_ty).and_then(path_last_ident)?;
     (self_ident == "Runtime").then(|| path_idents(trait_path))
 }
 
@@ -929,7 +924,7 @@ fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<Vec<String>>) ->
     }
     impl<'ast> Visit<'ast> for Collector<'_> {
         fn visit_macro(&mut self, mac: &'ast Macro) {
-            if last_ident(&mac.path).as_deref() == Some("define_benchmarks") {
+            if path_last_ident(&mac.path).as_deref() == Some("define_benchmarks") {
                 self.found = true;
                 for tree in mac.tokens.clone() {
                     let TokenTree::Group(group) = tree else {
@@ -1061,7 +1056,7 @@ const PRICED_ROUTERS: &[&str] = &["ParentAsUmp", "ChildParachainRouter"];
 fn is_free_delivery_price(ty: &Type) -> bool {
     is_unit_type(ty)
         || type_path(ty)
-            .and_then(last_ident)
+            .and_then(path_last_ident)
             .is_some_and(|ident| ident == "NoPriceForMessageDelivery")
 }
 
@@ -1069,14 +1064,14 @@ fn is_xcm_executor_impl(item_impl: &ItemImpl) -> bool {
     let Some((_, trait_path, _)) = &item_impl.trait_ else {
         return false;
     };
-    if last_ident(trait_path).as_deref() != Some("Config") {
+    if path_last_ident(trait_path).as_deref() != Some("Config") {
         return false;
     }
     path_idents(trait_path)
         .iter()
         .any(|segment| segment == "xcm_executor")
         || type_path(&item_impl.self_ty)
-            .and_then(last_ident)
+            .and_then(path_last_ident)
             .is_some_and(|ident| ident == "XcmConfig")
 }
 
@@ -1124,7 +1119,7 @@ fn contains_everything(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
             .iter()
             .any(|elem| contains_everything(elem, aliases, depth + 1)),
         _ => {
-            let Some(ident) = type_path(ty).and_then(last_ident) else {
+            let Some(ident) = type_path(ty).and_then(path_last_ident) else {
                 return false;
             };
             ident == "Everything"
@@ -1189,7 +1184,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
             let free = is_free_delivery_price(ty)
                 || type_path(ty)
                     .filter(|path| path.segments.len() == 1)
-                    .and_then(last_ident)
+                    .and_then(path_last_ident)
                     .and_then(|ident| self.aliases.get(&ident)?.as_ref())
                     .is_some_and(is_free_delivery_price);
             if free {
@@ -1576,7 +1571,7 @@ impl LintRule for ZeroDepositConfig {
         let mut gated_consts: HashMap<String, bool> = HashMap::new();
         for_each_runtime_impl(&file, |item_impl, _| {
             for item_type in impl_types(item_impl) {
-                let Some(name) = type_path(&item_type.ty).and_then(last_ident) else {
+                let Some(name) = type_path(&item_type.ty).and_then(path_last_ident) else {
                     continue;
                 };
                 let gated =
@@ -1607,7 +1602,7 @@ impl LintRule for ZeroDepositConfig {
             }
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
-                if last_ident(&mac.path).as_deref() == Some("parameter_types") {
+                if path_last_ident(&mac.path).as_deref() == Some("parameter_types") {
                     for (name, line, zero) in parameter_type_consts(mac.tokens.clone()) {
                         if zero {
                             self.zero_items.push((name, line));
@@ -1812,7 +1807,7 @@ impl LintRule for InsecureRandomnessInRuntime {
             }
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
-                if last_ident(&mac.path).as_deref() == Some("construct_runtime") {
+                if path_last_ident(&mac.path).as_deref() == Some("construct_runtime") {
                     for entry in construct_runtime_entries(mac.tokens.clone()) {
                         self.record(entry.into_iter().collect(), INSECURE_RANDOMNESS_PALLETS);
                     }

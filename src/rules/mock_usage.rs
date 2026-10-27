@@ -4,7 +4,7 @@ use quote::ToTokens;
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, ExprCall, ExprMethodCall, File as SynFile, ItemFn, Macro,
+    ExprCall, ExprMethodCall, ItemFn, Macro,
 };
 
 use crate::{
@@ -12,36 +12,8 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
     rules::LintRule,
+    syn_util::{ast_file, has_exact_attr, macro_name, path_last_ident, span_line},
 };
-
-fn ast_file<'a>(ctx: &'a FileContext<'a>) -> Option<&'a SynFile> {
-    ctx.ast.as_ref()
-}
-
-fn span_line(span: proc_macro2::Span) -> usize {
-    span.start().line
-}
-
-fn path_last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
-fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| {
-        let attr_segments = attr
-            .path()
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string());
-        attr_segments.eq(segments.iter().copied())
-    })
-}
-
-fn macro_name(mac: &Macro) -> Option<String> {
-    path_last_ident(&mac.path)
-}
 
 fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
     match &*expr_call.func {
@@ -157,7 +129,7 @@ impl LintRule for ExcessiveMockSetup {
 
         impl<'ast> Visit<'ast> for TestFnVisitor<'_> {
             fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
-                if !has_attr(&item_fn.attrs, &["test"]) {
+                if !has_exact_attr(&item_fn.attrs, &["test"]) {
                     visit::visit_item_fn(self, item_fn);
                     return;
                 }

@@ -27,6 +27,10 @@ use crate::{
     },
     project_model::SourceTargetKind,
     rules::LintRule,
+    syn_util::{
+        ast_file, attr_expr, compact_tokens, expr_call_path, is_masked_span, macro_name,
+        path_last_ident, span_column, span_line, strip_expr_wrappers, type_contains_named,
+    },
 };
 
 fn is_pure_test_path(path: &Path) -> bool {
@@ -839,30 +843,6 @@ fn char_literal_length(chars: &[char], index: usize) -> Option<usize> {
     (chars.get(cursor) == Some(&'\'')).then_some(cursor - index + 1)
 }
 
-fn ast_file<'a>(ctx: &'a FileContext<'a>) -> Option<&'a SynFile> {
-    ctx.ast.as_ref()
-}
-
-fn span_line(span: Span) -> usize {
-    span.start().line
-}
-
-fn span_column(span: Span) -> usize {
-    span.start().column + 1
-}
-
-fn is_masked_span(mask: &[bool], span: Span) -> bool {
-    mask.get(span_line(span).saturating_sub(1))
-        .copied()
-        .unwrap_or(false)
-}
-
-fn path_last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
 fn type_last_ident(ty: &Type) -> Option<String> {
     match ty {
         Type::Path(TypePath { path, .. }) => path_last_ident(path),
@@ -871,10 +851,6 @@ fn type_last_ident(ty: &Type) -> Option<String> {
         Type::Group(group) => type_last_ident(&group.elem),
         _ => None,
     }
-}
-
-fn macro_name(mac: &Macro) -> Option<String> {
-    path_last_ident(&mac.path)
 }
 
 fn expr_string_literal(expr: &Expr) -> Option<String> {
@@ -1598,35 +1574,6 @@ fn type_is_named(ty: &Type, names: &[&str]) -> bool {
     }
 }
 
-fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
-    struct TypeNameVisitor<'a> {
-        names: &'a [&'a str],
-        found: bool,
-    }
-
-    impl<'ast> Visit<'ast> for TypeNameVisitor<'_> {
-        fn visit_type_path(&mut self, type_path: &'ast TypePath) {
-            if type_path
-                .path
-                .segments
-                .last()
-                .map(|segment| self.names.iter().any(|name| segment.ident == *name))
-                .unwrap_or(false)
-            {
-                self.found = true;
-            }
-            visit::visit_type_path(self, type_path);
-        }
-    }
-
-    let mut visitor = TypeNameVisitor {
-        names,
-        found: false,
-    };
-    visitor.visit_type(ty);
-    visitor.found
-}
-
 fn expr_contains_named(expr: &Expr, names: &[&str]) -> bool {
     struct ExprNameVisitor<'a> {
         names: &'a [&'a str],
@@ -1654,6 +1601,19 @@ fn expr_contains_named(expr: &Expr, names: &[&str]) -> bool {
     };
     visitor.visit_expr(expr);
     visitor.found
+}
+
+fn storage_doc_text(item: &ItemType) -> String {
+    item.attrs
+        .iter()
+        .filter(|attr| path_has_exact_ident(attr.path(), "doc"))
+        .filter_map(|attr| match &attr.meta {
+            Meta::NameValue(meta) => expr_string_literal(&meta.value),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn type_contains_unbounded_storage_collection(ty: &Type) -> bool {
@@ -1710,27 +1670,6 @@ fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
     }
 }
 
-fn compact_tokens<T: ToTokens>(node: &T) -> String {
-    node.to_token_stream()
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
-
-fn strip_expr_wrappers(mut expr: &Expr) -> &Expr {
-    loop {
-        expr = match expr {
-            Expr::Group(group) => &group.expr,
-            Expr::Paren(paren) => &paren.expr,
-            Expr::Reference(reference) => &reference.expr,
-            Expr::Cast(cast) => &cast.expr,
-            Expr::Try(expr_try) => &expr_try.expr,
-            _ => return expr,
-        };
-    }
-}
-
 fn strip_pat_wrappers(mut pat: &Pat) -> &Pat {
     loop {
         pat = match pat {
@@ -1750,28 +1689,10 @@ fn expr_is_top_level_try(expr: &Expr) -> bool {
     }
 }
 
-fn expr_path(expr: &Expr) -> Option<&syn::Path> {
-    match expr {
-        Expr::Path(expr_path) => Some(&expr_path.path),
-        Expr::Group(group) => expr_path(&group.expr),
-        Expr::Paren(paren) => expr_path(&paren.expr),
-        Expr::Reference(reference) => expr_path(&reference.expr),
-        _ => None,
-    }
-}
-
-fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
-    expr_path(&expr_call.func)
-}
-
 fn path_owner_name(path: &syn::Path) -> Option<String> {
     let mut segments = path.segments.iter().rev();
     let _last = segments.next()?;
     segments.next().map(|segment| segment.ident.to_string())
-}
-
-fn attr_expr(attr: &Attribute) -> Option<Expr> {
-    attr.parse_args::<Expr>().ok()
 }
 
 fn attr_expr_for_path(attr: &Attribute, segments: &[&str]) -> Option<Expr> {
@@ -8332,25 +8253,6 @@ impl LintRule for UnboundedStorageCollections {
             rule_name: &'a str,
         }
 
-        fn storage_doc_text(item: &ItemType) -> String {
-            item.attrs
-                .iter()
-                .filter(|attr| path_has_exact_ident(attr.path(), "doc"))
-                .filter_map(|attr| match &attr.meta {
-                    syn::Meta::NameValue(meta) => match &meta.value {
-                        Expr::Lit(expr_lit) => match &expr_lit.lit {
-                            Lit::Str(lit) => Some(lit.value()),
-                            _ => None,
-                        },
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_ascii_lowercase()
-        }
-
         fn docs_mark_bounded_storage_collection(item: &ItemType) -> bool {
             let doc = storage_doc_text(item);
             if doc.contains("could become bounded")
@@ -8477,25 +8379,6 @@ impl LintRule for IdentityHasherOnCommonKeys {
                 ty,
                 &["Balance", "BalanceOf", "BlockNumber", "BlockNumberFor"],
             ) || type_is_named(ty, &["u32", "u64"])
-        }
-
-        fn storage_doc_text(item: &ItemType) -> String {
-            item.attrs
-                .iter()
-                .filter(|attr| path_has_exact_ident(attr.path(), "doc"))
-                .filter_map(|attr| match &attr.meta {
-                    syn::Meta::NameValue(meta) => match &meta.value {
-                        Expr::Lit(expr_lit) => match &expr_lit.lit {
-                            Lit::Str(lit) => Some(lit.value()),
-                            _ => None,
-                        },
-                        _ => None,
-                    },
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_ascii_lowercase()
         }
 
         fn docs_mark_internal_numeric_layout(item: &ItemType) -> bool {

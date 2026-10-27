@@ -7,3 +7,4 @@ pub mod rules;
 pub mod rustc_pipeline;
 #[doc(hidden)]
 pub mod rustdoc_analysis;
+mod syn_util;
