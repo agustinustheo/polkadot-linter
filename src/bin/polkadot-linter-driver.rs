@@ -5368,6 +5368,13 @@ fn is_frame_generated_span(source_map: &SourceMap, span: Span) -> bool {
     // FRAME sometimes forwards an attribute's identifier span with a root syntax context.
     // Inspect that source line as well as the expansion callsite; never skip weight expressions.
     let site = span.source_callsite();
+    let Ok(snippet) = source_map.span_to_snippet(site) else {
+        return false;
+    };
+    let snippet = snippet.trim();
+    if !matches!(snippet, "pallet" | "hooks" | "call" | "event") && !snippet.starts_with("#[") {
+        return false;
+    }
     let location = source_map.lookup_char_pos(site.lo());
     location
         .file
