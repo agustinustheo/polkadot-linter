@@ -135,6 +135,7 @@ impl LintEngine {
                 }
             }
 
+            let class_path = classification_path(path, rel_path);
             let file_ctx = FileContext {
                 path: path.to_path_buf(),
                 rel_path: rel_path.to_path_buf(),
@@ -144,11 +145,11 @@ impl LintEngine {
                 is_test_file: source_target_kinds
                     .iter()
                     .any(|kind| matches!(kind, SourceTargetKind::Test))
-                    || Self::is_test_file(&classification_path(path, rel_path), &content),
+                    || Self::is_test_file(&class_path, &content),
                 is_benchmark_file: source_target_kinds
                     .iter()
                     .any(|kind| matches!(kind, SourceTargetKind::Bench))
-                    || Self::is_benchmark_file(&classification_path(path, rel_path)),
+                    || Self::is_benchmark_file(&class_path),
                 source_target_kinds,
                 ast,
             };
@@ -195,15 +196,32 @@ impl LintEngine {
     }
 }
 
-/// The path test/bench classifiers see: scan-relative and rooted at `/`, so
-/// `/tests/`-style patterns match the first component but never a directory
-/// above the scan root. A single-file scan falls back to the file name.
-pub(crate) fn classification_path(path: &Path, rel_path: &Path) -> PathBuf {
-    let rel = match path.file_name() {
-        Some(name) if rel_path.as_os_str().is_empty() => Path::new(name),
+/// The path test/bench classifiers see, rooted at `/` so `/tests/`-style
+/// patterns match a first component. It starts at the owning crate root
+/// (nearest ancestor with a `Cargo.toml`) or the scan root, whichever is
+/// higher: directories above both (e.g. a checkout under `~/tests/`) never
+/// classify a file, while scanning a crate's `tests/` or `benches/` directory,
+/// or a single helper file in it, still sees that directory.
+fn classification_path(path: &Path, rel_path: &Path) -> PathBuf {
+    let crate_rel = crate_root(path).and_then(|root| path.strip_prefix(root).ok());
+    let rel = match (crate_rel, path.file_name()) {
+        (Some(crate_rel), _) if crate_rel.components().count() > rel_path.components().count() => {
+            crate_rel
+        }
+        (_, Some(name)) if rel_path.as_os_str().is_empty() => Path::new(name),
         _ => rel_path,
     };
     Path::new("/").join(rel)
+}
+
+/// The nearest ancestor directory of `path` containing a `Cargo.toml`.
+pub(crate) fn crate_root(path: &Path) -> Option<&Path> {
+    if !path.is_file() {
+        return None;
+    }
+    path.parent()?
+        .ancestors()
+        .find(|dir| dir.join("Cargo.toml").is_file())
 }
 
 fn compile_patterns(patterns: &[String]) -> Result<Vec<glob::Pattern>, glob::PatternError> {
@@ -224,6 +242,13 @@ pub struct FileContext<'a> {
     pub is_benchmark_file: bool,
     pub source_target_kinds: Vec<SourceTargetKind>,
     pub ast: Option<SynFile>,
+}
+
+impl FileContext<'_> {
+    /// The path test/bench classifiers should match; see [`classification_path`].
+    pub fn classification_path(&self) -> PathBuf {
+        classification_path(&self.path, &self.rel_path)
+    }
 }
 
 #[cfg(test)]

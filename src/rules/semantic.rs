@@ -20,7 +20,7 @@ use syn::{
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{classification_path, FileContext},
+    engine::FileContext,
     frame_model::{
         active_cfg_attr_args, active_cfg_attr_path_matches, collect_dispatchables,
         DispatchableOrigin,
@@ -76,7 +76,7 @@ fn should_skip_production_rule(ctx: &FileContext) -> bool {
             .source_target_kinds
             .iter()
             .any(|kind| matches!(kind, SourceTargetKind::ProcMacro))
-        || is_pure_test_path(&classification_path(&ctx.path, &ctx.rel_path))
+        || is_pure_test_path(&ctx.classification_path())
         || has_crate_level_non_production_cfg(ctx.content)
         || is_cfg_gated_module_file(&ctx.path)
 }
@@ -3262,7 +3262,7 @@ impl LintRule for PreferRefIteration {
 
         // send-tx and other utility paths are excluded: they use library types
         // (e.g. subxt's ExtrinsicEvents) that have custom iter() but no IntoIterator.
-        if is_pure_test_path(&classification_path(&ctx.path, &ctx.rel_path)) {
+        if is_pure_test_path(&ctx.classification_path()) {
             return None;
         }
 
