@@ -27,8 +27,9 @@ use crate::{
     project_model::SourceTargetKind,
     rules::LintRule,
     syn_util::{
-        ast_file, attr_expr, compact_tokens, expr_call_path, is_masked_span, macro_name,
-        path_last_ident, span_column, span_line, strip_expr_wrappers, type_contains_named,
+        ast_file, attr_expr, compact_tokens, expr_call_name, expr_call_path, is_masked_span,
+        macro_name, path_last_ident, span_column, span_line, strip_expr_wrappers,
+        type_contains_named,
     },
 };
 
@@ -1656,17 +1657,6 @@ fn has_pallet_dev_mode(ast: &SynFile) -> bool {
             path_has_exact_ident(attr.path(), "pallet") && compact_tokens(attr).contains("dev_mode")
         })
     })
-}
-
-fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
-    match &*expr_call.func {
-        Expr::Path(expr_path) => expr_path
-            .path
-            .segments
-            .last()
-            .map(|segment| segment.ident.to_string()),
-        _ => None,
-    }
 }
 
 fn strip_pat_wrappers(mut pat: &Pat) -> &Pat {

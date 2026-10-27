@@ -252,7 +252,8 @@ impl Drop for ScanCache {
 
 /// Memoises `load(key)` for the current engine scan; outside a scan nothing
 /// is cached. Each `(K, V)` pair is a separate cache, and `load` may itself
-/// use other scan caches.
+/// use other scan caches. Caches with the same `(K, V)` types share entries,
+/// so give a new cache a distinct key or value newtype.
 pub(crate) fn scan_cached<K, V>(key: K, load: impl FnOnce(&K) -> V) -> V
 where
     K: Eq + Hash + 'static,

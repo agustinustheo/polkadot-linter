@@ -12,17 +12,10 @@ use crate::{
     engine::FileContext,
     rules::LintRule,
     syn_util::{
-        ast_file, compact_tokens, has_exact_attr, macro_name, path_last_ident, span_column,
-        span_line,
+        ast_file, compact_tokens, expr_call_name, has_exact_attr, macro_name, path_last_ident,
+        span_column, span_line,
     },
 };
-
-fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
-    match &*expr_call.func {
-        Expr::Path(expr_path) => path_last_ident(&expr_path.path),
-        _ => None,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // TST001: Prefer assert_noop! over manual is_err/unwrap_err

@@ -126,6 +126,13 @@ fn expr_path(expr: &Expr) -> Option<&syn::Path> {
     }
 }
 
+pub(crate) fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
+    match &*expr_call.func {
+        Expr::Path(expr_path) => path_last_ident(&expr_path.path),
+        _ => None,
+    }
+}
+
 pub(crate) fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
     expr_path(&expr_call.func)
 }
