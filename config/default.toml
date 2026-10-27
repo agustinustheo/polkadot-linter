@@ -7,7 +7,22 @@ include = []
 [rules]
 # Override individual rule enablement: rule_id = true/false
 [rules.enabled]
-# All rules enabled by default
+# Every other rule is enabled. On 10 third-party parachain repositories
+# (moonbeam, astar, acala, hydration, centrifuge, kilt, peaq, the fellows
+# runtimes, the OpenZeppelin templates and the parachain template) these
+# rules produced 0 useful findings in 10 labeled samples each:
+# Parity SDK style conventions that external code does not follow.
+SEM002 = false
+SEM003 = false
+SEM004 = false
+SEM012 = false
+TST003 = false
+# False positives: RuntimeDebug is deprecated only from sp-debug-derive 15.0.0
+# (every flagged repository locks 14.0.0); public state and `.inner()`
+# accessors; precompile test-harness assertions counted as mocks.
+SEM007 = false
+TST005 = false
+MOK001 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]
@@ -17,6 +32,8 @@ TST002 = "error"
 # Retain review hints without treating standard wrappers/config constants as warnings.
 SEC005 = "advisory"
 VAL002 = "advisory"
+# External sample: 4/10 useful at the highest volume of any rule.
+SEM008 = "advisory"
 
 # ---------------------------------------------------------------------------
 # Rule family: Validation order (VAL001)

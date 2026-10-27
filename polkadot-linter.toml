@@ -4,6 +4,15 @@
 exclude = ["*.lock", ".git/**", "target/**"]
 include = []
 
+# Parity SDK style conventions, off by default because code outside the SDK
+# does not follow them. Uncomment to enforce them:
+# [rules.enabled]
+# SEM002 = true
+# SEM003 = true
+# SEM004 = true
+# SEM012 = true
+# TST003 = true
+
 [rules.severity]
 TST002 = "error"
 

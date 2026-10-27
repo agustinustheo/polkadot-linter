@@ -58,8 +58,16 @@ fn test_rules(
 }
 
 /// Helper: create a FileContext and run a specific rule against fixture content.
+/// The bundled defaults plus the default-off rules, so every rule is tested.
+fn all_rules_config() -> polkadot_linter::config::Config {
+    polkadot_linter::config::Config::load(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/all-rules.toml"),
+    )
+    .expect("config/all-rules.toml is valid")
+}
+
 fn check_fixture(filename: &str, content: &str) -> Vec<polkadot_linter::diagnostics::Diagnostic> {
-    let config = polkadot_linter::config::Config::default();
+    let config = all_rules_config();
     let path = PathBuf::from(filename);
     let rel_path = PathBuf::from(filename);
     let is_rust = filename.ends_with(".rs");
@@ -130,7 +138,7 @@ fn check_fixture_path(
     path: PathBuf,
     content: &str,
 ) -> Vec<polkadot_linter::diagnostics::Diagnostic> {
-    let config = polkadot_linter::config::Config::default();
+    let config = all_rules_config();
     let path_str = path.to_string_lossy().to_string();
     let is_rust = path_str.ends_with(".rs");
     let ctx = polkadot_linter::engine::FileContext {
@@ -8058,7 +8066,7 @@ impl<T: Config> Pallet<T> {
 // ==========================================================================
 #[test]
 fn config_severity_override_works() {
-    let mut config = polkadot_linter::config::Config::default();
+    let mut config = all_rules_config();
     config
         .rules
         .severity
@@ -8982,11 +8990,22 @@ fn rtc006_reports_burned_xcm_fees_as_warning() {
         include_str!("fixtures/bad_rtc006.rs"),
     );
     assert_eq!(rtc_lines(&diags, "RTC006"), vec![8], "{diags:?}");
-    assert!(rtc_lines(&diags, "RTC003").is_empty(), "{diags:?}");
+    // One free price among priced ones does not make delivery free.
+    assert_eq!(rtc_lines(&diags, "RTC003"), vec![26], "{diags:?}");
     assert!(diags
         .iter()
         .filter(|diagnostic| diagnostic.rule_id == "RTC006")
         .all(|diagnostic| diagnostic.severity == polkadot_linter::diagnostics::Severity::Warning));
+}
+
+#[test]
+fn rtc006_ignores_unit_fee_managers_when_every_delivery_price_is_free() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/good_rtc006.rs"),
+    );
+    assert!(rtc_lines(&diags, "RTC006").is_empty(), "{diags:?}");
+    assert_eq!(rtc_lines(&diags, "RTC003"), vec![6, 18], "{diags:?}");
 }
 
 #[test]

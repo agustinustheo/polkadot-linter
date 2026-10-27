@@ -10,7 +10,7 @@ Semantic rules catch correct-looking code with wrong or outdated meaning: deprec
 | [`SEM005`](SEM005.md) | Unparameterised Weight Functions Multiplied by Component Counts | Warning | source (syn) |
 | [`SEM006`](SEM006.md) | DbWeight Estimates Ignore Proof Size | Warning | compiler-backed |
 | [`SEM007`](SEM007.md) | Deprecated RuntimeDebug Derive | Warning | source (syn) |
-| [`SEM008`](SEM008.md) | Deprecated sp_std Paths | Warning | source (syn) |
+| [`SEM008`](SEM008.md) | Deprecated sp_std Paths | Advisory | source (syn) |
 | [`SEM009`](SEM009.md) | Redundant contains_key Before remove or take | Advisory | compiler-backed |
 | [`SEM010`](SEM010.md) | XOR Operator Mistaken for Exponentiation | Error | compiler-backed |
 | [`SEM011`](SEM011.md) | Weight::zero() Placeholder in Weight Attributes | Warning | source (syn) |

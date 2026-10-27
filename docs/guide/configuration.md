@@ -19,7 +19,10 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 "optimisation" = "optimization"
 ```
 
-- `[rules.enabled]` is optional; rules without an explicit `false` stay enabled.
+- `[rules.enabled]` is optional and overrides the bundled entries. Every rule is
+  enabled except `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` (Parity SDK
+  style conventions) and `SEM007`, `TST005` and `MOK001` (mostly false positives
+  outside the SDK); set them to `true` to enable them.
 - `[rules.severity]` promotes or demotes individual rules without code changes.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]`
   tune the heuristics behind those families.
