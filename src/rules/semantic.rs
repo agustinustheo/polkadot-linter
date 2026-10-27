@@ -1,7 +1,9 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use proc_macro2::Span;
@@ -1863,11 +1865,12 @@ impl LintRule for ValidationBeforeHeavyRead {
             .map(|ast| val001_diagnostic_macro_mask(ast, lines.len()))
             .unwrap_or_else(|| vec![false; lines.len()]);
         let heavy_operations = &config.validation_order.heavy_operations;
+        let helpers = Val001Helpers::for_file(ctx, ast, heavy_operations);
         let guard_costs = ast
-            .map(|ast| val001_guard_costs(ast, lines.len(), heavy_operations))
+            .map(|ast| val001_guard_costs(ast, lines.len(), heavy_operations, &helpers))
             .unwrap_or_else(|| vec![Val001GuardCost::default(); lines.len()]);
         let functions = ast
-            .map(|ast| val001_function_facts(ast, heavy_operations))
+            .map(|ast| val001_function_facts(ast, heavy_operations, &helpers))
             .unwrap_or_default();
         // Validation order is a production-dispatch concern. Inline test and
         // try-runtime items share source files with production code, so the
@@ -2221,10 +2224,12 @@ fn val001_guard_costs(
     ast: &SynFile,
     line_count: usize,
     heavy_operations: &[String],
+    helpers: &Val001Helpers,
 ) -> Vec<Val001GuardCost> {
     struct GuardCostVisitor<'a> {
         costs: Vec<Val001GuardCost>,
         heavy_operations: &'a [String],
+        helpers: &'a Val001Helpers,
     }
 
     impl<'ast> Visit<'ast> for GuardCostVisitor<'_> {
@@ -2235,7 +2240,8 @@ fn val001_guard_costs(
                     .ok()
                     .and_then(|arguments| arguments.into_iter().next());
                 if let Some(condition) = condition {
-                    let scan = Val001CallScan::scan(&condition, self.heavy_operations);
+                    let scan =
+                        Val001CallScan::scan(&condition, self.heavy_operations, Some(self.helpers));
                     let start = span_line(mac.span()).saturating_sub(1);
                     let end = mac.span().end().line.saturating_sub(1);
                     for line in start..=end.min(self.costs.len().saturating_sub(1)) {
@@ -2253,6 +2259,7 @@ fn val001_guard_costs(
     let mut visitor = GuardCostVisitor {
         costs: vec![Val001GuardCost::default(); line_count],
         heavy_operations,
+        helpers,
     };
     visitor.visit_file(ast);
     visitor.costs
@@ -2307,21 +2314,31 @@ fn val001_diagnostic_macro_mask(ast: &SynFile, line_count: usize) -> Vec<bool> {
 }
 
 /// Calls found in an expression: storage reads matching the configured heavy
-/// patterns, macros whose bodies are not analysed, and calls into pallet or config code
-/// (`Self::..`, `T::..`, `Pallet::<T>::..`, `<T as ..>::..`) whose cost is not
-/// visible at the call site. `T::Constant::get()` is a type-level constant.
+/// patterns, macros, and calls into pallet or config code. Same-pallet helpers
+/// (`Self::f`, `Pallet::<T>::f`) are resolved through `helpers`: they count as
+/// storage reads when their body reads storage and as opaque when they cannot
+/// be resolved. Config and trait calls (`T::..`, `<T as ..>::..`) stay opaque;
+/// `T::Constant::get()` is a type-level constant.
 #[derive(Default)]
 struct Val001CallScan<'a> {
     heavy_operations: &'a [String],
+    /// `None` while summarising helper bodies: helper calls are only recorded.
+    helpers: Option<&'a Val001Helpers>,
     heavy: bool,
     opaque: bool,
     macro_call: bool,
+    helper_calls: Vec<String>,
 }
 
 impl<'a> Val001CallScan<'a> {
-    fn scan(expr: &Expr, heavy_operations: &'a [String]) -> Self {
+    fn scan(
+        expr: &Expr,
+        heavy_operations: &'a [String],
+        helpers: Option<&'a Val001Helpers>,
+    ) -> Self {
         let mut scan = Self {
             heavy_operations,
+            helpers,
             ..Self::default()
         };
         scan.visit_expr(expr);
@@ -2329,19 +2346,30 @@ impl<'a> Val001CallScan<'a> {
     }
 }
 
+/// The helper name of a same-pallet call: `Self::f`, `Pallet::<T>::f`,
+/// `crate::Pallet::<T>::f`.
+fn val001_helper_call_name(path: &syn::ExprPath) -> Option<String> {
+    if path.qself.is_some() {
+        return None;
+    }
+    let segments = path.path.segments.iter().collect::<Vec<_>>();
+    let (owner, rest) = match segments.as_slice() {
+        [owner, name] => (owner, name),
+        [root, owner, name]
+            if matches!(root.ident.to_string().as_str(), "crate" | "self" | "super") =>
+        {
+            (owner, name)
+        }
+        _ => return None,
+    };
+    (owner.ident == "Self" || owner.ident == "Pallet").then(|| rest.ident.to_string())
+}
+
 impl<'ast> Visit<'ast> for Val001CallScan<'_> {
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
         if let Expr::Path(path) = &*call.func {
             let head = format!("{}(", compact_tokens(&call.func));
             let full = format!("{head}{})", compact_tokens(&call.args));
-            let is_type_constant = head.starts_with("T::");
-            self.heavy |= self.heavy_operations.iter().any(|pattern| {
-                !(pattern == "::get(" && is_type_constant)
-                    && full
-                        .match_indices(pattern.as_str())
-                        .any(|(index, _)| index < head.len())
-            });
-
             let segments = &path.path.segments;
             let first = segments.first().map(|segment| segment.ident.to_string());
             let is_constant_get = call.args.is_empty()
@@ -2349,16 +2377,225 @@ impl<'ast> Visit<'ast> for Val001CallScan<'_> {
                     .last()
                     .is_some_and(|segment| segment.ident == "get")
                 && (path.qself.is_some() || first.as_deref() == Some("T"));
-            let crosses_pallet_boundary = path.qself.is_some()
-                || matches!(first.as_deref(), Some("Self" | "T"))
-                || segments.iter().any(|segment| segment.ident == "Pallet");
-            self.opaque |= segments.len() > 1 && crosses_pallet_boundary && !is_constant_get;
+            let is_type_constant = head.starts_with("T::") || is_constant_get;
+            self.heavy |= self.heavy_operations.iter().any(|pattern| {
+                !(pattern == "::get(" && is_type_constant)
+                    && full
+                        .match_indices(pattern.as_str())
+                        .any(|(index, _)| index < head.len())
+            });
+
+            if let Some(name) = val001_helper_call_name(path) {
+                match self.helpers {
+                    None => self.helper_calls.push(name),
+                    Some(helpers) => match helpers.cost(&name) {
+                        Val001HelperCost::Cheap => {}
+                        Val001HelperCost::Heavy => self.heavy = true,
+                        Val001HelperCost::Unknown => self.opaque = true,
+                    },
+                }
+            } else {
+                let crosses_pallet_boundary = path.qself.is_some()
+                    || matches!(first.as_deref(), Some("Self" | "T"))
+                    || segments.iter().any(|segment| segment.ident == "Pallet");
+                self.opaque |= segments.len() > 1 && crosses_pallet_boundary && !is_constant_get;
+            }
         }
         visit::visit_expr_call(self, call);
     }
 
-    fn visit_macro(&mut self, _mac: &'ast Macro) {
+    fn visit_macro(&mut self, mac: &'ast Macro) {
         self.macro_call = true;
+        // Look into expression-like macro bodies (`ensure!`, `vec!`, ...) so
+        // reads and helper calls inside them are still seen.
+        if let Ok(arguments) = mac.parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated)
+        {
+            for argument in &arguments {
+                self.visit_expr(argument);
+            }
+        }
+    }
+}
+
+/// What calling a same-pallet helper costs, judged from its body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Val001HelperCost {
+    /// No storage read and no opaque call, transitively.
+    Cheap,
+    /// Reads storage, transitively.
+    Heavy,
+    /// Not defined in the crate, calls config/trait code, or too deep.
+    Unknown,
+}
+
+/// A helper body's direct calls; helper calls are resolved lazily.
+#[derive(Clone)]
+struct Val001HelperSummary {
+    heavy: bool,
+    opaque: bool,
+    calls: Vec<String>,
+}
+
+#[derive(Default)]
+struct Val001HelperIndex {
+    summaries: HashMap<String, Vec<Val001HelperSummary>>,
+}
+
+impl Val001HelperIndex {
+    fn add_file(&mut self, ast: &SynFile, heavy_operations: &[String]) {
+        struct Collector<'a> {
+            index: &'a mut Val001HelperIndex,
+            heavy_operations: &'a [String],
+        }
+
+        impl Collector<'_> {
+            fn add(&mut self, name: &syn::Ident, block: &syn::Block) {
+                let mut scan = Val001CallScan {
+                    heavy_operations: self.heavy_operations,
+                    ..Val001CallScan::default()
+                };
+                scan.visit_block(block);
+                self.index
+                    .summaries
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(Val001HelperSummary {
+                        heavy: scan.heavy,
+                        opaque: scan.opaque,
+                        calls: scan.helper_calls,
+                    });
+            }
+        }
+
+        impl<'ast> Visit<'ast> for Collector<'_> {
+            fn visit_item_fn(&mut self, item: &'ast ItemFn) {
+                self.add(&item.sig.ident, &item.block);
+                visit::visit_item_fn(self, item);
+            }
+
+            fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+                self.add(&item.sig.ident, &item.block);
+                visit::visit_impl_item_fn(self, item);
+            }
+
+            fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+                if let Some(block) = &item.default {
+                    self.add(&item.sig.ident, block);
+                }
+                visit::visit_trait_item_fn(self, item);
+            }
+        }
+
+        Collector {
+            index: self,
+            heavy_operations,
+        }
+        .visit_file(ast);
+    }
+}
+
+/// Helper functions a `Self::f` call may resolve to: every function in the
+/// enclosing crate's `src/` tree, or in the scanned file when it is not part
+/// of a crate on disk.
+struct Val001Helpers {
+    index: Rc<Val001HelperIndex>,
+}
+
+/// Helper calls are followed at most this deep before the cost is unknown.
+const VAL001_HELPER_DEPTH: usize = 4;
+
+/// Crate helper indexes, keyed by crate directory and heavy-operation patterns.
+type Val001CrateHelperCache = HashMap<(PathBuf, Vec<String>), Rc<Val001HelperIndex>>;
+
+thread_local! {
+    static VAL001_CRATE_HELPERS: RefCell<Val001CrateHelperCache> = RefCell::default();
+}
+
+impl Val001Helpers {
+    fn for_file(ctx: &FileContext, ast: Option<&SynFile>, heavy_operations: &[String]) -> Self {
+        let crate_dir = fs::canonicalize(&ctx.path).ok().and_then(|path| {
+            path.ancestors()
+                .skip(1)
+                .find(|dir| dir.join("Cargo.toml").is_file())
+                .map(Path::to_path_buf)
+        });
+        let Some(crate_dir) = crate_dir else {
+            let mut index = Val001HelperIndex::default();
+            if let Some(ast) = ast {
+                index.add_file(ast, heavy_operations);
+            }
+            return Self {
+                index: Rc::new(index),
+            };
+        };
+        let key = (crate_dir, heavy_operations.to_vec());
+        let index = VAL001_CRATE_HELPERS.with(|cache| {
+            Rc::clone(cache.borrow_mut().entry(key.clone()).or_insert_with(|| {
+                let mut index = Val001HelperIndex::default();
+                for entry in walkdir::WalkDir::new(key.0.join("src"))
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .filter(|entry| {
+                        entry.file_type().is_file()
+                            && entry.path().extension().is_some_and(|ext| ext == "rs")
+                    })
+                {
+                    if let Some(ast) = fs::read_to_string(entry.path())
+                        .ok()
+                        .and_then(|source| syn::parse_file(&source).ok())
+                    {
+                        index.add_file(&ast, heavy_operations);
+                    }
+                }
+                Rc::new(index)
+            }))
+        });
+        Self { index }
+    }
+
+    fn cost(&self, name: &str) -> Val001HelperCost {
+        self.cost_at(name, 0, &mut HashSet::new())
+    }
+
+    /// Combines every definition named `name`: a heavy one wins, then an
+    /// unknown one. Recursion back into a helper being resolved adds nothing.
+    fn cost_at(
+        &self,
+        name: &str,
+        depth: usize,
+        resolving: &mut HashSet<String>,
+    ) -> Val001HelperCost {
+        if depth >= VAL001_HELPER_DEPTH {
+            return Val001HelperCost::Unknown;
+        }
+        let Some(definitions) = self.index.summaries.get(name) else {
+            return Val001HelperCost::Unknown;
+        };
+        if !resolving.insert(name.to_string()) {
+            return Val001HelperCost::Cheap;
+        }
+        let mut cost = Val001HelperCost::Cheap;
+        for definition in definitions {
+            if definition.heavy {
+                cost = Val001HelperCost::Heavy;
+                break;
+            }
+            if definition.opaque {
+                cost = Val001HelperCost::Unknown;
+            }
+            for call in &definition.calls {
+                match self.cost_at(call, depth + 1, resolving) {
+                    Val001HelperCost::Cheap => {}
+                    Val001HelperCost::Heavy => {
+                        resolving.remove(name);
+                        return Val001HelperCost::Heavy;
+                    }
+                    Val001HelperCost::Unknown => cost = Val001HelperCost::Unknown,
+                }
+            }
+        }
+        resolving.remove(name);
+        cost
     }
 }
 
@@ -2371,12 +2608,39 @@ const VAL001_STORAGE_MUTATORS: &[&str] = &[
     "try_mutate_extant",
 ];
 
+/// A zero-based (line, column) source position.
+type Val001Position = (usize, usize);
+
+/// A local introduced by `let`, `if let`/`while let`, a `match` arm, a `for`
+/// pattern or a closure parameter, with the lexical region it is visible in.
+#[derive(Clone)]
 struct Val001Binding {
     name: String,
-    line: usize,
-    /// Produced by storage, pallet/config code, or an unanalysed macro; pure
-    /// arithmetic on arguments can move along with the guard that uses it.
-    computed: bool,
+    /// Visible from this position to the end of line `scope_end`.
+    visible_from: Val001Position,
+    scope_end: usize,
+    /// Initializer and later assignments, with the position each one's names
+    /// resolve at.
+    sources: Vec<(String, Val001Position)>,
+    /// Some source reads storage directly.
+    reads_storage: bool,
+    /// Lines where the binding receives a value from storage, pallet/config
+    /// code, or an unanalysed macro; pure arithmetic on arguments can move
+    /// along with the guard that uses it.
+    computed_at: Vec<usize>,
+    /// The bindings its sources reference.
+    deps: Vec<usize>,
+}
+
+fn val001_identifiers(source: &str) -> impl Iterator<Item = &str> {
+    source
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .filter(|token| {
+            token
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic() || ch == '_')
+        })
 }
 
 /// Per-function facts deciding whether a later guard could be hoisted above a
@@ -2385,9 +2649,6 @@ struct Val001Binding {
 struct Val001FunctionFacts {
     start: usize,
     end: usize,
-    /// Locals whose value (transitively) comes from a storage read, including
-    /// parameters of closures over storage values or passed to `try_mutate`.
-    storage_bindings: HashSet<String>,
     bindings: Vec<Val001Binding>,
     /// Bodies of closures that may run zero or many times. Closures passed to
     /// storage mutators run exactly once and are not recorded.
@@ -2397,21 +2658,61 @@ struct Val001FunctionFacts {
 }
 
 impl Val001FunctionFacts {
+    /// The innermost binding of `name` visible at `position`; `None` for
+    /// parameters, items and names that are not locals.
+    fn resolve(&self, name: &str, position: Val001Position) -> Option<usize> {
+        self.bindings
+            .iter()
+            .enumerate()
+            .filter(|(_, binding)| {
+                binding.name == name
+                    && binding.visible_from <= position
+                    && position.0 <= binding.scope_end
+            })
+            .max_by_key(|(_, binding)| binding.visible_from)
+            .map(|(index, _)| index)
+    }
+
+    fn link_dependencies(&mut self) {
+        for index in 0..self.bindings.len() {
+            let mut deps = Vec::new();
+            for (source, position) in &self.bindings[index].sources {
+                for name in val001_identifiers(source) {
+                    if let Some(dep) = self.resolve(name, *position) {
+                        if dep != index && !deps.contains(&dep) {
+                            deps.push(dep);
+                        }
+                    }
+                }
+            }
+            self.bindings[index].deps = deps;
+        }
+    }
+
     /// Whether the guard at `guard_line` is not an independent precondition
     /// of the read at `heavy_line`: it consumes storage-derived data, a value
     /// computed after the read, or it lives where it cannot be hoisted from.
+    /// Only bindings visible at the guard count, followed through aliases.
     fn guard_is_not_hoistable(&self, heavy_line: usize, guard_line: usize, guard: &str) -> bool {
-        let references = |name: &str| val001_references_binding(guard, name);
-        if self.storage_bindings.iter().any(|name| references(name)) {
-            return true;
-        }
-        if self.bindings.iter().any(|binding| {
-            binding.computed
-                && binding.line > heavy_line
-                && binding.line <= guard_line
-                && references(&binding.name)
-        }) {
-            return true;
+        let position = (guard_line, usize::MAX);
+        let mut pending = val001_identifiers(guard)
+            .filter_map(|name| self.resolve(name, position))
+            .collect::<Vec<_>>();
+        let mut seen = HashSet::new();
+        while let Some(index) = pending.pop() {
+            if !seen.insert(index) {
+                continue;
+            }
+            let binding = &self.bindings[index];
+            if binding.reads_storage
+                || binding
+                    .computed_at
+                    .iter()
+                    .any(|&line| line > heavy_line && line <= guard_line)
+            {
+                return true;
+            }
+            pending.extend(&binding.deps);
         }
         let within = |(start, end): (usize, usize), line: usize| start <= line && line <= end;
         if self
@@ -2429,13 +2730,11 @@ impl Val001FunctionFacts {
     }
 }
 
-fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val001FunctionFacts> {
-    struct Site {
-        names: Vec<String>,
-        source: String,
-        reads_storage: bool,
-    }
-
+fn val001_function_facts(
+    ast: &SynFile,
+    heavy_operations: &[String],
+    helpers: &Val001Helpers,
+) -> Vec<Val001FunctionFacts> {
     #[derive(Clone, Default)]
     struct ClosureContext {
         /// The call's source text without the closure argument.
@@ -2448,10 +2747,16 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
 
     struct BodyVisitor<'a> {
         heavy_operations: &'a [String],
+        helpers: &'a Val001Helpers,
         facts: Val001FunctionFacts,
-        sites: Vec<Site>,
         /// Closure argument context keyed by the closure's start position.
-        closure_context: HashMap<(usize, usize), ClosureContext>,
+        closure_context: HashMap<Val001Position, ClosureContext>,
+        /// Last lines of the enclosing blocks, innermost last.
+        scopes: Vec<usize>,
+        /// The end of the `if`/`while` body an `if let` condition binds into.
+        let_scope_end: Option<usize>,
+        /// `name = value` assignments, resolved once all bindings are known.
+        assignments: Vec<(String, Val001Position, String, Val001CallScan<'a>)>,
     }
 
     fn line_range<T: Spanned>(node: &T) -> (usize, usize) {
@@ -2462,29 +2767,64 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
         )
     }
 
-    fn position_key<T: Spanned>(node: &T) -> (usize, usize) {
+    fn start_position<T: Spanned>(node: &T) -> Val001Position {
         let start = node.span().start();
-        (start.line, start.column)
+        (start.line.saturating_sub(1), start.column)
     }
 
-    impl BodyVisitor<'_> {
-        fn record(&mut self, names: Vec<String>, source: &Expr, line: usize) {
+    fn end_position<T: Spanned>(node: &T) -> Val001Position {
+        let end = node.span().end();
+        (end.line.saturating_sub(1), end.column)
+    }
+
+    impl<'a> BodyVisitor<'a> {
+        fn scan(&self, expr: &Expr) -> Val001CallScan<'a> {
+            Val001CallScan::scan(expr, self.heavy_operations, Some(self.helpers))
+        }
+
+        fn current_scope_end(&self) -> usize {
+            self.scopes.last().copied().unwrap_or(self.facts.end)
+        }
+
+        /// Binds each of `names` with the facts of `binding`.
+        fn bind(&mut self, names: Vec<String>, binding: Val001Binding) {
+            for name in names {
+                self.facts.bindings.push(Val001Binding {
+                    name,
+                    ..binding.clone()
+                });
+            }
+        }
+
+        fn bind_expr(
+            &mut self,
+            pat: &Pat,
+            source: &Expr,
+            visible_from: Val001Position,
+            scope_end: usize,
+        ) {
+            let names = val001_pat_binding_names(pat);
             if names.is_empty() {
                 return;
             }
-            let scan = Val001CallScan::scan(source, self.heavy_operations);
-            for name in &names {
-                self.facts.bindings.push(Val001Binding {
-                    name: name.clone(),
-                    line,
-                    computed: scan.heavy || scan.opaque || scan.macro_call,
-                });
-            }
-            self.sites.push(Site {
+            let scan = self.scan(source);
+            let computed = scan.heavy || scan.opaque || scan.macro_call;
+            self.bind(
                 names,
-                source: compact_tokens(source),
-                reads_storage: scan.heavy,
-            });
+                Val001Binding {
+                    name: String::new(),
+                    visible_from,
+                    scope_end,
+                    sources: vec![(compact_tokens(source), start_position(source))],
+                    reads_storage: scan.heavy,
+                    computed_at: if computed {
+                        vec![visible_from.0]
+                    } else {
+                        Vec::new()
+                    },
+                    deps: Vec::new(),
+                },
+            );
         }
 
         fn register_closure_arguments<'e>(
@@ -2499,13 +2839,13 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
             for argument in arguments.clone() {
                 if !matches!(argument, Expr::Closure(_)) {
                     source.push_str(&compact_tokens(argument));
-                    reads_storage |= Val001CallScan::scan(argument, self.heavy_operations).heavy;
+                    reads_storage |= self.scan(argument).heavy;
                 }
             }
             for argument in arguments {
                 if let Expr::Closure(closure) = argument {
                     self.closure_context.insert(
-                        position_key(closure),
+                        start_position(closure),
                         ClosureContext {
                             source: source.clone(),
                             reads_storage,
@@ -2518,32 +2858,55 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
     }
 
     impl<'ast> Visit<'ast> for BodyVisitor<'_> {
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            self.scopes.push(line_range(block).1);
+            visit::visit_block(self, block);
+            self.scopes.pop();
+        }
+
         fn visit_local(&mut self, local: &'ast Local) {
             if let Some(init) = &local.init {
-                let line = span_line(local.span()).saturating_sub(1);
-                self.record(val001_pat_binding_names(&local.pat), &init.expr, line);
+                let scope_end = self.current_scope_end();
+                self.bind_expr(&local.pat, &init.expr, end_position(local), scope_end);
             }
             visit::visit_local(self, local);
         }
 
         fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
-            let line = span_line(expr.span()).saturating_sub(1);
-            self.record(val001_pat_binding_names(&expr.pat), &expr.expr, line);
+            let scope_end = self
+                .let_scope_end
+                .unwrap_or_else(|| self.current_scope_end());
+            self.bind_expr(&expr.pat, &expr.expr, end_position(expr), scope_end);
             visit::visit_expr_let(self, expr);
         }
 
+        fn visit_expr_assign(&mut self, expr: &'ast syn::ExprAssign) {
+            if let Expr::Path(path) = strip_expr_wrappers(&expr.left) {
+                if let Some(name) = path.path.get_ident() {
+                    let scan = self.scan(&expr.right);
+                    self.assignments.push((
+                        name.to_string(),
+                        start_position(expr),
+                        compact_tokens(&expr.right),
+                        scan,
+                    ));
+                }
+            }
+            visit::visit_expr_assign(self, expr);
+        }
+
         fn visit_expr_for_loop(&mut self, expr: &'ast ExprForLoop) {
-            let line = span_line(expr.span()).saturating_sub(1);
-            self.record(val001_pat_binding_names(&expr.pat), &expr.expr, line);
+            let (body_start, body_end) = line_range(&expr.body);
+            self.bind_expr(&expr.pat, &expr.expr, (body_start, 0), body_end);
             visit::visit_expr_for_loop(self, expr);
         }
 
         fn visit_expr_match(&mut self, expr: &'ast syn::ExprMatch) {
             let mut branches = Vec::new();
             for arm in &expr.arms {
-                let line = span_line(arm.span()).saturating_sub(1);
-                self.record(val001_pat_binding_names(&arm.pat), &expr.expr, line);
-                branches.push(line_range(arm));
+                let range = line_range(arm);
+                self.bind_expr(&arm.pat, &expr.expr, start_position(arm), range.1);
+                branches.push(range);
             }
             self.facts.branch_groups.push(branches);
             visit::visit_expr_match(self, expr);
@@ -2555,7 +2918,21 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
                 branches.push(line_range(else_branch));
             }
             self.facts.branch_groups.push(branches);
-            visit::visit_expr_if(self, expr);
+
+            let outer = self.let_scope_end.replace(line_range(&expr.then_branch).1);
+            self.visit_expr(&expr.cond);
+            self.let_scope_end = outer;
+            self.visit_block(&expr.then_branch);
+            if let Some((_, else_branch)) = &expr.else_branch {
+                self.visit_expr(else_branch);
+            }
+        }
+
+        fn visit_expr_while(&mut self, expr: &'ast syn::ExprWhile) {
+            let outer = self.let_scope_end.replace(line_range(&expr.body).1);
+            self.visit_expr(&expr.cond);
+            self.let_scope_end = outer;
+            self.visit_block(&expr.body);
         }
 
         fn visit_expr_call(&mut self, call: &'ast ExprCall) {
@@ -2576,8 +2953,7 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
         fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
             let method = call.method.to_string();
             let mutates_storage = VAL001_STORAGE_MUTATORS.contains(&method.as_str());
-            let receiver_reads_storage =
-                Val001CallScan::scan(&call.receiver, self.heavy_operations).heavy;
+            let receiver_reads_storage = self.scan(&call.receiver).heavy;
             self.register_closure_arguments(
                 format!("{}.{method}", compact_tokens(&call.receiver)),
                 call.args.iter(),
@@ -2590,7 +2966,7 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
         fn visit_expr_closure(&mut self, closure: &'ast syn::ExprClosure) {
             let context = self
                 .closure_context
-                .get(&position_key(closure))
+                .get(&start_position(closure))
                 .cloned()
                 .unwrap_or_default();
             let names = closure
@@ -2598,92 +2974,85 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
                 .iter()
                 .flat_map(val001_pat_binding_names)
                 .collect::<Vec<_>>();
-            let line = span_line(closure.span()).saturating_sub(1);
-            for name in &names {
-                self.facts.bindings.push(Val001Binding {
-                    name: name.clone(),
-                    line,
-                    computed: true,
-                });
-            }
-            if !names.is_empty() {
-                self.sites.push(Site {
-                    names,
-                    source: context.source,
+            let body = line_range(&closure.body);
+            self.bind(
+                names,
+                Val001Binding {
+                    name: String::new(),
+                    visible_from: start_position(&closure.body),
+                    scope_end: body.1,
+                    sources: vec![(context.source, start_position(closure))],
                     reads_storage: context.reads_storage,
-                });
-            }
+                    computed_at: vec![body.0],
+                    deps: Vec::new(),
+                },
+            );
             if !context.runs_once {
-                self.facts.deferred_closures.push(line_range(&closure.body));
+                self.facts.deferred_closures.push(body);
             }
             visit::visit_expr_closure(self, closure);
         }
     }
 
-    fn analyze(block: &syn::Block, heavy_operations: &[String]) -> Val001FunctionFacts {
+    fn analyze(
+        block: &syn::Block,
+        heavy_operations: &[String],
+        helpers: &Val001Helpers,
+    ) -> Val001FunctionFacts {
         let (start, end) = line_range(block);
         let mut visitor = BodyVisitor {
             heavy_operations,
+            helpers,
             facts: Val001FunctionFacts {
                 start,
                 end,
                 ..Val001FunctionFacts::default()
             },
-            sites: Vec::new(),
             closure_context: HashMap::new(),
+            scopes: Vec::new(),
+            let_scope_end: None,
+            assignments: Vec::new(),
         };
         visitor.visit_block(block);
 
-        // Propagate storage provenance through bindings until nothing changes.
-        let mut storage_bindings = HashSet::new();
-        loop {
-            let mut changed = false;
-            for site in &visitor.sites {
-                if site
-                    .names
-                    .iter()
-                    .all(|name| storage_bindings.contains(name))
-                {
-                    continue;
+        let mut facts = visitor.facts;
+        for (name, position, source, scan) in visitor.assignments {
+            if let Some(index) = facts.resolve(&name, position) {
+                let binding = &mut facts.bindings[index];
+                binding.sources.push((source, position));
+                binding.reads_storage |= scan.heavy;
+                if scan.heavy || scan.opaque || scan.macro_call {
+                    binding.computed_at.push(position.0);
                 }
-                let derived = site.reads_storage
-                    || storage_bindings
-                        .iter()
-                        .any(|name: &String| val001_references_binding(&site.source, name));
-                if derived {
-                    storage_bindings.extend(site.names.iter().cloned());
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
             }
         }
-        visitor.facts.storage_bindings = storage_bindings;
-        visitor.facts
+        facts.link_dependencies();
+        facts
     }
 
     struct FunctionVisitor<'a> {
         heavy_operations: &'a [String],
+        helpers: &'a Val001Helpers,
         functions: Vec<Val001FunctionFacts>,
     }
 
     impl<'ast> Visit<'ast> for FunctionVisitor<'_> {
         fn visit_item_fn(&mut self, item: &'ast ItemFn) {
             self.functions
-                .push(analyze(&item.block, self.heavy_operations));
+                .push(analyze(&item.block, self.heavy_operations, self.helpers));
             visit::visit_item_fn(self, item);
         }
 
         fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
             self.functions
-                .push(analyze(&item.block, self.heavy_operations));
+                .push(analyze(&item.block, self.heavy_operations, self.helpers));
             visit::visit_impl_item_fn(self, item);
         }
 
         fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
             if let Some(block) = &item.default {
-                self.functions.push(analyze(block, self.heavy_operations));
+                self.functions
+                    .push(analyze(block, self.heavy_operations, self.helpers));
             }
             visit::visit_trait_item_fn(self, item);
         }
@@ -2691,6 +3060,7 @@ fn val001_function_facts(ast: &SynFile, heavy_operations: &[String]) -> Vec<Val0
 
     let mut visitor = FunctionVisitor {
         heavy_operations,
+        helpers,
         functions: Vec::new(),
     };
     visitor.visit_file(ast);

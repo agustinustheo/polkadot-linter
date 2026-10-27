@@ -9,7 +9,7 @@ VAL001	substrate/frame/broker/src/utility_impls.rs	112	FP	manual	only guard afte
 VAL001	substrate/frame/delegated-staking/src/lib.rs	573	FP	manual	ensure! L576 checks existing_delegation bound by if-let on Delegation::get L575
 VAL001	substrate/frame/delegated-staking/src/lib.rs	611	FP	manual	ensure! L615-616 check delegation from Delegation::get L612
 VAL001	substrate/frame/election-provider-multi-block/src/signed/mod.rs	711	FP	manual	in sanity_check_round (L703): ensure! L718 runs inside the map closure over iter_prefix L711 and checks matches from SortedScores::get L713
-VAL001	substrate/frame/election-provider-multi-phase/src/unsigned.rs	206	FP	manual	ensure! L208 checks desired_targets from DesiredTargets::get L207
+VAL001	substrate/frame/election-provider-multi-phase/src/unsigned.rs	206	FP	manual	ensure! L208 checks desired_targets bound from DesiredTargets::get L207, a storage-derived value the VAL001 doc excludes as not argument-only; mine_solution is also off-chain miner code, reached only via do_synchronized_offchain_worker (lib.rs:1457) -> restore_or_compute_then_maybe_submit -> mine_checked_call -> mine_and_check, so it costs no on-chain weight or PoV
 VAL001	substrate/frame/identity/src/lib.rs	593	FP	manual	ensure!(not_other_sub) L598; not_other_sub (L596-597) is computed from SuperOf::get reads
 VAL001	substrate/frame/identity/src/lib.rs	1292	FP	manual	ensure!(who == authority_account) L1297; authority_account from AuthorityOf::get L1294
 VAL001	substrate/frame/message-queue/src/lib.rs	1438	FP	manual	in do_try_state (L1413); the guard L1441-1444 is itself BookStateFor::contains_key inside a while-let loop over bump_service_head
@@ -35,3 +35,9 @@ VAL001	substrate/frame/salary/src/lib.rs	250	FP	manual	guard L252 is itself !Cla
 VAL001	substrate/frame/staking/src/pallet/mod.rs	1998	FP	manual	MinNominatorBond::get L1998 is in the then-branch; ensure! L2003 is in the else-if branch and checks max_validator_count from MaxValidatorsCount::get L2001
 VAL001	substrate/frame/uniques/src/lib.rs	755	FP	manual	ensure! L758 checks collection_details.freezer from Collection::get L757
 VAL001	substrate/frame/uniques/src/lib.rs	787	FP	manual	ensure! L790 checks collection_details.admin from Collection::get L789
+VAL001	substrate/frame/broker/src/dispatchable_impls.rs	89	TP	manual	Leases::get L89 decodes the whole leases BoundedVec before ensure!(until > Self::current_timeslice()) L90; until is an argument and current_timeslice (utility_impls.rs:34-37) reads only the relay block number and T::TimeslicePeriod, so the guard can move above the read
+VAL001	polkadot/runtime/common/src/auctions/mod.rs	434	FP	manual	the later guard L447-450 is !T::Leaser::already_leased(..); Leaser = Slots in rococo/westend, whose already_leased reads Leases::<T>::get(para_id) (slots/mod.rs:490), a Vec costlier than the flagged AuctionInfo::get, so hoisting saves nothing
+VAL001	polkadot/runtime/common/src/claims/mod.rs	536	FP	manual	the ensure! guards L537-538 sit in the arms of match Signing::<T>::get(signer) L536 and depend on which arm the read selects
+VAL001	polkadot/runtime/common/src/paras_registrar/mod.rs	686	TP	manual	ActiveConfig::get L686 decodes the whole HostConfiguration before ensure!(validation_code.0.len() >= MIN_CODE_SIZE) L687, which uses only an argument and a constant
+VAL001	polkadot/runtime/parachains/src/hrmp.rs	1455	TP	manual	ActiveConfig::get L1455 precedes ensure!(proposed_max_capacity > 0) L1456; proposed_max_capacity is an argument
+VAL001	polkadot/runtime/parachains/src/paras/mod.rs	1486	TP	manual	ActiveConfig::get L1486 precedes ensure!(new_code.0.len() >= MIN_CODE_SIZE) L1488; new_code is an argument and MIN_CODE_SIZE a constant
