@@ -20,7 +20,7 @@ use syn::{
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::FileContext,
+    engine::{crate_root, FileContext},
     frame_model::{
         active_cfg_attr_args, active_cfg_attr_path_matches, collect_dispatchables,
         DispatchableOrigin,
@@ -2455,12 +2455,9 @@ thread_local! {
 
 impl Val001Helpers {
     fn for_file(ctx: &FileContext, ast: Option<&SynFile>, heavy_operations: &[String]) -> Self {
-        let crate_dir = fs::canonicalize(&ctx.path).ok().and_then(|path| {
-            path.ancestors()
-                .skip(1)
-                .find(|dir| dir.join("Cargo.toml").is_file())
-                .map(Path::to_path_buf)
-        });
+        let crate_dir = fs::canonicalize(&ctx.path)
+            .ok()
+            .and_then(|path| crate_root(&path).map(Path::to_path_buf));
         let Some(crate_dir) = crate_dir else {
             let mut index = Val001HelperIndex::default();
             if let Some(ast) = ast {

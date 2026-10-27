@@ -44,7 +44,7 @@ use syn::{
 use crate::{
     config::{Config, RuntimeConfigConfig},
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::FileContext,
+    engine::{crate_root, FileContext},
     rules::LintRule,
     syn_util::path_last_ident,
 };
@@ -92,12 +92,9 @@ fn crate_cache() -> &'static Mutex<HashMap<PathBuf, Arc<RuntimeCrate>>> {
 /// Locate the Cargo package owning `path`, or fall back to the file itself
 /// when no manifest exists (single-file fixtures).
 fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
-    let manifest_dir = ctx
-        .path
-        .ancestors()
-        .skip(1)
+    // An empty root is the working directory, outside the scanned package.
+    let manifest_dir = crate_root(&ctx.path)
         .filter(|dir| !dir.as_os_str().is_empty())
-        .find(|dir| dir.join("Cargo.toml").is_file())
         .map(Path::to_path_buf);
 
     // Fixtures and single files scanned outside any Cargo package.
