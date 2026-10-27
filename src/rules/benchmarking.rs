@@ -17,44 +17,9 @@ use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_root, FileContext},
-    frame_model::active_cfg_attr_path_matches,
     rules::LintRule,
+    syn_util::{has_attr, path_last_ident, span_line},
 };
-
-fn span_line(span: proc_macro2::Span) -> usize {
-    span.start().line
-}
-
-fn path_last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
-fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
-    let attr_segments = attr
-        .path()
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
-    attr_segments
-        .iter()
-        .map(String::as_str)
-        .eq(segments.iter().copied())
-        || attr_segments
-            .iter()
-            .map(String::as_str)
-            .rev()
-            .zip(segments.iter().rev().copied())
-            .all(|(actual, expected)| actual == expected)
-            && attr_segments.len() >= segments.len()
-        || active_cfg_attr_path_matches(attr, segments)
-}
-
-fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| attr_path_matches(attr, segments))
-}
 
 fn parse_ast(content: &str) -> Option<SynFile> {
     syn::parse_file(content).ok().or_else(|| {

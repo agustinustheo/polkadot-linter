@@ -5,7 +5,12 @@ use syn::{
     spanned::Spanned,
     visit::{self, Visit},
     Attribute, Expr, ExprCall, ExprMethodCall, ExprPath, File as SynFile, FnArg, ImplItem, Meta,
-    Pat, Token, Type,
+    Pat, Token,
+};
+
+use crate::syn_util::{
+    attr_expr, attr_path_matches, compact_tokens, expr_call_path, has_attr, is_masked_span,
+    path_last_ident, strip_expr_wrappers, type_contains_named,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,31 +371,6 @@ fn detect_origin(block: &syn::Block) -> DispatchableOrigin {
     }
 }
 
-fn attr_expr(attr: &Attribute) -> Option<Expr> {
-    attr.parse_args::<Expr>().ok()
-}
-
-fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
-    let attr_segments = attr
-        .path()
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
-    attr_segments
-        .iter()
-        .map(String::as_str)
-        .eq(segments.iter().copied())
-        || attr_segments
-            .iter()
-            .map(String::as_str)
-            .rev()
-            .zip(segments.iter().rev().copied())
-            .all(|(actual, expected)| actual == expected)
-            && attr_segments.len() >= segments.len()
-        || active_cfg_attr_path_matches(attr, segments)
-}
-
 /// Matches an attribute produced by a `cfg_attr` whose predicate is provably
 /// active in every Cargo configuration, without guessing feature values.
 pub fn active_cfg_attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
@@ -511,10 +491,6 @@ fn call_attr_has_weight_provider(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| attr_path_matches(attr, segments))
-}
-
 fn has_attr_ending_with(attrs: &[Attribute], segment: &str) -> bool {
     attrs.iter().any(|attr| {
         attr.path()
@@ -523,32 +499,6 @@ fn has_attr_ending_with(attrs: &[Attribute], segment: &str) -> bool {
             .map(|last| last.ident == segment)
             .unwrap_or(false)
     })
-}
-
-fn is_masked_span(mask: &[bool], span: Span) -> bool {
-    mask.get(span.start().line.saturating_sub(1))
-        .copied()
-        .unwrap_or(false)
-}
-
-fn path_last_ident(path: &syn::Path) -> Option<String> {
-    path.segments
-        .last()
-        .map(|segment| segment.ident.to_string())
-}
-
-fn expr_path(expr: &Expr) -> Option<&syn::Path> {
-    match expr {
-        Expr::Path(expr_path) => Some(&expr_path.path),
-        Expr::Group(group) => expr_path(&group.expr),
-        Expr::Paren(paren) => expr_path(&paren.expr),
-        Expr::Reference(reference) => expr_path(&reference.expr),
-        _ => None,
-    }
-}
-
-fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
-    expr_path(&expr_call.func)
 }
 
 fn pat_ident_name(pat: &Pat) -> Option<String> {
@@ -568,54 +518,4 @@ fn expr_root_ident(expr: &Expr) -> Option<String> {
         Expr::Field(field) => expr_root_ident(&field.base),
         _ => None,
     }
-}
-
-fn strip_expr_wrappers(mut expr: &Expr) -> &Expr {
-    loop {
-        expr = match expr {
-            Expr::Group(group) => &group.expr,
-            Expr::Paren(paren) => &paren.expr,
-            Expr::Reference(reference) => &reference.expr,
-            Expr::Cast(cast) => &cast.expr,
-            Expr::Try(expr_try) => &expr_try.expr,
-            _ => return expr,
-        };
-    }
-}
-
-fn compact_tokens<T: ToTokens>(node: &T) -> String {
-    node.to_token_stream()
-        .to_string()
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .collect()
-}
-
-fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
-    struct TypeNameVisitor<'a> {
-        names: &'a [&'a str],
-        found: bool,
-    }
-
-    impl<'ast> Visit<'ast> for TypeNameVisitor<'_> {
-        fn visit_type_path(&mut self, type_path: &'ast syn::TypePath) {
-            if type_path
-                .path
-                .segments
-                .last()
-                .map(|segment| self.names.iter().any(|name| segment.ident == *name))
-                .unwrap_or(false)
-            {
-                self.found = true;
-            }
-            visit::visit_type_path(self, type_path);
-        }
-    }
-
-    let mut visitor = TypeNameVisitor {
-        names,
-        found: false,
-    };
-    visitor.visit_type(ty);
-    visitor.found
 }
