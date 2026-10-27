@@ -34,6 +34,7 @@ use std::{
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 use quote::ToTokens;
 use syn::{
+    parse::Parser,
     spanned::Spanned,
     visit::{self, Visit},
     Attribute, Expr, File as SynFile, ImplItem, ImplItemType, Item, ItemConst, ItemImpl, ItemMacro,
@@ -571,6 +572,14 @@ fn is_non_production(attrs: &[Attribute]) -> bool {
     attrs_gate(attrs) != Gate::Production
 }
 
+/// `#` followed by a bracketed group, as found in macro input, is a
+/// non-production attribute.
+fn attr_tokens_non_production(tokens: &[TokenTree]) -> bool {
+    Attribute::parse_outer
+        .parse2(tokens.iter().cloned().collect())
+        .is_ok_and(|attrs| is_non_production(&attrs))
+}
+
 fn item_attrs(item: &Item) -> &[Attribute] {
     match item {
         Item::Const(item) => &item.attrs,
@@ -1072,24 +1081,39 @@ fn is_xcm_executor_impl(item_impl: &ItemImpl) -> bool {
 }
 
 /// Same-file `type Name = ...;` aliases, used to resolve generic arguments
-/// such as `XcmFeeManagerFromComponents<WaivedLocations, ..>`.
-fn type_aliases(file: &SynFile) -> HashMap<String, Type> {
-    struct Aliases(HashMap<String, Type>);
-    impl<'ast> Visit<'ast> for Aliases {
+/// such as `XcmFeeManagerFromComponents<WaivedLocations, ..>`. A name defined
+/// more than once with different right-hand sides (in different modules) is
+/// ambiguous: `None`.
+type Aliases = HashMap<String, Option<Type>>;
+
+fn type_aliases(file: &SynFile) -> Aliases {
+    struct Collector(Aliases);
+    impl<'ast> Visit<'ast> for Collector {
         fn visit_item_type(&mut self, item: &'ast ItemType) {
             if item.generics.params.is_empty() {
-                self.0.insert(item.ident.to_string(), (*item.ty).clone());
+                let ty = (*item.ty).clone();
+                self.0
+                    .entry(item.ident.to_string())
+                    .and_modify(|known| {
+                        if known.as_ref().is_some_and(|known| {
+                            known.to_token_stream().to_string() != ty.to_token_stream().to_string()
+                        }) {
+                            *known = None;
+                        }
+                    })
+                    .or_insert(Some(ty));
             }
         }
     }
-    let mut aliases = Aliases(HashMap::new());
+    let mut aliases = Collector(HashMap::new());
     aliases.visit_file(file);
     aliases.0
 }
 
 /// The type (after resolving same-file aliases) admits every location:
 /// `Everything`, or a tuple containing it (tuples of `Contains` are a union).
-fn contains_everything(ty: &Type, aliases: &HashMap<String, Type>, depth: usize) -> bool {
+/// An ambiguous alias may be `Everything`.
+fn contains_everything(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
     if depth > 8 {
         return false;
     }
@@ -1105,9 +1129,11 @@ fn contains_everything(ty: &Type, aliases: &HashMap<String, Type>, depth: usize)
             };
             ident == "Everything"
                 || (type_path(ty).is_some_and(|path| path.segments.len() == 1)
-                    && aliases
-                        .get(&ident)
-                        .is_some_and(|alias| contains_everything(alias, aliases, depth + 1)))
+                    && aliases.get(&ident).is_some_and(|alias| {
+                        alias
+                            .as_ref()
+                            .is_none_or(|alias| contains_everything(alias, aliases, depth + 1))
+                    }))
         }
     }
 }
@@ -1141,7 +1167,7 @@ fn type_text(ty: &Type) -> String {
 /// Every XCM fee finding in the production AST: kind, line, message.
 fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
     struct Visitor<'a> {
-        aliases: &'a HashMap<String, Type>,
+        aliases: &'a Aliases,
         findings: Vec<(XcmFeeFinding, usize, String)>,
         lines: HashSet<usize>,
     }
@@ -1405,9 +1431,9 @@ const WRAPPING_ORIGINS: &[(&str, usize)] = &[
 ];
 
 /// The origin is provably privileged. Known combinators are parsed
-/// recursively and same-file `type` aliases are resolved; any unknown or
-/// cross-file origin type is treated as permissionless.
-fn origin_is_privileged(ty: &Type, aliases: &HashMap<String, Type>, depth: usize) -> bool {
+/// recursively and same-file `type` aliases are resolved; any unknown,
+/// ambiguous or cross-file origin type is treated as permissionless.
+fn origin_is_privileged(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
     if depth > 8 {
         return false;
     }
@@ -1435,17 +1461,14 @@ fn origin_is_privileged(ty: &Type, aliases: &HashMap<String, Type>, depth: usize
     } else if path.segments.len() == 1 && segment.arguments.is_empty() {
         aliases
             .get(&ident)
+            .and_then(Option::as_ref)
             .is_some_and(|alias| origin_is_privileged(alias, aliases, depth + 1))
     } else {
         false
     }
 }
 
-fn deposit_is_origin_gated(
-    item_impl: &ItemImpl,
-    deposit_type: &str,
-    aliases: &HashMap<String, Type>,
-) -> bool {
+fn deposit_is_origin_gated(item_impl: &ItemImpl, deposit_type: &str, aliases: &Aliases) -> bool {
     let Some(origin) = gating_origin(deposit_type) else {
         return false;
     };
@@ -1463,17 +1486,13 @@ fn parameter_type_consts(tokens: TokenStream) -> Vec<(String, usize, bool)> {
         .filter_map(|declaration| {
             let mut index = 0;
             let mut masked = false;
-            while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(group))) =
+            while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(_))) =
                 (declaration.get(index), declaration.get(index + 1))
             {
                 if punct.as_char() != '#' {
                     break;
                 }
-                if let Ok(attrs) =
-                    syn::parse_str::<syn::DeriveInput>(&format!("#[{}] struct S;", group.stream()))
-                {
-                    masked |= is_non_production(&attrs.attrs);
-                }
+                masked |= attr_tokens_non_production(&declaration[index..index + 2]);
                 index += 2;
             }
             let rest = &declaration[index..];
@@ -1540,7 +1559,7 @@ impl LintRule for ZeroDepositConfig {
         struct Collector<'a> {
             zero_items: &'a mut Vec<(String, usize)>,
             config_impl_hits: Vec<(String, usize)>,
-            aliases: &'a HashMap<String, Type>,
+            aliases: &'a Aliases,
         }
         impl<'ast> Visit<'ast> for Collector<'_> {
             fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
@@ -1702,16 +1721,13 @@ fn construct_runtime_entries(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
         .split(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ','))
         .filter(|entry| {
             let mut index = 0;
-            while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(group))) =
+            while let (Some(TokenTree::Punct(punct)), Some(TokenTree::Group(_))) =
                 (entry.get(index), entry.get(index + 1))
             {
                 if punct.as_char() != '#' {
                     break;
                 }
-                let gated =
-                    syn::parse_str::<syn::DeriveInput>(&format!("#[{}] struct S;", group.stream()))
-                        .is_ok_and(|attrs| is_non_production(&attrs.attrs));
-                if gated {
+                if attr_tokens_non_production(&entry[index..index + 2]) {
                     return false;
                 }
                 index += 2;

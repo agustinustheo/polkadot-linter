@@ -8722,3 +8722,24 @@ define_benchmarks!(\n    [pallet_balances, Balances]\n    [polkadot_runtime_para
     let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
     assert_eq!(rtc_lines(&diags, "RTC002"), vec![3], "{diags:?}");
 }
+
+#[test]
+fn rtc_rules_treat_aliases_redefined_in_nested_modules_as_ambiguous() {
+    // RTC003: the outer waiver is `Everything`; a nested `Nothing` must not
+    // hide it.
+    let xcm = "construct_runtime!(pub enum Runtime { System: frame_system = 0 });\n\
+type WaivedLocations = Everything;\n\
+impl xcm_executor::Config for XcmConfig {\n    type FeeManager = XcmFeeManagerFromComponents<WaivedLocations, ()>;\n}\n\
+mod nested {\n    type WaivedLocations = Nothing;\n}\n";
+    let diags = check_fixture("runtime/src/xcm_config.rs", xcm);
+    assert_eq!(rtc_lines(&diags, "RTC003"), vec![4], "{diags:?}");
+
+    // RTC004: the outer origin is signed; a nested `EnsureRoot` must not
+    // exempt the zero deposit.
+    let lib = "construct_runtime!(pub enum Runtime { Referenda: pallet_referenda = 1 });\n\
+type SubmissionOrigin = EnsureSigned<AccountId>;\n\
+impl pallet_referenda::Config for Runtime {\n    type SubmitOrigin = SubmissionOrigin;\n    type SubmissionDeposit = ConstU128<0>;\n}\n\
+mod nested {\n    type SubmissionOrigin = EnsureRoot<AccountId>;\n}\n";
+    let diags = check_fixture("runtime/src/lib.rs", lib);
+    assert_eq!(rtc_lines(&diags, "RTC004"), vec![5], "{diags:?}");
+}
