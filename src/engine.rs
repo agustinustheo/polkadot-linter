@@ -1,4 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    any::{Any, TypeId},
+    cell::RefCell,
+    collections::HashMap,
+    hash::Hash,
+    path::{Path, PathBuf},
+};
 
 use syn::File as SynFile;
 use walkdir::WalkDir;
@@ -64,7 +70,7 @@ impl LintEngine {
         no_default_features: bool,
         features: &[String],
     ) -> Vec<Diagnostic> {
-        let _benchmark_cache = rules::benchmarking::ScanCache::begin();
+        let _scan_cache = ScanCache::begin();
         let mut diagnostics = Vec::new();
         let project_model =
             ProjectModel::discover_with_features(root, no_default_features, features);
@@ -222,6 +228,55 @@ pub(crate) fn crate_root(path: &Path) -> Option<&Path> {
     path.parent()?
         .ancestors()
         .find(|dir| dir.join("Cargo.toml").is_file())
+}
+
+thread_local! {
+    static SCAN_CACHES: RefCell<Option<HashMap<TypeId, Box<dyn Any>>>> = const { RefCell::new(None) };
+}
+
+// Cache only for an engine scan, so subsequent scans observe filesystem and
+// configuration changes. proc_macro2 tokens remain on the scanning thread.
+struct ScanCache;
+impl ScanCache {
+    fn begin() -> Self {
+        SCAN_CACHES.with(|caches| *caches.borrow_mut() = Some(HashMap::new()));
+        Self
+    }
+}
+impl Drop for ScanCache {
+    fn drop(&mut self) {
+        SCAN_CACHES.with(|caches| *caches.borrow_mut() = None);
+    }
+}
+
+/// Memoises `load(key)` for the current engine scan; outside a scan nothing
+/// is cached. Each `(K, V)` pair is a separate cache, and `load` may itself
+/// use other scan caches.
+pub(crate) fn scan_cached<K, V>(key: K, load: impl FnOnce(&K) -> V) -> V
+where
+    K: Eq + Hash + 'static,
+    V: Clone + 'static,
+{
+    let cached = SCAN_CACHES.with(|caches| {
+        let caches = caches.borrow();
+        let cache = caches.as_ref()?.get(&TypeId::of::<HashMap<K, V>>())?;
+        cache.downcast_ref::<HashMap<K, V>>()?.get(&key).cloned()
+    });
+    if let Some(value) = cached {
+        return value;
+    }
+    let value = load(&key);
+    SCAN_CACHES.with(|caches| {
+        if let Some(caches) = caches.borrow_mut().as_mut() {
+            let cache = caches
+                .entry(TypeId::of::<HashMap<K, V>>())
+                .or_insert_with(|| Box::new(HashMap::<K, V>::new()));
+            if let Some(cache) = cache.downcast_mut::<HashMap<K, V>>() {
+                cache.insert(key, value.clone());
+            }
+        }
+    });
+    value
 }
 
 fn compile_patterns(patterns: &[String]) -> Result<Vec<glob::Pattern>, glob::PatternError> {
