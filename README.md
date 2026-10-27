@@ -135,6 +135,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
   SEM002 = true
   SEM003 = true
   SEM004 = true
+  SEM007 = true  # only if you depend on sp-debug-derive >= 15
   SEM012 = true
   TST003 = true
   ```

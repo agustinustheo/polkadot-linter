@@ -44,3 +44,28 @@ fn benchmark_labels_name_syntax_engine_rules() {
     assert!(files > 0, "no label files in {}", labels_dir.display());
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 }
+
+#[test]
+fn all_rules_config_enables_every_rule() {
+    let config = polkadot_linter::config::Config::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("config/all-rules.toml"),
+    )
+    .expect("config/all-rules.toml is valid");
+    // With no [rules.enabled] entries, all_rules() registers every source rule.
+    let mut unfiltered = config.clone();
+    unfiltered.rules.enabled.clear();
+    let source_ids = polkadot_linter::rules::all_rules(&unfiltered)
+        .into_iter()
+        .map(|rule| rule.id().to_string());
+    let compiler_ids = polkadot_linter::rules::COMPILER_BACKED_RULE_IDS
+        .iter()
+        .map(|id| id.to_string());
+    let disabled = source_ids
+        .chain(compiler_ids)
+        .filter(|id| !config.rule_enabled(id))
+        .collect::<Vec<_>>();
+    assert!(
+        disabled.is_empty(),
+        "config/all-rules.toml leaves {disabled:?} disabled"
+    );
+}
