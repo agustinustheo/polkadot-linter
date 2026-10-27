@@ -14,10 +14,11 @@ source-rule corpus baseline check, preceded by
 `scripts/check-labeled-findings.sh --self-test`.
 
 The checker fails when a scanned root produces no findings at all, when a
-label file has no rows, or when a row names an unknown rule, a compiler-backed
-rule (those never run under `--syntax-only`), a non-canonical path (`./`,
-`../`), a line past the end of the file, or a `(rule_id, path, line)` already
-labeled in any file.
+label file has no rows, or when a row has a non-canonical path (`./`, `../`),
+a line past the end of the file, or a `(rule_id, path, line)` already labeled
+in any file. `tests/labels_test.rs` (run by `cargo test`) rejects rows naming
+an unknown rule or a compiler-backed rule (those never run under
+`--syntax-only`).
 
 ## Format
 
