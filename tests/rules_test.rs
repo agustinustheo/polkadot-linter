@@ -731,6 +731,33 @@ pub fn rebinding(amount: u32, key: u32) -> DispatchResult {
 }
 
 #[test]
+fn val001_reassignment_consumes_the_value_it_replaces() {
+    // The right-hand side of a reassignment reads the value from before it.
+    let code = r#"
+pub fn reassigned(amount: u32, key: u32) -> DispatchResult {
+    let mut item = Items::<T>::get(key);
+    item = item.checked_add(1).ok_or(Error::<T>::Overflow)?;
+    ensure!(amount > 0, Error::<T>::Zero);
+    consume(item);
+    Ok(())
+}
+
+pub fn rebound(amount: u32, key: u32) -> DispatchResult {
+    let mut item = Items::<T>::get(key);
+    let updated = item.checked_add(1).ok_or(Error::<T>::Overflow)?;
+    ensure!(amount > 0, Error::<T>::Zero);
+    consume(updated);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        val001_lines(&diags).is_empty(),
+        "a reassignment consuming the read closes the validation-order window: {diags:?}"
+    );
+}
+
+#[test]
 fn val001_follows_free_helpers_to_storage() {
     let code = r#"
 fn read_limit(key: u32) -> u32 { Limits::<T>::get(key) }
