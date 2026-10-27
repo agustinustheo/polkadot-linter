@@ -2268,7 +2268,7 @@ impl frame_support::traits::BuildGenesisConfig for Genesis {
     fn build(&self) { genesis_only(); shared_with_runtime(); exported_api(None); }
 }
 fn genesis_only() -> u8 { None::<u8>.unwrap() }
-pub fn shared_with_runtime() -> u8 { None::<u8>.unwrap() } // SEC008-positive
+pub(crate) fn shared_with_runtime() -> u8 { None::<u8>.unwrap() } // SEC008-positive
 #[pallet::call_index(20)] #[pallet::weight(1)]
 pub fn runtime_path() { shared_with_runtime(); }
 pub fn exported_api(value: Option<u8>) -> u8 { value.unwrap() } // SEC008-positive
@@ -2303,6 +2303,7 @@ impl frame_support::traits::OnRuntimeUpgrade for Upgrade {
     fn on_runtime_upgrade() { upgrade_only(); migration::shared(); }
 }
 fn upgrade_only() {
+    let _ = [1u64].map(|n| frame_support::weights::RuntimeDbWeight.reads(n));
     for _ in frame_support::storage::types::StorageMap::iter() {}
     let _ = frame_support::weights::RuntimeDbWeight.reads(1);
 }

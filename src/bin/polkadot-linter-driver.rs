@@ -1689,7 +1689,11 @@ fn report_dbweight_missing_pov<'tcx>(
 ) {
     let mut reported_lines = HashSet::new();
     for def_id in tcx.hir_body_owners() {
-        if bookkeeping_bodies.contains(&def_id) {
+        let mut context = def_id;
+        while matches!(tcx.hir_body_owner_kind(context), BodyOwnerKind::Closure) {
+            context = tcx.local_parent(context);
+        }
+        if bookkeeping_bodies.contains(&context) {
             continue;
         }
         let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
@@ -5630,11 +5634,10 @@ fn debug_assert_call_site(tcx: TyCtxt<'_>, source_map: &SourceMap, span: Span) -
             break;
         }
         let expansion = provenance.ctxt().outer_expn_data();
-        if expansion
-            .macro_def_id
-            .is_some_and(|id| tcx.crate_name(id.krate).as_str() == "frame_support")
-            && matches!(expansion.kind, ExpnKind::Macro(_, name) if name.as_str().starts_with("defensive"))
-        {
+        if expansion.macro_def_id.is_some_and(|id| {
+            tcx.crate_name(id.krate).as_str() == "frame_support"
+                && tcx.item_name(id).as_str().starts_with("defensive")
+        }) {
             return None;
         }
         provenance = expansion.call_site;
