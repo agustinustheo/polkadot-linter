@@ -52,6 +52,33 @@ pub fn validate_before_write(origin: bool) -> Result<(), ()> {
     frame_support::storage::types::StorageValue::put(1);
     Ok(())
 }
+pub fn validate_write_argument(origin: bool) -> Result<(), ()> {
+    frame_support::storage::types::StorageValue::put({ validate(origin)?; 1 });
+    Ok(())
+}
+
+pub fn sibling_branches(select: bool, origin: bool) -> Result<(), ()> {
+    if select {
+        frame_support::storage::types::StorageValue::put(1);
+    } else {
+        validate(origin)?;
+    }
+    Ok(())
+}
+
+pub fn sibling_match_arms(select: bool, origin: bool) -> Result<(), ()> {
+    match select {
+        true => frame_support::storage::types::StorageValue::put(1),
+        false => validate(origin)?,
+    }
+    Ok(())
+}
+
+pub fn validation_after_join(select: bool, origin: bool) -> Result<(), ()> {
+    if select { frame_support::storage::types::StorageValue::put(1); }
+    validate(origin)?;
+    Ok(())
+}
 RS
 
 cargo +nightly-2025-09-01 build \
@@ -73,5 +100,7 @@ echo "VAL003 validation-before-write findings: $valid_count"
 
 test "$write_count" -eq 1
 test "$valid_count" -eq 0
+# The original positive and the post-join positive remain; argument and sibling validations do not.
+test "$(jq '[.[] | select(.rule_id == "VAL003")] | length' "$OUTPUT")" -eq 2
 
 echo "rustc VAL003 resolves storage writes and fallible validation order"

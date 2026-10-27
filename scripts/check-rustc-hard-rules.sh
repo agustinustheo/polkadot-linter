@@ -2082,7 +2082,8 @@ test "$rustc_sec010_layered_count" = "0"
 test "$rustc_sec010_attribute_count" = "0"
 test "$rustc_sec010_local_hook_count" = "0"
 test "$syn_sec011_count" = "0"
-test "$rustc_sec011_count" = "11"
+# Upgrade-only iteration is bookkeeping; runtime iteration positives remain above.
+test "$rustc_sec011_count" = "6"
 test "$rustc_sec011_bounded_iteration_count" = "0"
 test "$rustc_sec011_literal_bound_iteration_count" = "0"
 test "$rustc_sec011_dynamic_iteration_count" = "1"
@@ -2131,9 +2132,9 @@ test "$rustc_sec017_weight_accounted_payload_event_count" = "0"
 test "$rustc_sec017_weight_accounted_helper_payload_event_count" = "0"
 test "$rustc_sec017_mixed_weight_helper_payload_event_count" = "1"
 test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "7"
-test "$rustc_sec018_privileged_root_count" = "1"
-test "$rustc_sec018_privileged_config_count" = "1"
+test "$rustc_sec018_count" = "5"
+test "$rustc_sec018_privileged_root_count" = "0"
+test "$rustc_sec018_privileged_config_count" = "0"
 test "$rustc_sec018_unknown_config_origin_count" = "1"
 test "$rustc_sec018_comment_only_weight_input_count" = "1"
 test "$rustc_sec001_ignored_root_count" = "1"
@@ -2142,9 +2143,146 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "85"
+test "$rustc_filtered_count" = "78"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"
 test "$rustc_rule_filtered_sec009_count" = "8"
 test "$rustc_rule_filtered_other_count" = "0"
+
+# Run additional context regressions independently so existing positive counts stay explicit.
+NOISE_FIXTURE="$WORK_DIR/context.rs"
+cat > "$NOISE_FIXTURE" <<'RS'
+#![feature(register_tool)]
+#![register_tool(pallet)]
+pub mod frame_support {
+    pub mod traits { pub trait BuildGenesisConfig { fn build(&self); } }
+    pub mod storage {
+        pub fn with_storage_layer<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E> { f() }
+    }
+}
+fn check_len(values: &Vec<u8>) -> Result<(), ()> {
+    if values.len() > 32 { return Err(()); }
+    Ok(())
+}
+#[pallet::call_index(0)] #[pallet::weight(1)]
+pub fn wrapped_helper(values: Vec<u8>) -> Result<(), ()> {
+    frame_support::storage::with_storage_layer(|| {
+        let unrelated = 1;
+        let _ = unrelated;
+        check_len(&values)?;
+        for _ in values {}
+        Ok(())
+    })
+}
+#[pallet::call_index(1)] #[pallet::weight(1)]
+pub fn ignored_helper(values: Vec<u8>) -> Result<(), ()> {
+    let _ = check_len(&values);
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(2)] #[pallet::weight(1)]
+pub fn late_bound(values: Vec<u8>) -> Result<(), ()> {
+    for _ in &values {}
+    if values.len() > 32 { return Err(()); }
+    Ok(())
+}
+#[pallet::call_index(3)] #[pallet::weight(1)]
+pub fn conditional_bound(values: Vec<u8>, check: bool) -> Result<(), ()> {
+    if check { check_len(&values)?; }
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(4)] #[pallet::weight(1)]
+pub fn aliased_length(values: Vec<u8>) -> Result<(), ()> {
+    let count = values.len();
+    let limit = 32;
+    if count > limit { return Err(()); }
+    for _ in values {}
+    Ok(())
+}
+fn successful_early_exit(values: &Vec<u8>) -> Result<(), ()> {
+    if values.len() > 32 { return Ok(()); }
+    Ok(())
+}
+#[pallet::call_index(6)] #[pallet::weight(1)]
+pub fn helper_returns_success(values: Vec<u8>) -> Result<(), ()> {
+    successful_early_exit(&values)?;
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(5)] #[pallet::weight(1)]
+pub fn conditional_use_before_bound(values: Vec<u8>, use_values: bool) -> Result<(), ()> {
+    if use_values { for _ in &values {} }
+    if values.len() > 32 { return Err(()); }
+    Ok(())
+}
+pub trait Get { fn get() -> usize; }
+pub struct Limit;
+pub struct OtherLimit;
+impl Get for Limit { fn get() -> usize { 32 } }
+impl Get for OtherLimit { fn get() -> usize { 64 } }
+pub struct BoundedVec<T, S>(Vec<T>, core::marker::PhantomData<S>);
+impl<T, S> BoundedVec<T, S> {
+    fn len(&self) -> usize { self.0.len() }
+    fn try_push(&mut self, value: T) -> Result<(), u8> { self.0.push(value); Ok(()) }
+}
+pub fn spare_capacity(values: &mut BoundedVec<u8, Limit>) {
+    if values.len() < Limit::get() {
+        let _ = values.try_push(1);
+    }
+}
+pub fn capacity_reused(values: &mut BoundedVec<u8, Limit>) {
+    if values.len() < Limit::get() {
+        let _ = values.try_push(1);
+        let _ = values.try_push(2); // SEC007-positive
+    }
+}
+pub fn non_strict_capacity(values: &mut BoundedVec<u8, Limit>) {
+    if values.len() <= Limit::get() {
+        let _ = values.try_push(1); // SEC007-positive
+    }
+}
+pub fn unrelated_capacity(values: &mut BoundedVec<u8, Limit>) {
+    if values.len() < OtherLimit::get() {
+        let _ = values.try_push(1); // SEC007-positive
+    }
+}
+
+pub struct Genesis;
+impl frame_support::traits::BuildGenesisConfig for Genesis {
+    fn build(&self) { genesis_only(); shared_with_runtime(); }
+}
+pub fn genesis_only() -> u8 { None::<u8>.unwrap() }
+pub fn shared_with_runtime() -> u8 { None::<u8>.unwrap() } // SEC008-positive
+pub fn runtime_path() { shared_with_runtime(); }
+pub fn documented_proof(value: Result<u8, u8>) -> u8 {
+    value.expect("the input invariant is established; qed")
+}
+pub fn debug_only_panic(value: Option<u8>) {
+    debug_assert!(value.unwrap() == 1);
+}
+
+RS
+CONTEXT_JSON="$WORK_DIR/context.json"
+cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
+  --features rustc-driver --bin polkadot-linter-driver -- \
+  "$NOISE_FIXTURE" --crate-type lib --edition 2021 --emit metadata --out-dir "$RUSTC_TARGET_DIR" > "$CONTEXT_JSON"
+for name in wrapped_helper aliased_length; do
+  line="$(grep -n "pub fn $name(" "$NOISE_FIXTURE" | cut -d: -f1)"
+  test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 0
+done
+for name in ignored_helper late_bound conditional_bound conditional_use_before_bound helper_returns_success; do
+  line="$(grep -n "pub fn $name(" "$NOISE_FIXTURE" | cut -d: -f1)"
+  test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 2
+done
+
+# Capacity is proven once, strictly, against the vector's actual type bound.
+test "$(jq '[.[] | select(.rule_id == "SEC007")] | length' "$CONTEXT_JSON")" -eq 3
+while IFS=: read -r line _; do
+  test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC007" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
+done < <(grep -n 'SEC007-positive' "$NOISE_FIXTURE")
+
+test "$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$CONTEXT_JSON")" -eq 1
+line="$(grep -n 'SEC008-positive' "$NOISE_FIXTURE" | cut -d: -f1)"
+test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
