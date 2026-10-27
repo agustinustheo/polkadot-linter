@@ -8998,6 +8998,46 @@ fn findings_ignore_test_named_ancestors_above_scan_root() {
 }
 
 #[test]
+fn narrow_scans_classify_test_and_bench_files_from_the_crate_root() {
+    let dir = tempfile::tempdir().expect("temporary crate should be created");
+    let krate = dir.path().join("c");
+    let helper = "use std::collections::*;\npub fn check() {\n    let v: Vec<u32> = vec![1, 2];\n    for x in v.iter() { let _ = x; }\n    let r: Result<u32, ()> = Err(());\n    assert!(r.is_err());\n    let _ = r.unwrap_err();\n}\n";
+    for (file, content) in [
+        (
+            "Cargo.toml",
+            "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("src/lib.rs", "pub fn f() {}\n"),
+        (
+            "tests/main.rs",
+            "mod support;\n#[test]\nfn t() { support::check(); }\n",
+        ),
+        ("tests/support/mod.rs", helper),
+        ("benches/benchmarks/helper.rs", helper),
+    ] {
+        let path = krate.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).expect("dir should be created");
+        std::fs::write(path, content).expect("file should be written");
+    }
+    let engine =
+        polkadot_linter::engine::LintEngine::new(polkadot_linter::config::Config::default());
+    let rules = |target: &str| {
+        let mut ids = engine
+            .scan(&krate.join(target))
+            .into_iter()
+            .map(|d| d.rule_id)
+            .filter(|id| ["TST001", "SEM003", "SEM004"].contains(&id.as_str()))
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+    assert_eq!(rules("tests"), ["TST001"]);
+    assert_eq!(rules("tests/support/mod.rs"), ["TST001"]);
+    assert_eq!(rules("benches/benchmarks"), ["SEM003"]);
+    assert_eq!(rules(""), ["SEM003", "TST001"]);
+}
+
+#[test]
 fn rtc_rules_always_skip_test_runtime_packages() {
     let krate = rtc_runtime_crate("polkadot-test-runtime", &[("src/lib.rs", RTC_RUNTIME_LIB)]);
     let mut config = polkadot_linter::config::Config::default();

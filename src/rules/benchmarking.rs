@@ -16,7 +16,7 @@ use syn::{
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::FileContext,
+    engine::{crate_root, FileContext},
     frame_model::active_cfg_attr_path_matches,
     rules::LintRule,
 };
@@ -220,27 +220,12 @@ fn test_only(attrs: &[Attribute]) -> bool {
     })
 }
 
-fn crate_root(path: &Path) -> Option<&Path> {
-    if !path.is_file() {
-        return None;
-    }
-    path.parent()?
-        .ancestors()
-        .find(|dir| dir.join("Cargo.toml").is_file())
-}
-
 fn excluded_context(ctx: &FileContext) -> bool {
     use crate::project_model::SourceTargetKind;
-    // The engine's historical is_test_file flag examines absolute paths. Do
-    // our own crate-relative classification so a checkout under tests/ works.
-    let root = crate_root(&ctx.path);
-    let relative = root
-        .and_then(|root| ctx.path.strip_prefix(root).ok())
-        .unwrap_or(&ctx.rel_path);
-    crate::engine::LintEngine::is_test_file(relative, ctx.content)
-        || (!ctx.rel_path.is_absolute()
-            && crate::engine::LintEngine::is_test_file(&ctx.rel_path, ctx.content))
-        || (root.is_some() && relative.starts_with("examples"))
+    crate::engine::LintEngine::is_test_file(&ctx.classification_path(), ctx.content)
+        || crate_root(&ctx.path)
+            .and_then(|root| ctx.path.strip_prefix(root).ok())
+            .is_some_and(|relative| relative.starts_with("examples"))
         || ctx.source_target_kinds.iter().any(|kind| {
             matches!(
                 kind,
