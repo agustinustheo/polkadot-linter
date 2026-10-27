@@ -8968,8 +8968,7 @@ fn findings_ignore_test_named_ancestors_above_scan_root() {
         .expect("manifest should be written");
         std::fs::write(root.join("src/lib.rs"), RTC_RUNTIME_LIB).expect("lib should be written");
         std::fs::write(root.join("src/sem.rs"), &sem).expect("source should be written");
-        let engine =
-            polkadot_linter::engine::LintEngine::new(polkadot_linter::config::Config::default());
+        let engine = polkadot_linter::engine::LintEngine::new(all_rules_config());
         let mut findings = engine
             .scan(&root)
             .iter()
@@ -9019,8 +9018,7 @@ fn narrow_scans_classify_test_and_bench_files_from_the_crate_root() {
         std::fs::create_dir_all(path.parent().unwrap()).expect("dir should be created");
         std::fs::write(path, content).expect("file should be written");
     }
-    let engine =
-        polkadot_linter::engine::LintEngine::new(polkadot_linter::config::Config::default());
+    let engine = polkadot_linter::engine::LintEngine::new(all_rules_config());
     let rules = |target: &str| {
         let mut ids = engine
             .scan(&krate.join(target))
