@@ -815,7 +815,12 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                         .cloned()
                 })
                 .unwrap_or_default();
-            let companion_name = format!("{package_name}-benchmarking");
+            // frame-election-provider-support's companion covers phragmen/phragmms.
+            let companion_name = if package_name == "frame-election-provider-support" {
+                "pallet-election-provider-support-benchmarking".to_owned()
+            } else {
+                format!("{package_name}-benchmarking")
+            };
             let mut candidates = Vec::new();
             // Nested companions (e.g. session/benchmarking) and standalone
             // fixture crates need not be listed as workspace dependencies.
