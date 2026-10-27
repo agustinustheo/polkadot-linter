@@ -8958,6 +8958,31 @@ fn rtc_rules_skip_dev_runtimes_unless_opted_in() {
 }
 
 #[test]
+fn rtc_checks_unsaved_file_against_its_crate() {
+    // An editor buffer not yet on disk still belongs to the enclosing crate.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"review-runtime\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/lib.rs"),
+        "construct_runtime!(pub enum Runtime { Sudo: pallet_sudo = 15 });",
+    )
+    .unwrap();
+    let path = root.join("src/new_config.rs");
+    assert!(!path.exists());
+    let diags = check_fixture_path(
+        path,
+        "impl pallet_sudo::Config for Runtime { type WeightInfo = (); }",
+    );
+    assert_eq!(rtc_lines(&diags, "RTC001"), vec![1], "{diags:?}");
+}
+
+#[test]
 fn findings_ignore_test_named_ancestors_above_scan_root() {
     let sem = format!("use foo::*;\n{}", include_str!("fixtures/bad_sem003.rs"));
     let dir = tempfile::tempdir().expect("temporary parent should be created");
