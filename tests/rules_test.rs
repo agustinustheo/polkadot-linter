@@ -8710,3 +8710,15 @@ fn rtc_rules_lint_runtimes_switched_by_feature() {
     let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
     assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
 }
+
+#[test]
+fn rtc002_matches_benchmark_paths_by_whole_segments() {
+    let lib = "construct_runtime!(pub enum Runtime { Balances: pallet_balances = 10 });\n\
+impl custom_pallet_balances::Config for Runtime {\n    type WeightInfo = weights::custom_pallet_balances::WeightInfo<Runtime>;\n}\n\
+impl parachains_paras::Config for Runtime {\n    type WeightInfo = weights::polkadot_runtime_parachains_paras::WeightInfo<Runtime>;\n}\n\
+impl disputes::Config for Runtime {\n    type WeightInfo = weights::disputes::WeightInfo<Runtime>;\n}\n\
+define_benchmarks!(\n    [pallet_balances, Balances]\n    [polkadot_runtime_parachains::paras, Paras]\n    [polkadot_runtime_parachains::disputes, Disputes]\n);\n";
+    let krate = rtc_runtime_crate("segment-runtime", &[("src/lib.rs", lib)]);
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert_eq!(rtc_lines(&diags, "RTC002"), vec![3], "{diags:?}");
+}

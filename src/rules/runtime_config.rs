@@ -73,10 +73,10 @@ struct RuntimeCrate {
     /// The library target and the production modules reachable from it declare
     /// exactly one FRAME runtime.
     is_runtime: bool,
-    /// Benchmark entry paths (segments joined with `_`) collected from every
-    /// non-test `define_benchmarks!` reachable from the library target. `None`
-    /// when the runtime has no `define_benchmarks!` at all.
-    benchmarks: Option<HashSet<String>>,
+    /// Benchmark entry paths (`::` segments) collected from every non-test
+    /// `define_benchmarks!` reachable from the library target. `None` when the
+    /// runtime has no `define_benchmarks!` at all.
+    benchmarks: Option<HashSet<Vec<String>>>,
     /// Gate of every source file reachable from the library target through
     /// `mod` declarations, keyed by canonical path.
     modules: HashMap<PathBuf, Gate>,
@@ -911,13 +911,11 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
 // RTC002: runtime-local weights bound for a pallet missing from define_benchmarks!
 // ---------------------------------------------------------------------------
 
-/// Record the entry path of every `define_benchmarks!` invocation in the file,
-/// segments joined with `_` (`[polkadot_runtime_parachains::disputes, ..]` is
-/// `polkadot_runtime_parachains_disputes`). Returns whether any invocation was
-/// found.
-fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<String>) -> bool {
+/// Record the entry path segments of every `define_benchmarks!` invocation in
+/// the file. Returns whether any invocation was found.
+fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<Vec<String>>) -> bool {
     struct Collector<'a> {
-        keys: &'a mut HashSet<String>,
+        keys: &'a mut HashSet<Vec<String>>,
         found: bool,
     }
     impl<'ast> Visit<'ast> for Collector<'_> {
@@ -941,7 +939,7 @@ fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<String>) -> bool
                         })
                         .collect::<Vec<_>>();
                     if !segments.is_empty() {
-                        self.keys.insert(segments.join("_"));
+                        self.keys.insert(segments);
                     }
                 }
             }
@@ -953,17 +951,11 @@ fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<String>) -> bool
     collector.found
 }
 
-/// Two `_`-joined module paths name the same module when they are equal or
-/// one is a whole-segment suffix of the other (`runtime_parachains_paras` and
-/// `polkadot_runtime_parachains_paras`, written with and without the crate
-/// alias). `polkadot_runtime_parachains_disputes` does not match
-/// `polkadot_runtime_parachains_disputes_slashing`.
-fn joined_paths_match(a: &str, b: &str) -> bool {
-    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
-    long == short
-        || long
-            .strip_suffix(short)
-            .is_some_and(|prefix| prefix.ends_with('_'))
+/// Two module paths name the same module when one is a `::` segment suffix of
+/// the other (`parachains::paras` and `polkadot_runtime_parachains::paras`).
+/// `pallet_balances` does not match `custom_pallet_balances`.
+fn paths_match(a: &[String], b: &[String]) -> bool {
+    a.ends_with(b) || b.ends_with(a)
 }
 
 /// `weights::<module>::...` or `crate::weights::<module>::...`; returns the
@@ -1012,10 +1004,11 @@ impl LintRule for PalletMissingFromDefineBenchmarks {
                 let Some(module) = type_path(&item_type.ty).and_then(local_weights_module) else {
                     continue;
                 };
-                let pallet = pallet_segments.join("_");
-                let covered = benchmarks.iter().any(|key| {
-                    joined_paths_match(key, &pallet) || joined_paths_match(key, &module)
-                });
+                // Weight modules flatten the benchmarked path:
+                // `weights::polkadot_runtime_parachains_disputes`.
+                let covered = benchmarks
+                    .iter()
+                    .any(|key| paths_match(key, pallet_segments) || key.join("_") == module);
                 if covered {
                     continue;
                 }
