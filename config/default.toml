@@ -13,6 +13,10 @@ include = []
 [rules.severity]
 # TST002 (assert_ok on apply_extrinsic) is error-level because it silently hides failures
 TST002 = "error"
+# SDK sample: SEC005 5/5 and VAL002 3/3 findings were non-actionable.
+# Retain review hints without treating standard wrappers/config constants as warnings.
+SEC005 = "advisory"
+VAL002 = "advisory"
 
 # ---------------------------------------------------------------------------
 # Rule family: Validation order (VAL001)

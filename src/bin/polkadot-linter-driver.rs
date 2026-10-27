@@ -380,11 +380,36 @@ fn reachable_local_function_bodies(
     tcx: TyCtxt<'_>,
     fallible_entry_points_only: bool,
 ) -> Vec<LocalDefId> {
+    let mut genesis_helpers = HashSet::new();
+    let mut genesis_pending = tcx
+        .hir_body_owners()
+        .filter(|id| {
+            implemented_trait_id(tcx, id.to_def_id()).is_some_and(|trait_id| {
+                let path = tcx.def_path_str(trait_id);
+                is_frame_support_path(&path) && path.ends_with("::BuildGenesisConfig")
+            })
+        })
+        .collect::<Vec<_>>();
+    while let Some(id) = genesis_pending.pop() {
+        if !genesis_helpers.insert(id) {
+            continue;
+        }
+        if let Some(body) = tcx.hir_maybe_body_owned_by(id) {
+            let mut visitor = LocalCalleeVisitor {
+                typeck: tcx.typeck(id),
+                callees: HashSet::new(),
+                function_bindings: HashMap::new(),
+            };
+            visitor.visit_body(body);
+            genesis_pending.extend(visitor.callees);
+        }
+    }
     let mut pending = tcx
         .hir_body_owners()
         .filter(|def_id| {
             matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
                 && is_reachable_entry_point(tcx, *def_id)
+                && !genesis_helpers.contains(def_id)
                 && (!fallible_entry_points_only || returns_fallible(tcx, *def_id))
         })
         .collect::<Vec<_>>();
@@ -623,6 +648,9 @@ fn report_source_debug_assertions(
     diagnostics: &mut Vec<RustcDiagnostic>,
     reported_lines: &mut HashSet<(String, usize)>,
 ) {
+    if is_frame_generated_span(source_map, tcx.def_span(def_id)) {
+        return;
+    }
     let definition_span = tcx
         .def_ident_span(def_id.to_def_id())
         .unwrap_or_else(|| tcx.def_span(def_id));
@@ -639,6 +667,13 @@ fn report_source_debug_assertions(
     };
 
     for (line, column) in source_debug_assert_locations(&source[function_start..], start_line) {
+        if source
+            .lines()
+            .nth(line - 1)
+            .is_some_and(|text| text.contains("; qed"))
+        {
+            continue;
+        }
         if reported_lines.insert((source_path.clone(), line)) {
             diagnostics.push(RustcDiagnostic {
                 rule_id: "SEC002",
@@ -922,6 +957,9 @@ fn report_reachable_storage_iteration<'tcx>(
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     for def_id in reachable_bodies {
+        if is_bookkeeping_context(tcx, *def_id) {
+            continue;
+        }
         let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
             continue;
         };
@@ -1114,9 +1152,40 @@ impl<'tcx> Visitor<'tcx> for Val003Visitor<'_, 'tcx> {
             return;
         }
 
-        if let ExprKind::Call(callee, _) = expr.kind {
+        if let ExprKind::Call(callee, arguments) = expr.kind {
+            self.visit_expr(callee);
+            for argument in arguments {
+                self.visit_expr(argument);
+            }
             if is_frame_storage_write_call(self.tcx, self.typeck, callee) {
                 self.first_storage_write.get_or_insert(expr.span);
+            }
+            return;
+        }
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            let incoming = self.first_storage_write;
+            self.visit_expr(then_branch);
+            let then_write = self.first_storage_write;
+            self.first_storage_write = incoming;
+            if let Some(branch) = else_branch {
+                self.visit_expr(branch);
+            }
+            self.first_storage_write = then_write.or(self.first_storage_write);
+            return;
+        }
+        if let ExprKind::Match(scrutinee, arms, source) = expr.kind {
+            if !matches!(source, rustc_hir::MatchSource::TryDesugar(_)) {
+                self.visit_expr(scrutinee);
+                let incoming = self.first_storage_write;
+                let mut outgoing = incoming;
+                for arm in arms {
+                    self.first_storage_write = incoming;
+                    self.visit_arm(arm);
+                    outgoing = outgoing.or(self.first_storage_write);
+                }
+                self.first_storage_write = outgoing;
+                return;
             }
         }
 
@@ -1248,10 +1317,10 @@ fn is_frame_migration_storage_write_call<'tcx>(
             })
 }
 
-fn is_resolved_storage_version_check(
-    tcx: TyCtxt<'_>,
-    typeck: &rustc_middle::ty::TypeckResults<'_>,
-    expr: &Expr<'_>,
+fn is_resolved_storage_version_check<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    expr: &'tcx Expr<'tcx>,
 ) -> bool {
     let def_id = match expr.kind {
         ExprKind::MethodCall(_, _, _, _) => typeck.type_dependent_def_id(expr.hir_id),
@@ -1263,6 +1332,17 @@ fn is_resolved_storage_version_check(
         }
         _ => return false,
     };
+    if let ExprKind::Call(callee, _) = expr.kind {
+        if is_frame_storage_read_call(tcx, typeck, callee)
+            && tcx
+                .sess
+                .source_map()
+                .span_to_snippet(callee.span)
+                .is_ok_and(|text| text.split("::").any(|part| part.trim() == "StorageVersion"))
+        {
+            return true;
+        }
+    }
     def_id.is_some_and(|def_id| {
         let path = tcx.def_path_str(def_id);
         is_frame_support_path(&path)
@@ -1335,6 +1415,7 @@ fn report_discarded_results<'tcx>(
             typeck: tcx.typeck(def_id),
             diagnostics,
             reported_lines: &mut reported_lines,
+            push_capacity: HashSet::new(),
         };
         visitor.visit_body(body);
     }
@@ -1425,13 +1506,41 @@ struct Sec007Visitor<'a, 'tcx> {
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
+    push_capacity: HashSet<HirId>,
 }
 
 impl<'tcx> Visitor<'tcx> for Sec007Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
+            self.visit_expr(condition);
+            if let Some(binding) = bounded_vec_spare_capacity(self.tcx, self.typeck, condition) {
+                if let ExprKind::Block(block, _) = then_branch.kind {
+                    for (index, statement) in block.stmts.iter().enumerate() {
+                        if index == 0 {
+                            self.push_capacity.insert(binding);
+                        }
+                        self.visit_stmt(statement);
+                        self.push_capacity.remove(&binding);
+                    }
+                    if let Some(tail) = block.expr {
+                        self.visit_expr(tail);
+                    }
+                    if let Some(branch) = else_branch {
+                        self.visit_expr(branch);
+                    }
+                    return;
+                }
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+
     fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
         if matches!(local.pat.kind, PatKind::Wild)
             && local.init.is_some_and(|init| {
-                result_error_type(self.tcx, self.typeck.expr_ty(init))
+                !is_defensive_result_handler(self.tcx, self.typeck, init)
+                    && !matches!(init.kind, ExprKind::MethodCall(segment, receiver, _, _) if segment.ident.name.as_str() == "try_push" && local_binding_id(self.typeck, receiver).is_some_and(|id| self.push_capacity.contains(&id)))
+                    && result_error_type(self.tcx, self.typeck.expr_ty(init))
                     .is_some_and(|error_ty| !type_is_unit(self.tcx, error_ty))
             })
         {
@@ -1574,6 +1683,9 @@ fn report_dbweight_missing_pov<'tcx>(
 ) {
     let mut reported_lines = HashSet::new();
     for def_id in tcx.hir_body_owners() {
+        if is_bookkeeping_context(tcx, def_id) {
+            continue;
+        }
         let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
             continue;
         };
@@ -1680,7 +1792,8 @@ impl<'tcx> Visitor<'tcx> for Sem006Visitor<'_, 'tcx> {
             if matches!(
                 segment.ident.name.as_str(),
                 "reads" | "writes" | "reads_writes"
-            ) && !is_generated_weights_file(&file)
+            ) && !is_frame_generated_span(self.source_map, expr.span)
+                && !is_generated_weights_file(&file)
                 && type_is_runtime_db_weight(self.tcx, self.typeck.expr_ty(receiver))
                 && self.reported_lines.insert((file.clone(), line))
             {
@@ -1708,7 +1821,7 @@ struct Sem009Visitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for Sem009Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let ExprKind::If(condition, then_branch, _) = expr.kind {
+        if let ExprKind::If(condition, then_branch, None) = expr.kind {
             if let Some((storage_owner, keys)) = resolved_storage_call(
                 self.source_map,
                 self.tcx,
@@ -1724,7 +1837,11 @@ impl<'tcx> Visitor<'tcx> for Sem009Visitor<'_, 'tcx> {
                     keys,
                     found: false,
                 };
-                finder.visit_expr(then_branch);
+                if let ExprKind::Block(block, _) = then_branch.kind {
+                    if block.stmts.len() == 1 && block.expr.is_none() {
+                        finder.visit_stmt(&block.stmts[0]);
+                    }
+                }
 
                 if finder.found {
                     let (file, line, column) =
@@ -2613,7 +2730,7 @@ fn report_unbounded_public_vec_inputs<'tcx>(
         let Some(param) = body.params.get(idx) else {
             continue;
         };
-        if has_initial_terminating_vec_length_bound(tcx.typeck(def_id), body, param) {
+        if has_terminating_input_bound(tcx, def_id, body, param) {
             continue;
         }
         let (file, line, column) = span_location(source_map, param.span);
@@ -2629,40 +2746,229 @@ fn report_unbounded_public_vec_inputs<'tcx>(
     }
 }
 
-fn has_initial_terminating_vec_length_bound(
-    typeck: &rustc_middle::ty::TypeckResults<'_>,
-    body: &rustc_hir::Body<'_>,
-    param: &rustc_hir::Param<'_>,
+fn has_terminating_input_bound<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    body: &'tcx rustc_hir::Body<'tcx>,
+    param: &'tcx rustc_hir::Param<'tcx>,
+) -> bool {
+    parameter_is_bounded_before_use(tcx, def_id, body, param, true)
+}
+
+fn parameter_is_bounded_before_use<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: LocalDefId,
+    body: &'tcx rustc_hir::Body<'tcx>,
+    param: &'tcx rustc_hir::Param<'tcx>,
+    follow_helper: bool,
 ) -> bool {
     let Some(binding) = pattern_binding_ids(param.pat).into_iter().next() else {
         return false;
     };
-    let ExprKind::Block(block, _) = body.value.kind else {
-        return false;
+    let mut visitor = InputBoundVisitor {
+        tcx,
+        typeck: tcx.typeck(def_id),
+        binding,
+        bounds: HashSet::new(),
+        lengths: HashSet::new(),
+        bounded: false,
+        used: false,
+        follow_helper,
+        enforced: false,
     };
-    let mut literal_bindings = HashSet::new();
-    for statement in block.stmts {
-        match statement.kind {
-            StmtKind::Let(local) if local.init.is_some_and(integer_literal) => {
-                literal_bindings.extend(pattern_binding_ids(local.pat));
-            }
-            StmtKind::Expr(first) | StmtKind::Semi(first) => {
-                let ExprKind::If(condition, then_branch, None) = strip_drop_temps(first).kind
-                else {
-                    return false;
-                };
-                return expression_exits_current_function(then_branch)
-                    && condition_rejects_oversized_vec(
-                        typeck,
-                        condition,
-                        binding,
-                        &literal_bindings,
-                    );
-            }
-            StmtKind::Let(_) | StmtKind::Item(_) => return false,
+    visitor.visit_body(body);
+    visitor.bounded
+}
+
+struct InputBoundVisitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    binding: HirId,
+    bounds: HashSet<HirId>,
+    lengths: HashSet<HirId>,
+    bounded: bool,
+    used: bool,
+    follow_helper: bool,
+    enforced: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for InputBoundVisitor<'_, 'tcx> {
+    fn visit_block(&mut self, block: &'tcx Block<'tcx>) {
+        let incoming = self.enforced;
+        for statement in block.stmts {
+            self.enforced = false;
+            self.visit_stmt(statement);
         }
+        if let Some(tail) = block.expr {
+            self.enforced = incoming;
+            self.visit_expr(tail);
+        }
+        self.enforced = incoming;
     }
-    false
+
+    fn visit_body(&mut self, body: &rustc_hir::Body<'tcx>) {
+        let incoming = self.enforced;
+        self.enforced = true;
+        self.visit_expr(body.value);
+        self.enforced = incoming;
+    }
+
+    fn visit_local(&mut self, local: &'tcx LetStmt<'tcx>) {
+        if local.init.is_some_and(|init| {
+            expr_is_input_length(self.typeck, init, self.binding, &self.lengths)
+        }) {
+            self.lengths.extend(pattern_binding_ids(local.pat));
+        }
+        if local
+            .init
+            .is_some_and(|init| integer_literal_or_bound_binding(self.typeck, init, &self.bounds))
+        {
+            self.bounds.extend(pattern_binding_ids(local.pat));
+        }
+        intravisit::walk_local(self, local);
+    }
+
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, arguments) = expr.kind {
+            if is_frame_storage_layer_call(self.tcx, self.typeck, callee) {
+                for argument in arguments {
+                    if let ExprKind::Closure(closure) = argument.kind {
+                        self.visit_body(self.tcx.hir_body(closure.body));
+                    }
+                }
+                return;
+            }
+        }
+        if self.bounded || self.used {
+            return;
+        }
+        let expr = strip_drop_temps(expr);
+        if let ExprKind::If(condition, then_branch, None) = expr.kind {
+            if expression_exits_current_function(then_branch)
+                && (self.follow_helper || expression_returns_error(then_branch))
+                && condition_rejects_oversized_vec(
+                    self.typeck,
+                    condition,
+                    self.binding,
+                    &self.bounds,
+                    &self.lengths,
+                )
+            {
+                self.bounded = true;
+                return;
+            }
+        }
+        // Successful fallible conversion must produce a bounded collection, not just any TryInto.
+        if matches!(
+            expr.kind,
+            ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_))
+        ) && type_is_bounded_collection(self.tcx, self.typeck.expr_ty(expr))
+            && expr_references_tainted_binding(self.typeck, expr, &HashSet::from([self.binding]))
+        {
+            self.bounded = true;
+            return;
+        }
+        if matches!(
+            expr.kind,
+            ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_)) | ExprKind::Ret(_)
+        ) {
+            let incoming = self.enforced;
+            self.enforced = true;
+            intravisit::walk_expr(self, expr);
+            self.enforced = incoming;
+            return;
+        }
+        if let ExprKind::Assign(target, _, _) = expr.kind {
+            if let Some(id) = local_binding_id(self.typeck, target) {
+                self.lengths.remove(&id);
+                self.bounds.remove(&id);
+            }
+        }
+        if self.follow_helper && self.enforced {
+            if let ExprKind::Call(callee, arguments) = expr.kind {
+                if let Some(helper) = direct_local_callee(self.typeck, callee)
+                    .filter(|helper| returns_fallible(self.tcx, *helper))
+                {
+                    if let Some(body) = self.tcx.hir_maybe_body_owned_by(helper) {
+                        for (index, argument) in arguments.iter().enumerate() {
+                            if storage_key_binding(self.typeck, argument) == Some(self.binding)
+                                && body.params.get(index).is_some_and(|param| {
+                                    parameter_is_bounded_before_use(
+                                        self.tcx, helper, body, param, false,
+                                    )
+                                })
+                            {
+                                self.bounded = true;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // A length query is cheap; other uses must follow the guard.
+        if expr_is_vec_length_of_binding(self.typeck, expr, self.binding) {
+            return;
+        }
+        if local_binding_id(self.typeck, expr) == Some(self.binding) {
+            self.used = true;
+            return;
+        }
+        // A guard hidden inside a conditional does not dominate later uses.
+        if matches!(
+            expr.kind,
+            ExprKind::If(..) | ExprKind::Loop(..) | ExprKind::Closure(_)
+        ) {
+            let mut uses = InputUseVisitor {
+                typeck: self.typeck,
+                binding: self.binding,
+                found: false,
+            };
+            uses.visit_expr(expr);
+            self.used |= uses.found;
+            return;
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn expression_returns_error(expr: &Expr<'_>) -> bool {
+    match strip_drop_temps(expr).kind {
+        ExprKind::Ret(Some(value)) => {
+            matches!(value.kind, ExprKind::Call(callee, _) if qpath_call_name(callee).as_deref() == Some("Err"))
+        }
+        ExprKind::Block(block, _) => {
+            block.expr.is_some_and(expression_returns_error)
+                || block
+                    .stmts
+                    .last()
+                    .and_then(statement_expression)
+                    .is_some_and(expression_returns_error)
+        }
+        _ => false,
+    }
+}
+
+struct InputUseVisitor<'a, 'tcx> {
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    binding: HirId,
+    found: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for InputUseVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if expr_is_vec_length_of_binding(self.typeck, expr, self.binding)
+            || matches!(expr.kind, ExprKind::MethodCall(segment, receiver, [], _) if segment.ident.name.as_str() == "is_empty" && local_binding_id(self.typeck, receiver) == Some(self.binding))
+        {
+            return;
+        }
+        self.found |= local_binding_id(self.typeck, expr) == Some(self.binding);
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+fn type_is_bounded_collection(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), TyKind::Adt(adt, _) if is_bounded_storage_collection_type_name(&tcx.def_path_str(adt.did())))
 }
 
 fn condition_rejects_oversized_vec(
@@ -2670,12 +2976,25 @@ fn condition_rejects_oversized_vec(
     condition: &Expr<'_>,
     binding: HirId,
     literal_bindings: &HashSet<HirId>,
+    length_bindings: &HashSet<HirId>,
 ) -> bool {
     let condition = strip_drop_temps(condition);
     if let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
-        return vec_length_is_within_bound(typeck, inner, binding, literal_bindings);
+        return vec_length_is_within_bound(
+            typeck,
+            inner,
+            binding,
+            literal_bindings,
+            length_bindings,
+        );
     }
-    vec_length_exceeds_bound(typeck, condition, binding, literal_bindings)
+    vec_length_exceeds_bound(
+        typeck,
+        condition,
+        binding,
+        literal_bindings,
+        length_bindings,
+    )
 }
 
 fn vec_length_is_within_bound(
@@ -2683,15 +3002,16 @@ fn vec_length_is_within_bound(
     condition: &Expr<'_>,
     binding: HirId,
     literal_bindings: &HashSet<HirId>,
+    length_bindings: &HashSet<HirId>,
 ) -> bool {
     let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
         return false;
     };
     (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
-        && expr_is_vec_length_of_binding(typeck, lhs, binding)
+        && expr_is_input_length(typeck, lhs, binding, length_bindings)
         && integer_literal_or_bound_binding(typeck, rhs, literal_bindings))
         || (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
-            && expr_is_vec_length_of_binding(typeck, rhs, binding)
+            && expr_is_input_length(typeck, rhs, binding, length_bindings)
             && integer_literal_or_bound_binding(typeck, lhs, literal_bindings))
 }
 
@@ -2700,15 +3020,16 @@ fn vec_length_exceeds_bound(
     condition: &Expr<'_>,
     binding: HirId,
     literal_bindings: &HashSet<HirId>,
+    length_bindings: &HashSet<HirId>,
 ) -> bool {
     let ExprKind::Binary(operator, lhs, rhs) = strip_drop_temps(condition).kind else {
         return false;
     };
     (matches!(operator.node, BinOpKind::Gt | BinOpKind::Ge)
-        && expr_is_vec_length_of_binding(typeck, lhs, binding)
+        && expr_is_input_length(typeck, lhs, binding, length_bindings)
         && integer_literal_or_bound_binding(typeck, rhs, literal_bindings))
         || (matches!(operator.node, BinOpKind::Lt | BinOpKind::Le)
-            && expr_is_vec_length_of_binding(typeck, rhs, binding)
+            && expr_is_input_length(typeck, rhs, binding, length_bindings)
             && integer_literal_or_bound_binding(typeck, lhs, literal_bindings))
 }
 
@@ -2717,8 +3038,42 @@ fn integer_literal_or_bound_binding(
     expr: &Expr<'_>,
     literal_bindings: &HashSet<HirId>,
 ) -> bool {
-    integer_literal(expr)
-        || local_binding_id(typeck, expr).is_some_and(|binding| literal_bindings.contains(&binding))
+    match strip_drop_temps(expr).kind {
+        ExprKind::Cast(inner, _) => {
+            integer_literal_or_bound_binding(typeck, inner, literal_bindings)
+        }
+        ExprKind::Call(callee, []) => associated_call_name(callee).as_deref() == Some("get"),
+        ExprKind::Path(qpath)
+            if matches!(
+                typeck.qpath_res(&qpath, expr.hir_id),
+                Res::Def(
+                    rustc_hir::def::DefKind::Const | rustc_hir::def::DefKind::AssocConst,
+                    _
+                )
+            ) =>
+        {
+            true
+        }
+        _ => {
+            integer_literal(expr)
+                || local_binding_id(typeck, expr)
+                    .is_some_and(|binding| literal_bindings.contains(&binding))
+        }
+    }
+}
+
+fn expr_is_input_length(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    binding: HirId,
+    lengths: &HashSet<HirId>,
+) -> bool {
+    let expr = strip_drop_temps(expr);
+    if let ExprKind::Cast(inner, _) = expr.kind {
+        return expr_is_input_length(typeck, inner, binding, lengths);
+    }
+    expr_is_vec_length_of_binding(typeck, expr, binding)
+        || local_binding_id(typeck, expr).is_some_and(|id| lengths.contains(&id))
 }
 
 fn expr_is_vec_length_of_binding(
@@ -2758,6 +3113,16 @@ struct PrivilegedOriginVisitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for PrivilegedOriginVisitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if let ExprKind::Call(callee, arguments) = expr.kind {
+            if is_frame_storage_layer_call(self.tcx, self.typeck, callee) {
+                for argument in arguments {
+                    if let ExprKind::Closure(closure) = argument.kind {
+                        self.visit_body(self.tcx.hir_body(closure.body));
+                    }
+                }
+                return;
+            }
+        }
         let was_inside_try_desugar = self.inside_try_desugar;
         let was_conditional_depth = self.conditional_depth;
         self.inside_try_desugar |= matches!(
@@ -2819,15 +3184,9 @@ fn type_is_named_privileged_origin<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> boo
         TyKind::Adt(adt, _) => adt.did(),
         _ => return false,
     };
-    matches!(
-        tcx.item_name(def_id).as_str(),
-        "AdminOrigin"
-            | "ForceOrigin"
-            | "FounderSetOrigin"
-            | "GovernanceOrigin"
-            | "RelayChainOrigin"
-            | "RootOrigin"
-    )
+    let name = tcx.item_name(def_id);
+    name.as_str() == "EnsureRoot"
+        || (name.as_str().ends_with("Origin") && name.as_str() != "RuntimeOrigin")
 }
 
 fn report_missing_weight_for_unbounded_inputs<'tcx>(
@@ -2838,7 +3197,9 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
     parsed_weight_attributes: &[ParsedWeightAttribute],
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
-    if !tcx.local_visibility(def_id).is_public() {
+    if !tcx.local_visibility(def_id).is_public()
+        || has_privileged_origin_guard(tcx, tcx.typeck(def_id), body)
+    {
         return;
     }
     if !is_frame_dispatchable(tcx, def_id, source_map, parsed_weight_attributes) {
@@ -2867,7 +3228,7 @@ fn report_missing_weight_for_unbounded_inputs<'tcx>(
         let Some(param_name) = body_param_name(param) else {
             continue;
         };
-        if has_initial_terminating_vec_length_bound(tcx.typeck(def_id), body, param) {
+        if has_terminating_input_bound(tcx, def_id, body, param) {
             continue;
         }
         if weight_accounts_for_param(&weight_attributes.expression, &param_name) {
@@ -3127,6 +3488,9 @@ fn is_frame_dispatchable(
     source_map: &SourceMap,
     parsed_weight_attributes: &[ParsedWeightAttribute],
 ) -> bool {
+    if implemented_trait_id(tcx, def_id.to_def_id()).is_some() {
+        return false;
+    }
     let definition_span = tcx
         .def_ident_span(def_id.to_def_id())
         .unwrap_or_else(|| tcx.def_span(def_id));
@@ -3134,6 +3498,13 @@ fn is_frame_dispatchable(
     let definition_file = definition_location.file.name.prefer_local().to_string();
     let definition_line = definition_location.line;
     let function_name = tcx.item_name(def_id.to_def_id());
+    // FRAME call constructors reuse the dispatchable's source spans but have different names.
+    if source_map
+        .span_to_snippet(definition_span)
+        .is_ok_and(|name| name != function_name.as_str())
+    {
+        return false;
+    }
     if parsed_weight_attributes.iter().any(|attribute| {
         attribute.has_call_index
             && attribute.function_name == function_name.as_str()
@@ -3225,6 +3596,13 @@ struct Sec002Visitor<'a> {
 impl<'tcx> Visitor<'tcx> for Sec002Visitor<'_> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
         if let Some(call_site) = debug_assert_call_site(self.source_map, expr.span) {
+            if self
+                .source_map
+                .span_to_snippet(call_site)
+                .is_ok_and(|text| text.contains("; qed"))
+            {
+                return;
+            }
             let (file, line, column) = span_location(self.source_map, call_site);
             if self.reported_lines.insert((file.clone(), line)) {
                 self.diagnostics.push(RustcDiagnostic {
@@ -3486,6 +3864,9 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        if debug_assert_call_site(self.source_map, expr.span).is_some() {
+            return;
+        }
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
             self.visit_expr(condition);
             let incoming_bindings = self.known_unwrappable_bindings.clone();
@@ -3559,9 +3940,15 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
             }
         }
 
-        if let ExprKind::MethodCall(segment, receiver, _, _) = expr.kind {
+        if let ExprKind::MethodCall(segment, receiver, arguments, _) = expr.kind {
             let method = segment.ident.name.as_str();
             if matches!(method, "unwrap" | "expect")
+                && !is_frame_generated_span(self.source_map, expr.span)
+                && !arguments.iter().any(|arg| {
+                    self.source_map
+                        .span_to_snippet(arg.span)
+                        .is_ok_and(|text| text.contains("; qed"))
+                })
                 && !receiver_is_result_with_uninhabited_error(
                     self.tcx,
                     self.typeck.expr_ty(receiver),
@@ -4953,6 +5340,116 @@ fn implemented_trait_id(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<DefId> 
         .and_then(|impl_def_id| tcx.trait_id_of_impl(impl_def_id))
 }
 
+fn expansion_has_macro(mut span: Span, predicate: impl Fn(&str) -> bool) -> bool {
+    for _ in 0..32 {
+        if span.ctxt().is_root() {
+            break;
+        }
+        let expansion = span.ctxt().outer_expn_data();
+        if matches!(expansion.kind, ExpnKind::Macro(_, name) if predicate(name.as_str())) {
+            return true;
+        }
+        span = expansion.call_site;
+    }
+    false
+}
+
+fn is_frame_generated_span(source_map: &SourceMap, span: Span) -> bool {
+    // FRAME sometimes forwards an attribute's identifier span with a root syntax context.
+    // Inspect that source line as well as the expansion callsite; never skip weight expressions.
+    let site = span.source_callsite();
+    let location = source_map.lookup_char_pos(site.lo());
+    location
+        .file
+        .get_line(location.line.saturating_sub(1))
+        .is_some_and(|line| {
+            let line = line.trim_start();
+            [
+                "#[frame_support::pallet]",
+                "#[frame::pallet]",
+                "#[pallet::pallet]",
+                "#[pallet::hooks]",
+                "#[pallet::call]",
+                "#[pallet::event]",
+            ]
+            .iter()
+            .any(|prefix| line.starts_with(prefix))
+        })
+}
+
+fn is_bookkeeping_context(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+    let name = tcx
+        .opt_item_name(def_id.to_def_id())
+        .unwrap_or(Symbol::intern(""));
+    if matches!(
+        name.as_str(),
+        "try_state" | "do_try_state" | "pre_upgrade" | "post_upgrade" | "on_runtime_upgrade"
+    ) {
+        return true;
+    }
+    let path = tcx.def_path_str(def_id.to_def_id());
+    let (file, _, _) = span_location(tcx.sess.source_map(), tcx.def_span(def_id));
+    path.split("::")
+        .any(|part| matches!(part, "migration" | "migrations"))
+        || file.split('/').any(|part| {
+            matches!(
+                part,
+                "migration" | "migrations" | "migration.rs" | "migrations.rs"
+            )
+        })
+        || name.as_str().starts_with("migrate_")
+}
+
+fn bounded_vec_spare_capacity<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    typeck: &rustc_middle::ty::TypeckResults<'tcx>,
+    condition: &'tcx Expr<'tcx>,
+) -> Option<HirId> {
+    let ExprKind::Binary(op, lhs, rhs) = strip_drop_temps(condition).kind else {
+        return None;
+    };
+    if op.node != BinOpKind::Lt {
+        return None;
+    }
+    let lhs = match lhs.kind {
+        ExprKind::Cast(inner, _) => inner,
+        _ => lhs,
+    };
+    let ExprKind::MethodCall(segment, receiver, [], _) = lhs.kind else {
+        return None;
+    };
+    if segment.ident.name.as_str() != "len" {
+        return None;
+    }
+    let TyKind::Adt(adt, args) = typeck.expr_ty(receiver).peel_refs().kind() else {
+        return None;
+    };
+    if !is_bounded_vec_type_name(&tcx.def_path_str(adt.did())) {
+        return None;
+    }
+    let ExprKind::Call(callee, []) = rhs.kind else {
+        return None;
+    };
+    if associated_call_name(callee).as_deref() != Some("get") {
+        return None;
+    }
+    let bound = associated_call_receiver_type(typeck, callee)?;
+    if args.types().last()? != bound {
+        return None;
+    }
+    local_binding_id(typeck, receiver)
+}
+
+fn is_defensive_result_handler(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+) -> bool {
+    matches!(expr.kind, ExprKind::MethodCall(segment, _, _, _)
+        if matches!(segment.ident.name.as_str(), "defensive" | "defensive_proof")
+            && typeck.type_dependent_def_id(expr.hir_id).is_some_and(|id| is_frame_support_path(&tcx.def_path_str(id))))
+}
+
 fn is_reachable_entry_point(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
     let method_name = tcx.item_name(def_id.to_def_id());
     let name = method_name.as_str();
@@ -5019,6 +5516,13 @@ fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
 }
 
 fn debug_assert_call_site(source_map: &SourceMap, span: Span) -> Option<Span> {
+    if expansion_has_macro(span, |name| name.starts_with("defensive"))
+        || source_map
+            .span_to_snippet(span.source_callsite())
+            .is_ok_and(|text| text.contains("defensive!") || text.contains("defensive_assert!"))
+    {
+        return None;
+    }
     let mut call_site = span;
     for _ in 0..32 {
         if call_site.ctxt().is_root() {
