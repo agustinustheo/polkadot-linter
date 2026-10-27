@@ -1,5 +1,5 @@
 # mode	rule_id	package	package_dir	source_filter	syntax_count	rustc_count
-cli	SEC001	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	0
+cli	SEC001	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	2
 cli	SEC002	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	1
 cli	SEC003	pallet-xcm	polkadot/xcm/pallet-xcm	polkadot/xcm/pallet-xcm/src/lib.rs	0	1
 cli	SEC004	pallet-collective	substrate/frame/collective	substrate/frame/collective/src/lib.rs	0	0
@@ -30,7 +30,7 @@ wrapper	VAL002	pallet-revive	substrate/frame/revive	substrate/frame/revive/	-	1
 wrapper	VAL002	pallet-sassafras	substrate/frame/sassafras	substrate/frame/sassafras/	-	1
 wrapper	VAL002	pallet-staking-async	substrate/frame/staking-async	substrate/frame/staking-async/	-	1
 # Context regressions and all ten adjudicated true positives from the 15-pallet evaluation.
-cli	SEC001	pallet-assets	substrate/frame/assets	substrate/frame/assets/src/lib.rs	0	0
+cli	SEC001	pallet-assets	substrate/frame/assets	substrate/frame/assets/src/lib.rs	0	1
 cli	SEC001	pallet-identity	substrate/frame/identity	substrate/frame/identity/src/lib.rs	0	0
 cli	SEC001	pallet-nomination-pools	substrate/frame/nomination-pools	substrate/frame/nomination-pools/src/lib.rs	0	1
 cli	SEC001	pallet-preimage	substrate/frame/preimage	substrate/frame/preimage/src/lib.rs	0	1
@@ -47,11 +47,11 @@ cli	SEC007	pallet-scheduler	substrate/frame/scheduler	substrate/frame/scheduler/
 cli	SEC007	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/pallet/impls.rs	0	0
 cli	SEC007	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/slashing.rs	0	0
 cli	SEC008	pallet-assets	substrate/frame/assets	substrate/frame/assets/src/lib.rs	0	0
-cli	SEC008	pallet-balances	substrate/frame/balances	substrate/frame/balances/src/lib.rs	0	0
+cli	SEC008	pallet-balances	substrate/frame/balances	substrate/frame/balances/src/lib.rs	0	3
 cli	SEC008	pallet-nomination-pools	substrate/frame/nomination-pools	substrate/frame/nomination-pools/src/lib.rs	0	0
 cli	SEC008	pallet-proxy	substrate/frame/proxy	substrate/frame/proxy/src/lib.rs	0	0
 cli	SEC011	pallet-identity	substrate/frame/identity	substrate/frame/identity/src/migration.rs	0	0
-cli	SEC011	pallet-nomination-pools	substrate/frame/nomination-pools	substrate/frame/nomination-pools/src/lib.rs	0	0
+cli	SEC011	pallet-nomination-pools	substrate/frame/nomination-pools	substrate/frame/nomination-pools/src/lib.rs	0	3
 cli	SEC012	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/pallet/impls.rs	0	6
 cli	SEC016	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/migrations.rs	0	0
 cli	SEC016	pallet-treasury	substrate/frame/treasury	substrate/frame/treasury/src/migration.rs	0	1

@@ -1,3 +1,6 @@
+SEC001	substrate/frame/assets/src/lib.rs	1337	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	423	Public callable accepts an unbounded Vec parameter after type resolution
+SEC001	substrate/frame/multisig/src/lib.rs	488	Public callable accepts an unbounded Vec parameter after type resolution
 SEC001	substrate/frame/nomination-pools/src/lib.rs	2643	Public callable accepts an unbounded Vec parameter after type resolution
 SEC001	substrate/frame/preimage/src/lib.rs	200	Public callable accepts an unbounded Vec parameter after type resolution
 SEC002	substrate/frame/message-queue/src/lib.rs	855	`debug_assert!` expands into a debug-only panic path
@@ -13,8 +16,14 @@ SEC007	substrate/frame/nomination-pools/src/lib.rs	3392	Resolved Result value is
 SEC007	substrate/frame/preimage/src/lib.rs	412	Resolved Result value is discarded without handling its error
 SEC007	substrate/frame/preimage/src/lib.rs	425	Resolved Result value is discarded without handling its error
 SEC007	substrate/frame/preimage/src/lib.rs	535	Resolved Result value is discarded without handling its error
+SEC008	substrate/frame/balances/src/lib.rs	1347	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/balances/src/lib.rs	1351	`.expect()` can panic on a reachable error path
+SEC008	substrate/frame/balances/src/lib.rs	1355	`.expect()` can panic on a reachable error path
 SEC009	substrate/frame/collective/src/lib.rs	961	Fallible function uses raw arithmetic on resolved integer operands
 SEC009	substrate/frame/collective/src/lib.rs	1088	Fallible function uses raw arithmetic on resolved integer operands
+SEC011	substrate/frame/nomination-pools/src/lib.rs	3970	Callable iterates a resolved FRAME storage collection
+SEC011	substrate/frame/nomination-pools/src/lib.rs	4016	Callable iterates a resolved FRAME storage collection
+SEC011	substrate/frame/nomination-pools/src/lib.rs	4089	Callable iterates a resolved FRAME storage collection
 SEC012	substrate/frame/honzon/oracle/src/lib.rs	440	Resolved FRAME storage clear_prefix uses an unbounded deletion limit
 SEC012	substrate/frame/staking/src/pallet/impls.rs	804	Resolved FRAME storage clear_prefix uses an unbounded deletion limit
 SEC012	substrate/frame/staking/src/pallet/impls.rs	806	Resolved FRAME storage clear_prefix uses an unbounded deletion limit
