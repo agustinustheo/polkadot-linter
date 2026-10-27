@@ -1,10 +1,13 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
-use cargo_metadata::{CargoOpt, MetadataCommand, TargetKind};
+use cargo_metadata::{Dependency, Metadata, MetadataCommand, Package, TargetKind};
 use syn::{
     punctuated::Punctuated,
     visit_mut::{self, VisitMut},
@@ -42,49 +45,26 @@ impl ProjectModel {
     ) -> Option<Self> {
         let manifest_dir = find_manifest_dir(scan_root)?;
 
-        let mut metadata_command = MetadataCommand::new();
-        metadata_command.current_dir(&manifest_dir);
-        if no_default_features {
-            metadata_command.features(CargoOpt::NoDefaultFeatures);
-        }
-        if !features.is_empty() {
-            metadata_command.features(CargoOpt::SomeFeatures(features.to_vec()));
-        }
-        let metadata = metadata_command.exec().ok()?;
+        let metadata = match workspace_metadata(&manifest_dir) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!(
+                    "polkadot-linter: cargo metadata failed for {} ({error}); source analysis continues without Cargo target and feature data",
+                    manifest_dir.display()
+                );
+                return None;
+            }
+        };
 
         let rustc_cfgs = rustc_cfgs();
-        let resolved_features = metadata
-            .resolve
-            .as_ref()
-            .map(|resolve| {
-                resolve
-                    .nodes
-                    .iter()
-                    .map(|node| {
-                        (
-                            node.id.to_string(),
-                            node.features
-                                .iter()
-                                .map(ToString::to_string)
-                                .collect::<BTreeSet<_>>(),
-                        )
-                    })
-                    .collect::<HashMap<_, _>>()
-            })
-            .unwrap_or_default();
+        let resolved_features =
+            workspace_features(&metadata.packages, no_default_features, features);
 
         let mut file_target_kinds = HashMap::<PathBuf, Vec<SourceTargetKind>>::new();
         let mut proc_macro_source_roots = Vec::<PathBuf>::new();
         let mut file_cfgs = HashMap::<PathBuf, ActiveCfg>::new();
-        for package in metadata.packages {
-            let active_cfg = ActiveCfg::new(
-                &rustc_cfgs,
-                resolved_features
-                    .get(&package.id.to_string())
-                    .into_iter()
-                    .flatten()
-                    .cloned(),
-            );
+        for (package, features) in metadata.packages.into_iter().zip(resolved_features) {
+            let active_cfg = ActiveCfg::new(&rustc_cfgs, features);
             for target in package.targets {
                 let Ok(src_path) = target.src_path.into_std_path_buf().canonicalize() else {
                     continue;
@@ -368,6 +348,170 @@ fn find_manifest_dir(scan_root: &Path) -> Option<PathBuf> {
         .ancestors()
         .find(|dir| dir.join("Cargo.toml").exists())
         .map(Path::to_path_buf)
+}
+
+const METADATA_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Loads workspace-local Cargo metadata without resolving dependencies.
+///
+/// `--no-deps --offline` never touches the network or the package cache lock.
+/// Passing `--manifest-path` instead of changing into the project keeps rustup
+/// resolving the toolchain from the caller's directory, so scanning a project
+/// does not select (and auto-install) its `rust-toolchain.toml`; the output
+/// format is toolchain-independent.
+fn workspace_metadata(manifest_dir: &Path) -> Result<Metadata, String> {
+    let mut command = MetadataCommand::new();
+    command
+        .manifest_path(manifest_dir.join("Cargo.toml"))
+        .no_deps()
+        .other_options(vec!["--offline".to_string()]);
+    let mut child = command
+        .cargo_command()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let reader = thread::spawn(move || {
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).map(|_| output)
+    });
+
+    let deadline = Instant::now() + METADATA_TIMEOUT;
+    let status = loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("timed out after {}s", METADATA_TIMEOUT.as_secs()));
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    if !status.success() {
+        return Err(status.to_string());
+    }
+    let output = reader
+        .join()
+        .map_err(|_| "stdout reader panicked".to_string())?
+        .map_err(|error| error.to_string())?;
+    MetadataCommand::parse(output).map_err(|error| error.to_string())
+}
+
+/// Resolves the Cargo features of each workspace member (indexed like
+/// `packages`) the way `cargo metadata` unifies them across the workspace,
+/// following feature tables and dependency edges between workspace members.
+/// Features of external dependencies are never needed for source analysis.
+fn workspace_features(
+    packages: &[Package],
+    no_default_features: bool,
+    requested: &[String],
+) -> Vec<BTreeSet<String>> {
+    let member_by_dir = packages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, package)| Some((package.manifest_path.parent()?, index)))
+        .collect::<HashMap<_, _>>();
+    let member = |dependency: &Dependency| member_by_dir.get(dependency.path.as_deref()?).copied();
+    let alias = |dependency: &Dependency| {
+        dependency
+            .rename
+            .clone()
+            .unwrap_or_else(|| dependency.name.clone())
+    };
+
+    let mut queue = VecDeque::<(usize, String)>::new();
+    let enable_dependency = |queue: &mut VecDeque<(usize, String)>, dependency: &Dependency| {
+        if let Some(target) = member(dependency) {
+            if dependency.uses_default_features {
+                queue.push_back((target, "default".to_string()));
+            }
+            queue.extend(
+                dependency
+                    .features
+                    .iter()
+                    .map(|feature| (target, feature.clone())),
+            );
+        }
+    };
+
+    for (index, package) in packages.iter().enumerate() {
+        if !no_default_features {
+            queue.push_back((index, "default".to_string()));
+        }
+        for feature in requested.iter().flat_map(|features| {
+            features
+                .split([',', ' '])
+                .filter(|feature| !feature.is_empty())
+        }) {
+            let feature = match feature.split_once('/') {
+                Some((name, feature)) if name == package.name.as_str() => feature,
+                _ => feature,
+            };
+            queue.push_back((index, feature.to_string()));
+        }
+        for dependency in package.dependencies.iter().filter(|dep| !dep.optional) {
+            enable_dependency(&mut queue, dependency);
+        }
+    }
+
+    let mut enabled = vec![BTreeSet::<String>::new(); packages.len()];
+    let mut activated_dependencies = HashSet::<(usize, String)>::new();
+    let mut deferred_weak = HashMap::<(usize, String), Vec<String>>::new();
+    while let Some((index, item)) = queue.pop_front() {
+        let package = &packages[index];
+        let (dependency_name, dependency_feature, weak) = match item.split_once('/') {
+            Some((name, feature)) => match name.strip_suffix('?') {
+                Some(name) => (name, Some(feature), true),
+                None => (name, Some(feature), false),
+            },
+            None => match item.strip_prefix("dep:") {
+                Some(name) => (name, None, false),
+                None => match package.features.get(&item) {
+                    Some(items) => {
+                        if enabled[index].insert(item.clone()) {
+                            queue.extend(items.iter().map(|item| (index, item.clone())));
+                        }
+                        continue;
+                    }
+                    // A bare optional dependency name without an implicit feature.
+                    None => (item.as_str(), None, false),
+                },
+            },
+        };
+
+        if !weak && package.features.contains_key(dependency_name) {
+            queue.push_back((index, dependency_name.to_string()));
+        }
+        let dependencies = package
+            .dependencies
+            .iter()
+            .filter(|dependency| alias(dependency) == dependency_name);
+        let key = (index, dependency_name.to_string());
+        if !weak && activated_dependencies.insert(key.clone()) {
+            for dependency in dependencies
+                .clone()
+                .filter(|dependency| dependency.optional)
+            {
+                enable_dependency(&mut queue, dependency);
+            }
+            let deferred = deferred_weak.remove(&key).unwrap_or_default();
+            queue.extend(deferred.into_iter().map(|item| (index, item)));
+        }
+        let activated = activated_dependencies.contains(&key);
+        for dependency in dependencies {
+            if !activated && dependency.optional {
+                deferred_weak
+                    .entry(key.clone())
+                    .or_default()
+                    .push(item.clone());
+            } else if let (Some(feature), Some(target)) = (dependency_feature, member(dependency)) {
+                queue.push_back((target, feature.to_string()));
+            }
+        }
+    }
+    enabled
 }
 
 fn rustc_cfgs() -> BTreeSet<String> {

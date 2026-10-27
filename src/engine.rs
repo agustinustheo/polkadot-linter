@@ -298,4 +298,46 @@ pub fn custom_cfg_weight() {}
             "explicit Cargo features should activate matching source cfg_attr values"
         );
     }
+
+    #[test]
+    fn source_analysis_unifies_features_across_workspace_members() {
+        let dir = tempfile::tempdir().expect("temporary workspace should be created");
+        let write = |path: &str, contents: &str| {
+            let path = dir.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).expect("directory should be created");
+            fs::write(path, contents).expect("file should be written");
+        };
+        write(
+            "Cargo.toml",
+            "[workspace]\nmembers = [\"weights\", \"runtime\"]\nresolver = \"2\"\n",
+        );
+        write(
+            "weights/Cargo.toml",
+            "[package]\nname = \"weights\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nbenchmarks = []\n",
+        );
+        write(
+            "weights/src/lib.rs",
+            "#[cfg_attr(feature = \"benchmarks\", pallet::weight(Weight::zero()))]\npub fn weighted() {}\n",
+        );
+        write(
+            "runtime/Cargo.toml",
+            "[package]\nname = \"runtime\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nweights = { path = \"../weights\", optional = true }\n\n[features]\ndefault = [\"bench\"]\nbench = [\"weights?/benchmarks\", \"dep:weights\"]\n",
+        );
+        write("runtime/src/lib.rs", "");
+
+        let mut engine = LintEngine::new(Config::default());
+        engine.filter_rules(&["SEM011".to_string()]);
+
+        assert_eq!(
+            engine.scan(dir.path()).len(),
+            1,
+            "a member's feature enabled by another member must activate its cfg_attr"
+        );
+        assert!(
+            engine
+                .scan_with_cargo_features(dir.path(), true, &[])
+                .is_empty(),
+            "without default features nothing enables the dependency feature"
+        );
+    }
 }
