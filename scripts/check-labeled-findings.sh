@@ -7,7 +7,8 @@
 #   scripts/check-labeled-findings.sh [SDK_DIR] [LABELS_DIR]
 #   scripts/check-labeled-findings.sh --self-test
 #
-# LABELS_LINTER overrides the linter command (used by --self-test).
+# LABELS_LINTER overrides the linter command (used by --self-test). Rule IDs
+# are checked against the rule registry by tests/labels_test.rs.
 
 set -euo pipefail
 
@@ -76,9 +77,6 @@ EOF
   expect "no label rows" "label file without rows" "$hit"
   expect "canonical relative" "non-canonical path" "$hit" "VAL001${t}substrate/frame/./x/src/lib.rs${t}2${t}FP${t}manual${t}n"
   expect "canonical relative" "parent path segment" "$hit" "VAL001${t}substrate/frame/x/../x/src/lib.rs${t}2${t}FP${t}manual${t}n"
-  expect "unknown rule_id" "unknown rule_id" "$hit" "ZZZ999${t}$p${t}2${t}FP${t}manual${t}n"
-  expect "unknown rule_id" "unknown rule number" "$hit" "VAL999${t}$p${t}2${t}FP${t}manual${t}n"
-  expect "compiler-backed" "compiler-backed rule" "$hit" "SEC001${t}$p${t}2${t}FP${t}manual${t}n"
   expect "past the end" "line beyond end of file" "$hit" "VAL001${t}$p${t}4${t}FP${t}manual${t}n"
   expect "needs label FP" "scope: evidence on a TP" "$hit" "VAL001${t}$p${t}2${t}TP${t}scope:x${t}n"
   expect "duplicate of A.tsv" "duplicate across files" "$hit" \
@@ -115,21 +113,6 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 FINDINGS="$WORK_DIR/findings.tsv"
 : >"$FINDINGS"
 
-# Rules the syntax-only scan runs: every documented rule except the
-# compiler-backed ones, which only the rustc driver reports.
-RULES="$WORK_DIR/rules.txt"
-compiler_backed="$(sed -n '/COMPILER_BACKED_RULE_IDS/,/];/p' "$ROOT_DIR/src/rules/mod.rs" |
-  grep -oE '"[A-Z]+[0-9]+"' | tr -d '"')"
-for doc in "$ROOT_DIR"/docs/rules/*.md; do
-  id="$(basename "$doc" .md)"
-  [[ "$id" =~ ^[A-Z]+[0-9]+$ ]] || continue
-  if grep -qx "$id" <<<"$compiler_backed"; then
-    echo "$id compiler" >>"$RULES"
-  else
-    echo "$id syntax" >>"$RULES"
-  fi
-done
-
 # Validate every file before scanning. Rows are keyed across all files so a
 # label duplicated in two files is reported too.
 SEEN="$WORK_DIR/seen.tsv"
@@ -142,9 +125,8 @@ for labels in "${label_files[@]}"; do
     format_errors=$((format_errors + 1))
     continue
   fi
-  if ! awk -F'\t' -v name="$name" -v rules="$RULES" -v seen_file="$SEEN" '
+  if ! awk -F'\t' -v name="$name" -v seen_file="$SEEN" '
     BEGIN {
-      while ((getline line < rules) > 0) { split(line, r, " "); kind[r[1]] = r[2] }
       while ((getline line < seen_file) > 0) { split(line, s, "\t"); seen[s[1] FS s[2] FS s[3]] = s[4] }
     }
     NR == 1 { next }
@@ -152,8 +134,6 @@ for labels in "${label_files[@]}"; do
     NF != 6 { printf "error: %s:%d: expected 6 tab-separated fields, got %d\n", name, NR, NF; bad++; next }
     {
       rows++
-      if (!($1 in kind)) { printf "error: %s:%d: unknown rule_id %s\n", name, NR, $1; bad++ }
-      else if (kind[$1] != "syntax") { printf "error: %s:%d: %s is compiler-backed and never runs under --syntax-only\n", name, NR, $1; bad++ }
       if ($2 !~ /^[A-Za-z0-9_-][A-Za-z0-9_.-]*(\/[A-Za-z0-9_.-]+)*\.rs$/ || $2 ~ /(^|\/)\.\.?\//) {
         printf "error: %s:%d: path must be a canonical relative .rs path: %s\n", name, NR, $2; bad++
       }
