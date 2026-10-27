@@ -56,11 +56,11 @@ Counts are BEN001 / BEN002 / BEN003, with default syntax-only settings. Main
 (`562eee4`) and round one (`336d3f2`) were separately compiled from their exact
 committed sources and rescanned against the same pinned SDK.
 
-| Scan root | Main | Round one | Round two |
-| --- | --- | --- | --- |
-| substrate/frame | 388 / 328 / 259 | 16 / 195 / 67 | 16 / 197 / 72 |
-| cumulus/pallets | 0 / 19 / 11 | 0 / 6 / 10 | 0 / 6 / 10 |
-| polkadot/runtime/parachains | 0 / 41 / 0 | 0 / 25 / 0 | 0 / 25 / 0 |
+| Scan root | Main | Round one | Round two | Round three |
+| --- | --- | --- | --- | --- |
+| substrate/frame | 388 / 328 / 259 | 16 / 195 / 67 | 16 / 197 / 72 | 16 / 197 / 72 |
+| cumulus/pallets | 0 / 19 / 11 | 0 / 6 / 10 | 0 / 6 / 10 | 0 / 6 / 10 |
+| polkadot/runtime/parachains | 0 / 41 / 0 | 0 / 25 / 0 | 0 / 25 / 0 | 0 / 25 / 0 |
 
 Round-two FRAME changes: two BEN002 findings in example libraries are restored;
 eight BEN003 gaps in example libraries are restored; three nomination-pools
@@ -68,6 +68,16 @@ BEN003 FPs disappear because assertion arguments now expose the owning `Pools`
 call. No other findings change. Empty v1 verification rejection has no additional
 pinned-corpus impact. Companion discovery requires matching package names and declared ownership;
 arbitrary nested packages containing "benchmark" are rejected.
+
+Round three fixes sequential Call binding credit, custom library-root traversal,
+and function/block-local aliases. All three roots were rescanned with separately
+built main, round-two, and round-three binaries. Round-two and round-three finding
+sets match exactly by rule/file/line. Workspace dependency companion discovery
+was deleted; workspace dependencies remain only for ownership path resolution.
+Removing the `frame-` companion exception added two false positives:
+`frame-election-provider-support/src/weights.rs:48–49` declares `phragmen` and
+`phragmms`, covered by its `pallet-election-provider-support-benchmarking` companion
+at `benchmarking/src/inner.rs:64,84`. Retain that specific crate exception.
 
 Scan-scoped caching memoizes discovery by crate root and Cargo manifests by path.
 On this machine, separately compiled debug binaries scanned FRAME BEN rules in
