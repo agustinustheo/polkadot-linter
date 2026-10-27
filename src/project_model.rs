@@ -439,7 +439,7 @@ fn read_in_background(
 /// metadata does not describe non-members.
 fn workspace_features(
     packages: &[Package],
-    patched: &HashMap<String, usize>,
+    patched: &HashMap<(String, String), usize>,
     no_default_features: bool,
     requested: &[String],
 ) -> Vec<BTreeSet<String>> {
@@ -450,7 +450,9 @@ fn workspace_features(
         .collect::<HashMap<_, _>>();
     let member = |dependency: &Dependency| match dependency.path.as_deref() {
         Some(path) => member_by_dir.get(path).copied(),
-        None => patched.get(&dependency.name).copied(),
+        None => patched
+            .get(&(patch_source(dependency)?, dependency.name.clone()))
+            .copied(),
     };
     let alias = |dependency: &Dependency| {
         dependency
@@ -485,6 +487,7 @@ fn workspace_features(
         }) {
             let feature = match feature.split_once('/') {
                 Some((name, feature)) if name == package.name.as_str() => feature,
+                // other members treat pkg/feat as dependency-feature syntax, like cargo
                 _ => feature,
             };
             queue.push_back((index, feature.to_string()));
@@ -553,9 +556,11 @@ fn workspace_features(
     enabled
 }
 
-/// Maps package names that the workspace root `[patch.*]` tables redirect to a
-/// workspace member onto that member's index in `metadata.packages`.
-fn patched_members(metadata: &Metadata) -> HashMap<String, usize> {
+/// Maps `(patch source, package name)` pairs that the workspace root
+/// `[patch.*]` tables redirect to a workspace member onto that member's index
+/// in `metadata.packages`. The source is `crates-io` or a normalised git URL,
+/// as returned by `patch_source`.
+fn patched_members(metadata: &Metadata) -> HashMap<(String, String), usize> {
     let root = metadata.workspace_root.as_std_path();
     let Some(manifest) = fs::read_to_string(root.join("Cargo.toml"))
         .ok()
@@ -577,9 +582,10 @@ fn patched_members(metadata: &Metadata) -> HashMap<String, usize> {
         .get("patch")
         .and_then(toml::Value::as_table)
         .into_iter()
-        .flat_map(|sources| sources.values().filter_map(toml::Value::as_table))
         .flatten()
-        .filter_map(|(name, patch)| {
+        .filter_map(|(source, patches)| Some((source, patches.as_table()?)))
+        .flat_map(|(source, patches)| patches.iter().map(move |patch| (source, patch)))
+        .filter_map(|(source, (name, patch))| {
             let dir = root
                 .join(patch.get("path")?.as_str()?)
                 .canonicalize()
@@ -591,9 +597,37 @@ fn patched_members(metadata: &Metadata) -> HashMap<String, usize> {
                 .get("package")
                 .and_then(toml::Value::as_str)
                 .unwrap_or(name);
-            Some((name.to_string(), index))
+            let source = match source.as_str() {
+                "crates-io" => source.clone(),
+                url => normalize_git_url(url),
+            };
+            Some(((source, name.to_string()), index))
         })
         .collect()
+}
+
+/// The `[patch]` source a non-path dependency resolves through: `crates-io`
+/// for crates.io registry dependencies, or the normalised URL of a git
+/// dependency. Dependencies on other registries are never patched here.
+fn patch_source(dependency: &Dependency) -> Option<String> {
+    if dependency.registry.is_some() {
+        return None;
+    }
+    match &dependency.source {
+        Some(source) if !source.is_crates_io() => {
+            let url = source.repr.strip_prefix("git+")?;
+            Some(normalize_git_url(url.split(['?', '#']).next()?))
+        }
+        _ => Some("crates-io".to_string()),
+    }
+}
+
+fn normalize_git_url(url: &str) -> String {
+    let url = url.trim_end_matches('/');
+    url.strip_suffix(".git")
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .to_string()
 }
 
 fn rustc_cfgs() -> BTreeSet<String> {
@@ -617,6 +651,69 @@ mod tests {
     use cargo_metadata::CargoOpt;
 
     use super::*;
+
+    /// `[patch.crates-io]` must not redirect a git dependency of the same
+    /// name, while `[patch.<url>]` redirects git dependencies on that URL.
+    #[test]
+    fn patches_apply_only_to_dependencies_from_their_source() {
+        let root = std::env::temp_dir().join(format!(
+            "polkadot-linter-patch-source-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let files = [
+            (
+                "Cargo.toml",
+                r#"[workspace]
+members = ["a", "b", "c"]
+resolver = "2"
+[patch.crates-io]
+b = { path = "b" }
+[patch."https://example.invalid/c"]
+c = { path = "c" }
+"#,
+            ),
+            (
+                "a/Cargo.toml",
+                r#"[package]
+name = "a"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+b = { git = "https://example.invalid/b", default-features = false, features = ["weight"] }
+c = { git = "https://example.invalid/c.git/", default-features = false, features = ["weight"] }
+"#,
+            ),
+            (
+                "b/Cargo.toml",
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[features]\nweight = []\n",
+            ),
+            (
+                "c/Cargo.toml",
+                "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[features]\nweight = []\n",
+            ),
+        ];
+        for (path, contents) in files {
+            let path = root.join(path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+            fs::create_dir_all(path.with_file_name("src")).unwrap();
+            fs::write(path.with_file_name("src/lib.rs"), "").unwrap();
+        }
+
+        let metadata = workspace_metadata(&root).unwrap();
+        let features =
+            workspace_features(&metadata.packages, &patched_members(&metadata), true, &[]);
+        let features = metadata
+            .packages
+            .iter()
+            .zip(features)
+            .map(|(package, features)| (package.name.to_string(), features))
+            .collect::<HashMap<_, _>>();
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(features["b"], BTreeSet::new());
+        assert_eq!(features["c"], BTreeSet::from(["weight".to_string()]));
+    }
 
     /// Oracle for `workspace_features`: compares it with cargo's full feature
     /// resolution for every polkadot-sdk workspace member. Needs the submodule
