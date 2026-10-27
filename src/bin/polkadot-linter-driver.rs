@@ -648,9 +648,6 @@ fn report_source_debug_assertions(
     diagnostics: &mut Vec<RustcDiagnostic>,
     reported_lines: &mut HashSet<(String, usize)>,
 ) {
-    if is_frame_generated_span(source_map, tcx.def_span(def_id)) {
-        return;
-    }
     let definition_span = tcx
         .def_ident_span(def_id.to_def_id())
         .unwrap_or_else(|| tcx.def_span(def_id));
@@ -660,6 +657,12 @@ fn report_source_debug_assertions(
         return;
     };
     let function_name = tcx.item_name(def_id.to_def_id()).as_str().to_string();
+    if source_map
+        .span_to_snippet(definition_span)
+        .is_ok_and(|name| name != function_name)
+    {
+        return;
+    }
     let Some((function_start, start_line)) =
         source_function_start(&source, location.line, &function_name)
     else {
@@ -667,10 +670,15 @@ fn report_source_debug_assertions(
     };
 
     for (line, column) in source_debug_assert_locations(&source[function_start..], start_line) {
+        let assertion = source.lines().skip(line - 1).collect::<Vec<_>>().join("\n");
+        let assertion = assertion
+            .split_once(");")
+            .map_or(assertion.as_str(), |(text, _)| text);
         if source
             .lines()
             .nth(line - 1)
             .is_some_and(|text| text.contains("; qed"))
+            || assertion.contains("; qed")
         {
             continue;
         }
@@ -1516,7 +1524,9 @@ impl<'tcx> Visitor<'tcx> for Sec007Visitor<'_, 'tcx> {
             if let Some(binding) = bounded_vec_spare_capacity(self.tcx, self.typeck, condition) {
                 if let ExprKind::Block(block, _) = then_branch.kind {
                     for (index, statement) in block.stmts.iter().enumerate() {
-                        if index == 0 {
+                        if index == 0
+                            && matches!(statement.kind, StmtKind::Let(local) if local.init.is_some_and(|init| matches!(init.kind, ExprKind::MethodCall(segment, receiver, _, _) if segment.ident.name.as_str() == "try_push" && local_binding_id(self.typeck, receiver) == Some(binding))))
+                        {
                             self.push_capacity.insert(binding);
                         }
                         self.visit_stmt(statement);
