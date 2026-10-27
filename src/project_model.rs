@@ -611,3 +611,75 @@ fn rustc_cfgs() -> BTreeSet<String> {
         .map(ToOwned::to_owned)
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use cargo_metadata::CargoOpt;
+
+    use super::*;
+
+    /// Oracle for `workspace_features`: compares it with cargo's full feature
+    /// resolution for every polkadot-sdk workspace member. Needs the submodule
+    /// and a populated cargo cache:
+    ///
+    /// ```sh
+    /// git submodule update --init --depth 1 .repos/polkadot-sdk
+    /// cargo fetch --manifest-path .repos/polkadot-sdk/Cargo.toml
+    /// cargo test --lib -- --ignored workspace_features_match_cargo
+    /// ```
+    #[test]
+    #[ignore = "needs .repos/polkadot-sdk and its dependencies in the cargo cache"]
+    fn workspace_features_match_cargo_for_polkadot_sdk() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join(".repos/polkadot-sdk/Cargo.toml");
+        assert!(manifest.exists(), "{} is missing", manifest.display());
+        let workspace = workspace_metadata(manifest.parent().unwrap()).unwrap();
+        let patched = patched_members(&workspace);
+        for (no_default_features, features) in [
+            (false, vec![]),
+            (true, vec![]),
+            (false, vec!["runtime-benchmarks".to_string()]),
+        ] {
+            let mut command = MetadataCommand::new();
+            command
+                .manifest_path(&manifest)
+                .other_options(vec!["--offline".to_string()]);
+            if no_default_features {
+                command.features(CargoOpt::NoDefaultFeatures);
+            }
+            if !features.is_empty() {
+                command.features(CargoOpt::SomeFeatures(features.clone()));
+            }
+            let expected = command
+                .exec()
+                .expect("full offline cargo metadata should succeed")
+                .resolve
+                .expect("full metadata has a resolve graph")
+                .nodes
+                .into_iter()
+                .map(|node| {
+                    let features = node.features.iter().map(ToString::to_string).collect();
+                    (node.id, features)
+                })
+                .collect::<HashMap<_, BTreeSet<String>>>();
+            let actual = workspace_features(
+                &workspace.packages,
+                &patched,
+                no_default_features,
+                &features,
+            );
+            let mismatches = workspace
+                .packages
+                .iter()
+                .zip(actual)
+                .filter(|(package, features)| expected.get(&package.id) != Some(features))
+                .map(|(package, _)| package.name.to_string())
+                .collect::<Vec<_>>();
+            assert!(
+                mismatches.is_empty(),
+                "{} of {} members differ from cargo (no_default_features={no_default_features}, features={features:?}): {mismatches:?}",
+                mismatches.len(),
+                workspace.packages.len()
+            );
+        }
+    }
+}
