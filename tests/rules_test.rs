@@ -700,6 +700,57 @@ impl<T: Config> Pallet<T> {
     );
 }
 
+#[test]
+fn val001_judges_provenance_at_the_guard() {
+    // A later assignment does not make a guard storage-derived, and a local
+    // rebound to an argument before the guard is no longer storage-derived.
+    let code = r#"
+pub fn future_assignment(amount: u32, key: u32) -> DispatchResult {
+    let mut limit = amount;
+    let item = Items::<T>::get(key);
+    ensure!(limit > 0, Error::<T>::Zero);
+    limit = Other::<T>::get(key);
+    consume((item, limit));
+    Ok(())
+}
+
+pub fn rebinding(amount: u32, key: u32) -> DispatchResult {
+    let limit = Items::<T>::get(key);
+    let limit = amount;
+    ensure!(limit > 0, Error::<T>::Zero);
+    consume(limit);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert_eq!(
+        val001_lines(&diags),
+        vec![(4, Some(5)), (12, Some(14))],
+        "only provenance before the guard counts: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_follows_free_helpers_to_storage() {
+    let code = r#"
+fn read_limit(key: u32) -> u32 { Limits::<T>::get(key) }
+impl<T: Config> Pallet<T> {
+    fn has_limit(key: u32) -> bool { read_limit(key) > 0 }
+    pub fn dispatch(key: u32) -> DispatchResult {
+        let item = Items::<T>::get(key);
+        ensure!(Self::has_limit(key), Error::<T>::Zero);
+        consume(item);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "a helper reading storage through a free function is not cheap: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================
