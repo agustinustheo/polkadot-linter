@@ -582,6 +582,124 @@ pub fn set_amount(id: AssetId, who: &AccountId, amount: Balance) -> DispatchResu
     );
 }
 
+fn val001_lines(diags: &[polkadot_linter::diagnostics::Diagnostic]) -> Vec<(usize, Option<usize>)> {
+    diags
+        .iter()
+        .filter(|diagnostic| diagnostic.rule_id == "VAL001")
+        .map(|diagnostic| (diagnostic.line, diagnostic.end_line))
+        .collect()
+}
+
+#[test]
+fn val001_only_counts_bindings_visible_at_the_guard() {
+    // A storage-derived local suppresses a guard only when it is bound before
+    // the guard and is in scope there: not a later `let`, not a binding in a
+    // closed inner block, not a closure parameter outside its closure.
+    let code = r#"
+pub fn later_binding(amount: u32, key: u32) -> DispatchResult {
+    let item = Items::<T>::get(key);
+    ensure!(amount > 0, Error::<T>::Zero);
+    let amount = Other::<T>::get(key);
+    Ok(())
+}
+
+pub fn shadowed_in_inner_block(limit: u32, key: u32) -> DispatchResult {
+    {
+        let limit = Other::<T>::get(key);
+        consume(limit);
+    }
+    let item = Items::<T>::get(key);
+    ensure!(limit > 0, Error::<T>::Zero);
+    Ok(())
+}
+
+pub fn closure_parameter(who: Vec<u8>, id: u32) -> DispatchResult {
+    let info = Info::<T>::get(id)?;
+    ensure!(who.len() < 32, Error::<T>::TooLong);
+    Other::<T>::mutate(id, |who| who.push(1));
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert_eq!(
+        val001_lines(&diags),
+        vec![(3, Some(4)), (14, Some(15)), (20, Some(21))],
+        "bindings that are not visible at the guard must not suppress it: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_follows_computed_values_through_aliases() {
+    let code = r#"
+impl<T: Config> Pallet<T> {
+    fn read_limit(key: u32) -> Result<u32, Error<T>> {
+        Limits::<T>::try_get(key).map_err(|_| Error::<T>::Missing)
+    }
+
+    pub fn computed_alias(key: u32) -> DispatchResult {
+        let item = Items::<T>::get(key);
+        let limit = Self::read_limit(key)?;
+        let alias = limit;
+        ensure!(alias > 0, Error::<T>::Zero);
+        Ok(())
+    }
+
+    pub fn storage_alias(key: u32) -> DispatchResult {
+        let item = Items::<T>::get(key);
+        let Data { limit, .. } = Other::<T>::try_get(key)?;
+        let (value, _) = (limit, key);
+        ensure!(value > 0, Error::<T>::Zero);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !has_rule(&diags, "VAL001"),
+        "aliases of storage-derived or computed values are not argument-only: {diags:?}"
+    );
+}
+
+#[test]
+fn val001_judges_same_crate_helpers_by_their_bodies() {
+    // Pure helpers are cheap, so their guards stay reportable. Helpers that
+    // read storage, directly or through another helper, are not cheap, and
+    // config/trait calls the linter cannot resolve stay opaque.
+    let code = r#"
+impl<T: Config> Pallet<T> {
+    fn positive(amount: u32) -> bool { amount > 0 }
+    fn max_len() -> u32 { T::MaxLen::get() }
+    fn migrated(id: u32) -> bool { Migrated::<T>::contains_key(id) }
+    fn needs_migration(id: u32) -> bool { !Self::migrated(id) }
+
+    pub fn pure_helper(amount: u32, key: u32) -> DispatchResult {
+        let item = Items::<T>::get(key);
+        ensure!(Self::positive(amount), Error::<T>::Zero);
+        Ok(())
+    }
+
+    pub fn pure_constant_helper(name: Vec<u8>, key: u32) -> DispatchResult {
+        let item = Items::<T>::get(key);
+        ensure!(name.len() < Self::max_len() as usize, Error::<T>::TooLong);
+        Ok(())
+    }
+
+    pub fn reading_helper(id: u32) -> DispatchResult {
+        let item = Items::<T>::get(id);
+        ensure!(!Self::needs_migration(id), Error::<T>::NotMigrated);
+        ensure!(!T::Locker::is_locked(id), Error::<T>::Locked);
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert_eq!(
+        val001_lines(&diags),
+        vec![(9, Some(10)), (15, Some(16))],
+        "pure same-crate helpers are cheap; storage-reading and unresolved calls are not: {diags:?}"
+    );
+}
+
 // ==========================================================================
 // SEM002: Prefer collect turbofish
 // ==========================================================================
@@ -912,6 +1030,13 @@ fn apply_extrinsics_returns_single_result() {
         assert_ok!(Executive::apply_extrinsic(xt.clone()).unwrap());
         assert_ok!(Executive::apply_extrinsic(xt).expect("valid extrinsic"));
         assert_ok!(Executive::apply_extrinsics(mode, xts, |xt, _| Executive::apply_extrinsic(xt)), ());
+        // Single-argument forms, so the exact-name match is tested on its own.
+        assert_ok!(Executive::apply_extrinsics(Block::default().extrinsics(), 1));
+        assert_ok!(apply_extrinsic_with_weight(xt));
+        assert_ok!(Executive::apply_extrinsics(mode, xts, |xt, _| Executive::apply_extrinsic(xt)));
+        assert_ok!(Executive::apply_extrinsic(xt)?);
+        // `assert_ok!(x, y)` is `assert_eq!(x, Ok(y))`, which checks both layers.
+        assert_ok!(Executive::apply_extrinsic(xt), Ok(()));
     });
 }
 "#;
