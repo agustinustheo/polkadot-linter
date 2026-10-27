@@ -340,4 +340,93 @@ pub fn custom_cfg_weight() {}
             "without default features nothing enables the dependency feature"
         );
     }
+
+    /// Writes `files` into a temporary workspace and returns how many SEM011
+    /// findings a scan reports with `no_default_features` and `features`.
+    fn sem011_findings(
+        files: &[(&str, &str)],
+        no_default_features: bool,
+        features: &[&str],
+    ) -> usize {
+        let dir = tempfile::tempdir().expect("temporary workspace should be created");
+        for (path, contents) in files {
+            let path = dir.path().join(path);
+            fs::create_dir_all(path.parent().unwrap()).expect("directory should be created");
+            fs::write(path, contents).expect("file should be written");
+        }
+        let mut engine = LintEngine::new(Config::default());
+        engine.filter_rules(&["SEM011".to_string()]);
+        let features = features.iter().map(ToString::to_string).collect::<Vec<_>>();
+        engine
+            .scan_with_cargo_features(dir.path(), no_default_features, &features)
+            .len()
+    }
+
+    const WEIGHTED: &str =
+        "#[cfg_attr(feature = \"weight\", pallet::weight(Weight::zero()))]\npub fn weighted() {}\n";
+
+    #[test]
+    fn dep_prefix_activates_only_the_dependency_not_a_same_named_feature() {
+        let files = [
+            ("Cargo.toml", "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"2\"\n"),
+            (
+                "a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nb = { path = \"../b\", optional = true }\n\n[features]\ndefault = [\"enable\"]\nenable = [\"dep:b\"]\nb = [\"weight\"]\nweight = []\n",
+            ),
+            ("a/src/lib.rs", WEIGHTED),
+            ("b/Cargo.toml", "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+            ("b/src/lib.rs", ""),
+        ];
+        assert_eq!(sem011_findings(&files, false, &[]), 0);
+    }
+
+    #[test]
+    fn patched_dependency_on_a_member_enables_its_features() {
+        let files = [
+            (
+                "Cargo.toml",
+                "[workspace]\nmembers = [\"a\", \"b\"]\nresolver = \"2\"\n\n[workspace.dependencies]\nb = { version = \"0.1.0\", default-features = false, features = [\"weight\"] }\n\n[patch.crates-io]\nb = { path = \"b\" }\n",
+            ),
+            (
+                "a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nb = { workspace = true }\n",
+            ),
+            ("a/src/lib.rs", ""),
+            (
+                "b/Cargo.toml",
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nweight = []\n",
+            ),
+            ("b/src/lib.rs", WEIGHTED),
+        ];
+        assert_eq!(sem011_findings(&files, true, &[]), 1);
+    }
+
+    #[test]
+    fn package_qualified_feature_applies_to_that_member_and_its_dependents_only() {
+        // Matches `cargo metadata --features b/weight` at the workspace root:
+        // member `b` gets `weight`, member `a` activates its optional `b`
+        // dependency (and implicit feature `b`), and member `c` gets nothing.
+        let files = [
+            ("Cargo.toml", "[workspace]\nmembers = [\"a\", \"b\", \"c\"]\nresolver = \"2\"\n"),
+            (
+                "a/Cargo.toml",
+                "[package]\nname = \"a\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nb = { path = \"../b\", optional = true }\n\n[features]\nweight = []\n",
+            ),
+            ("a/src/lib.rs", "#[cfg_attr(feature = \"b\", pallet::weight(Weight::zero()))]\npub fn weighted() {}\n"),
+            (
+                "b/Cargo.toml",
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nweight = []\n",
+            ),
+            ("b/src/lib.rs", WEIGHTED),
+            (
+                "c/Cargo.toml",
+                "[package]\nname = \"c\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[features]\nweight = []\n",
+            ),
+            ("c/src/lib.rs", &WEIGHTED.repeat(2)),
+        ];
+        // `a` (feature `b`) and `b`; `c` would add two more.
+        assert_eq!(sem011_findings(&files, false, &["b/weight"]), 2);
+        // `b` and both of `c`.
+        assert_eq!(sem011_findings(&files, false, &["weight"]), 3);
+    }
 }
