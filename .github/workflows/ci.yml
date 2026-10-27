@@ -104,6 +104,9 @@ jobs:
       - name: Check source-rule runtime corpus baseline and RTC labels
         run: scripts/check-source-runtime-corpus.sh .repos/polkadot-sdk
 
+      - name: Self-test the labeled-findings checker
+        run: scripts/check-labeled-findings.sh --self-test
+
       - name: Check labeled ground-truth findings
         run: scripts/check-labeled-findings.sh .repos/polkadot-sdk
 
