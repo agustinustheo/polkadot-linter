@@ -233,13 +233,14 @@ fn excluded_context(ctx: &FileContext) -> bool {
     use crate::project_model::SourceTargetKind;
     // The engine's historical is_test_file flag examines absolute paths. Do
     // our own crate-relative classification so a checkout under tests/ works.
-    let relative = crate_root(&ctx.path)
+    let root = crate_root(&ctx.path);
+    let relative = root
         .and_then(|root| ctx.path.strip_prefix(root).ok())
         .unwrap_or(&ctx.rel_path);
     crate::engine::LintEngine::is_test_file(relative, ctx.content)
         || (!ctx.rel_path.is_absolute()
             && crate::engine::LintEngine::is_test_file(&ctx.rel_path, ctx.content))
-        || (crate_root(&ctx.path).is_some() && relative.starts_with("examples"))
+        || (root.is_some() && relative.starts_with("examples"))
         || ctx.source_target_kinds.iter().any(|kind| {
             matches!(
                 kind,
@@ -293,7 +294,14 @@ impl Owners {
         self.owns_type(&receiver, true).then_some(name)
     }
 
-    fn in_scope(&self, items: &[syn::Item]) -> Self {
+    fn in_block(&self, block: &syn::Block) -> Self {
+        self.in_scope(block.stmts.iter().filter_map(|stmt| match stmt {
+            syn::Stmt::Item(item) => Some(item),
+            _ => None,
+        }))
+    }
+
+    fn in_scope<'a>(&self, items: impl IntoIterator<Item = &'a syn::Item>) -> Self {
         fn imports(tree: &syn::UseTree, prefix: Vec<String>, out: &mut Vec<(syn::Path, String)>) {
             match tree {
                 syn::UseTree::Path(p) => {
@@ -365,7 +373,7 @@ impl Owners {
     }
 }
 
-fn measured_statement(stmt: &syn::Stmt) -> bool {
+fn measured_statement(stmt: &syn::Stmt) -> Option<bool> {
     let tokens = stmt.to_token_stream().into_iter().collect::<Vec<_>>();
     for pair in tokens.chunks_exact(2) {
         let (TokenTree::Punct(pound), TokenTree::Group(group)) = (&pair[0], &pair[1]) else {
@@ -375,14 +383,20 @@ fn measured_statement(stmt: &syn::Stmt) -> bool {
             break;
         }
         if let Ok(meta) = syn::parse2::<syn::Meta>(group.stream()) {
-            if meta.path().segments.last().is_some_and(|segment| {
-                segment.ident == "block" || segment.ident == "extrinsic_call"
-            }) {
-                return true;
+            match meta
+                .path()
+                .segments
+                .last()
+                .map(|s| s.ident.to_string())
+                .as_deref()
+            {
+                Some("extrinsic_call") => return Some(true),
+                Some("block") => return Some(false),
+                _ => {}
             }
         }
     }
-    false
+    None
 }
 
 fn called_names(
@@ -395,11 +409,21 @@ fn called_names(
     struct Calls<'a> {
         names: HashSet<String>,
         benchmark: &'a str,
-        bindings: &'a HashMap<String, String>,
-        owners: &'a Owners,
+        bindings: HashMap<String, String>,
+        owners: Owners,
         extrinsic_marker: bool,
     }
     impl<'ast> Visit<'ast> for Calls<'_> {
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            let previous = self.owners.clone();
+            self.owners = self.owners.in_block(block);
+            visit::visit_block(self, block);
+            self.owners = previous;
+        }
+        fn visit_local(&mut self, local: &'ast syn::Local) {
+            visit::visit_local(self, local);
+            bind_call(local, &self.owners, &mut self.bindings);
+        }
         fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
             if matches!(
                 call.method.to_string().as_str(),
@@ -472,8 +496,8 @@ fn called_names(
     let mut calls = Calls {
         names: HashSet::new(),
         benchmark,
-        bindings,
-        owners,
+        bindings: bindings.clone(),
+        owners: owners.clone(),
         extrinsic_marker,
     };
     if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
@@ -482,37 +506,21 @@ fn called_names(
     calls.names
 }
 
-// Resolve only simple local Call bindings that are later dispatched in the
-// measured block. Setup calls themselves are never benchmark coverage.
-fn call_bindings(tokens: TokenStream, owners: &Owners) -> HashMap<String, String> {
-    let tokens = tokens.into_iter().collect::<Vec<_>>();
-    let mut bindings = HashMap::new();
-    for start in 0..tokens.len() {
-        if !matches!(&tokens[start], TokenTree::Ident(id) if id == "let") {
-            continue;
-        }
-        let Some(end) = (start..tokens.len())
-            .find(|&i| matches!(&tokens[i], TokenTree::Punct(p) if p.as_char() == ';'))
-        else {
-            continue;
-        };
-        let local: TokenStream = tokens[start..=end].iter().cloned().collect();
-        let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #local })) else {
-            continue;
-        };
-        let Some(syn::Stmt::Local(local)) = block.stmts.first() else {
-            continue;
-        };
-        let (syn::Pat::Ident(binding), Some(init)) = (&local.pat, &local.init) else {
-            continue;
-        };
+// Keep only the latest simple binding, in statement order. Setup calls
+// themselves are never benchmark coverage.
+fn bind_call(local: &syn::Local, owners: &Owners, bindings: &mut HashMap<String, String>) {
+    let syn::Pat::Ident(binding) = &local.pat else {
+        return;
+    };
+    let ident = binding.ident.to_string();
+    bindings.remove(&ident);
+    if let Some(init) = &local.init {
         if let syn::Expr::Struct(expr) = &*init.expr {
             if let Some(name) = owners.variant(&expr.path) {
-                bindings.insert(binding.ident.to_string(), name);
+                bindings.insert(ident, name);
             }
         }
     }
-    bindings
 }
 
 fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
@@ -551,10 +559,21 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
                 TokenTree::Group(group) => group.stream(),
                 _ => TokenStream::new(),
             };
+            let mut bindings = HashMap::new();
+            // v1 setup may contain non-Rust `let c in 0 .. 10` components.
+            let setup = setup.into_iter().collect::<Vec<_>>();
+            for stmt in setup.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ';')) {
+                let stmt: TokenStream = stmt.iter().cloned().collect();
+                if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #stmt; })) {
+                    if let Some(syn::Stmt::Local(local)) = block.stmts.first() {
+                        bind_call(local, owners, &mut bindings);
+                    }
+                }
+            }
             calls.extend(called_names(
                 block.stream(),
                 &name,
-                &call_bindings(setup, owners),
+                &bindings,
                 owners,
                 false,
             ));
@@ -618,31 +637,30 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                 let name = function.sig.ident.to_string();
                 let mut calls = HashSet::new();
                 let mut verification = TokenStream::new();
-                let has_measured = function.block.stmts.iter().any(measured_statement);
+                let owners = self.owners.in_block(&function.block);
+                let mut bindings = HashMap::new();
+                let has_measured = function
+                    .block
+                    .stmts
+                    .iter()
+                    .any(|s| measured_statement(s).is_some());
                 let mut after_measurement = !has_measured;
                 for stmt in &function.block.stmts {
-                    if measured_statement(stmt) {
+                    if let Some(extrinsic_marker) = measured_statement(stmt) {
                         calls.extend(called_names(
                             stmt.to_token_stream(),
                             &name,
-                            &call_bindings(
-                                function
-                                    .block
-                                    .stmts
-                                    .iter()
-                                    .flat_map(ToTokens::to_token_stream)
-                                    .collect(),
-                                &self.owners,
-                            ),
-                            &self.owners,
-                            stmt.to_token_stream()
-                                .to_string()
-                                .contains("extrinsic_call"),
+                            &bindings,
+                            &owners,
+                            extrinsic_marker,
                         ));
                         after_measurement = true;
                         verification = TokenStream::new();
                     } else if after_measurement {
                         verification.extend(stmt.to_token_stream());
+                    }
+                    if let syn::Stmt::Local(local) = stmt {
+                        bind_call(local, &owners, &mut bindings);
                     }
                 }
                 // Legacy authored fixtures and block-only benchmark variants may
@@ -705,7 +723,14 @@ fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
                         | "assert_has_event"
                         | "verify"
                 );
-            if accepted && tokens.get(i+1).is_some_and(|next| matches!(next, TokenTree::Group(_)) || matches!(next, TokenTree::Punct(p) if p.as_char() == '!' || p.as_char() == ':')) { return true; }
+            if accepted
+                && tokens.get(i + 1).is_some_and(|next| {
+                    matches!(next, TokenTree::Group(_))
+                        || matches!(next, TokenTree::Punct(p) if p.as_char() == '!' || p.as_char() == ':')
+                })
+            {
+                return true;
+            }
         }
         if let TokenTree::Group(group) = token {
             if has_verification(group.stream(), patterns) {
@@ -790,24 +815,8 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                         .cloned()
                 })
                 .unwrap_or_default();
-            let mut companion_names = vec![format!("{package_name}-benchmarking")];
-            // SDK's frame-election-provider-support uses a pallet- prefixed
-            // companion. Require the same complete stem and declared dependency.
-            if let Some(stem) = package_name.strip_prefix("frame-") {
-                companion_names.push(format!("pallet-{stem}-benchmarking"));
-            }
-            let mut candidates = deps
-                .iter()
-                .filter(|(alias, dep)| {
-                    companion_names.iter().any(|name| {
-                        dep.get("package")
-                            .and_then(toml::Value::as_str)
-                            .unwrap_or(alias)
-                            == name
-                    })
-                })
-                .filter_map(|(_, dep)| dep.get("path")?.as_str().map(|p| workspace.join(p)))
-                .collect::<Vec<_>>();
+            let companion_name = format!("{package_name}-benchmarking");
+            let mut candidates = Vec::new();
             // Nested companions (e.g. session/benchmarking) and standalone
             // fixture crates need not be listed as workspace dependencies.
             for base in [Some(crate_root), crate_root.parent()]
@@ -831,7 +840,7 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                     .get("package")
                     .and_then(|p| p.get("name"))
                     .and_then(toml::Value::as_str)
-                    .is_none_or(|name| !companion_names.iter().any(|expected| expected == name))
+                    .is_none_or(|name| name != companion_name)
                 {
                     continue;
                 }
@@ -901,11 +910,12 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                 .as_ref()
                 .and_then(|c| c.get("lib")?.get("path")?.as_str())
                 .unwrap_or("src/lib.rs");
-            discover_module(&root.join(lib), &owners, &mut discovery);
+            let lib = root.join(lib);
+            discover_module(&lib, Some(&lib), &owners, &mut discovery);
         } else {
             // Standalone source snippets have no Cargo module root.
             for file in benchmark_sources(&root) {
-                discover_module(&file, &owners, &mut discovery);
+                discover_module(&file, None, &owners, &mut discovery);
             }
         }
     }
@@ -926,7 +936,13 @@ impl Discovery {
     }
 }
 
-fn discover_module(file: &Path, owners: &Owners, discovery: &mut Discovery) {
+fn discover_module(
+    file: &Path,
+    crate_root_file: Option<&Path>,
+    owners: &Owners,
+    discovery: &mut Discovery,
+) {
+    let is_crate_root = Some(file) == crate_root_file;
     let Ok(canonical) = file.canonicalize() else {
         return;
     };
@@ -949,7 +965,7 @@ fn discover_module(file: &Path, owners: &Owners, discovery: &mut Discovery) {
         .extend(collect_benchmarks_ast(&ast, owners));
     let parent = file.parent().unwrap_or(Path::new("."));
     let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let module_dir = if matches!(stem, "lib" | "main" | "mod") {
+    let module_dir = if is_crate_root || matches!(stem, "lib" | "main" | "mod") {
         parent.to_path_buf()
     } else {
         parent.join(stem)
@@ -1001,7 +1017,7 @@ fn discover_children(
                     dir.join(module.ident.to_string()).join("mod.rs")
                 }
             });
-            discover_module(&file, &owners, discovery);
+            discover_module(&file, None, &owners, discovery);
         }
     }
 }

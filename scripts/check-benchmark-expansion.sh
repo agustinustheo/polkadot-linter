@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Manual compiler oracle for the pinned SDK. This builds real SDK dependencies;
+# Manual compiler-expansion cross-check for the pinned SDK. This builds real SDK dependencies;
 # it is deliberately separate from the fast source-rule CI corpus check.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -58,8 +58,8 @@ for pallet in membership assets vesting; do
             variants = substr(variants, RSTART + RLENGTH)
           }
         }
-        # Membership uses authored measured blocks. The compiler-resolved
-        # receiver is its own Pallet alias, not an arbitrary terminal call.
+        # Membership retains the authored receiver spelling in expansion.
+        # This pattern does not resolve the use alias; ownership is manual.
         if (package == "pallet-membership") {
           measured = body; sub(/.*recording.start\(\);/, "", measured); sub(/recording.stop\(\).*/, "", measured)
           while (match(measured, /Membership[[:space:]]*::[[:space:]]*<[^>]*>[[:space:]]*::[[:space:]]*[[:alnum:]_]+/)) {
