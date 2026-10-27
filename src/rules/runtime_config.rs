@@ -12,7 +12,8 @@
 //! - a file is only inspected when it belongs to a *runtime crate*: the
 //!   nearest Cargo package whose library target (`[lib] path`, default
 //!   `src/lib.rs`) and the production modules reachable from it declare
-//!   exactly one runtime with `construct_runtime!`, `#[frame_support::runtime]`
+//!   exactly one ungated runtime (or, with none ungated, only runtimes
+//!   switched by `feature` cfgs) with `construct_runtime!`, `#[frame_support::runtime]`
 //!   (or a bare `#[runtime]` with `#[runtime::*]` items) or
 //!   `#[frame_construct_runtime]`. Files that are not under any Cargo
 //!   manifest fall back to inspecting the file itself;
@@ -97,9 +98,14 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
         .find(|dir| dir.join("Cargo.toml").is_file())
         .map(Path::to_path_buf);
 
+    // Fixtures and single files scanned outside any Cargo package.
     let Some(manifest_dir) = manifest_dir else {
         let ast = ctx.ast.as_ref();
-        let is_runtime = ast.is_some_and(|file| runtime_declarations(&production_ast(file)) == 1);
+        let is_runtime = ast.is_some_and(|file| {
+            let mut counts = Declarations::default();
+            counts.count(&production_ast(file), false);
+            counts.is_runtime()
+        });
         let benchmarks = ast.and_then(|file| {
             let mut keys = HashSet::new();
             collect_define_benchmarks(&strip_ast(file, Gate::Test), &mut keys).then_some(keys)
@@ -144,25 +150,22 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         .unwrap_or("src/lib.rs");
 
     let mut modules = ModuleTree::default();
-    modules.walk(&root.join(lib_path), true, Gate::Production);
+    modules.walk(&root.join(lib_path), true, Gate::Production, false);
 
-    // A runtime crate builds exactly one runtime. Crates that declare several
-    // (XCM simulators, emulated networks, documentation cookbooks) are test or
-    // example harnesses, not runtimes.
-    let declarations: usize = modules
-        .files
-        .values()
-        .filter(|(gate, _)| *gate == Gate::Production)
-        .map(|(_, file)| runtime_declarations(&production_ast(file)))
-        .sum();
-    let is_runtime = declarations == 1;
+    let mut declarations = Declarations::default();
+    for module in modules.files.values() {
+        if module.gate == Gate::Production {
+            declarations.count(&production_ast(&module.file), module.featured);
+        }
+    }
+    let is_runtime = declarations.is_runtime();
 
     let benchmarks = if is_runtime {
         let mut keys = HashSet::new();
         let mut found = false;
-        for (gate, file) in modules.files.values() {
-            if *gate != Gate::Test {
-                found |= collect_define_benchmarks(&strip_ast(file, Gate::Test), &mut keys);
+        for module in modules.files.values() {
+            if module.gate != Gate::Test {
+                found |= collect_define_benchmarks(&strip_ast(&module.file, Gate::Test), &mut keys);
             }
         }
         found.then_some(keys)
@@ -178,7 +181,7 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         modules: modules
             .files
             .into_iter()
-            .map(|(path, (gate, _))| (path, gate))
+            .map(|(path, module)| (path, module.gate))
             .collect(),
     }
 }
@@ -187,21 +190,29 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
 /// least restrictive `cfg` gate on any path that reaches it.
 #[derive(Default)]
 struct ModuleTree {
-    files: HashMap<PathBuf, (Gate, SynFile)>,
+    files: HashMap<PathBuf, Module>,
+}
+
+struct Module {
+    gate: Gate,
+    /// Every path reaching the file passes a `cfg` mentioning a `feature`.
+    featured: bool,
+    file: SynFile,
 }
 
 impl ModuleTree {
     /// `owns_dir`: the file is a crate root or `mod.rs`, so its child modules
     /// live next to it rather than in a directory named after it.
-    fn walk(&mut self, path: &Path, owns_dir: bool, gate: Gate) {
+    fn walk(&mut self, path: &Path, owns_dir: bool, gate: Gate, featured: bool) {
         let Ok(canonical) = fs::canonicalize(path) else {
             return;
         };
-        if let Some((known, _)) = self.files.get_mut(&canonical) {
-            if *known <= gate {
+        if let Some(known) = self.files.get_mut(&canonical) {
+            if known.gate <= gate && (!known.featured || featured) {
                 return;
             }
-            *known = gate;
+            known.gate = known.gate.min(gate);
+            known.featured &= featured;
         } else {
             let Some(file) = fs::read_to_string(&canonical)
                 .ok()
@@ -209,7 +220,14 @@ impl ModuleTree {
             else {
                 return;
             };
-            self.files.insert(canonical.clone(), (gate, file));
+            self.files.insert(
+                canonical.clone(),
+                Module {
+                    gate,
+                    featured,
+                    file,
+                },
+            );
         }
 
         let parent = canonical.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -218,9 +236,12 @@ impl ModuleTree {
         } else {
             parent.join(canonical.file_stem().unwrap_or_default())
         };
-        let gate = gate.max(attrs_gate(&self.files[&canonical].1.attrs));
-        let items = self.files[&canonical].1.items.clone();
-        self.walk_items(&items, &parent, &child_dir, false, gate);
+        let module = &self.files[&canonical];
+        let (gate, featured) = (module.gate, module.featured);
+        let gate = gate.max(attrs_gate(&module.file.attrs));
+        let featured = featured || feature_gated(&module.file.attrs);
+        let items = module.file.items.clone();
+        self.walk_items(&items, &parent, &child_dir, false, gate, featured);
     }
 
     fn walk_items(
@@ -230,12 +251,14 @@ impl ModuleTree {
         child_dir: &Path,
         inline: bool,
         gate: Gate,
+        featured: bool,
     ) {
         for item in items {
             let Item::Mod(module) = item else {
                 continue;
             };
             let gate = gate.max(attrs_gate(&module.attrs));
+            let featured = featured || feature_gated(&module.attrs);
             let explicit = path_attr(&module.attrs);
             let name = module.ident.to_string();
             match &module.content {
@@ -243,19 +266,19 @@ impl ModuleTree {
                     let dir = explicit
                         .map(|path| child_dir.join(path))
                         .unwrap_or_else(|| child_dir.join(&name));
-                    self.walk_items(items, file_dir, &dir, true, gate);
+                    self.walk_items(items, file_dir, &dir, true, gate, featured);
                 }
                 None => {
                     if let Some(path) = explicit {
                         let base = if inline { child_dir } else { file_dir };
-                        self.walk(&base.join(path), true, gate);
+                        self.walk(&base.join(path), true, gate, featured);
                         continue;
                     }
                     let flat = child_dir.join(format!("{name}.rs"));
                     if flat.is_file() {
-                        self.walk(&flat, false, gate);
+                        self.walk(&flat, false, gate, featured);
                     } else {
-                        self.walk(&child_dir.join(&name).join("mod.rs"), true, gate);
+                        self.walk(&child_dir.join(&name).join("mod.rs"), true, gate, featured);
                     }
                 }
             }
@@ -279,10 +302,70 @@ fn path_attr(attrs: &[Attribute]) -> Option<String> {
     })
 }
 
-/// Number of `construct_runtime!`, `#[frame_support::runtime]` (or a bare
-/// `#[runtime]` whose module uses `#[runtime::*]` attributes) and
-/// `#[frame_construct_runtime]` declarations at any module level of the file.
-fn runtime_declarations(file: &SynFile) -> usize {
+/// `construct_runtime!`, `#[frame_support::runtime]` (or a bare `#[runtime]`
+/// whose module uses `#[runtime::*]` attributes) and `#[frame_construct_runtime]`
+/// declarations, split by whether a `feature` cfg (on the item, an enclosing
+/// module, or the file) gates them.
+#[derive(Default)]
+struct Declarations {
+    ungated: usize,
+    featured: usize,
+}
+
+impl Declarations {
+    /// A runtime crate builds exactly one runtime, or switches between
+    /// runtimes by feature. Crates that declare several ungated runtimes (XCM
+    /// simulators, emulated networks, documentation cookbooks) are test or
+    /// example harnesses, not runtimes.
+    fn is_runtime(&self) -> bool {
+        self.ungated == 1 || (self.ungated == 0 && self.featured >= 1)
+    }
+
+    fn count(&mut self, file: &SynFile, featured: bool) {
+        let featured = featured || feature_gated(&file.attrs);
+        let mut finder = Finder {
+            counts: self,
+            featured,
+        };
+        for item in &file.items {
+            finder.visit_item(item);
+        }
+    }
+}
+
+struct Finder<'a> {
+    counts: &'a mut Declarations,
+    featured: bool,
+}
+
+impl Finder<'_> {
+    fn found(&mut self, attrs: &[Attribute]) {
+        if self.featured || feature_gated(attrs) {
+            self.counts.featured += 1;
+        } else {
+            self.counts.ungated += 1;
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for Finder<'_> {
+    fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
+        if last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
+            self.found(&item.attrs);
+        }
+    }
+    fn visit_item_mod(&mut self, item: &'ast ItemMod) {
+        if is_runtime_module(item) {
+            self.found(&item.attrs);
+        }
+        let outer = self.featured;
+        self.featured |= feature_gated(&item.attrs);
+        visit::visit_item_mod(self, item);
+        self.featured = outer;
+    }
+}
+
+fn is_runtime_module(item: &ItemMod) -> bool {
     fn attr_segments(attr: &Attribute) -> Vec<String> {
         attr.path()
             .segments
@@ -304,36 +387,20 @@ fn runtime_declarations(file: &SynFile) -> usize {
             })
         })
     }
-    struct Finder(usize);
-    impl<'ast> Visit<'ast> for Finder {
-        fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
-            if last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
-                self.0 += 1;
-            }
+    let items = item
+        .content
+        .as_ref()
+        .map(|(_, items)| items.as_slice())
+        .unwrap_or_default();
+    item.attrs.iter().any(|attr| {
+        let segments = attr_segments(attr);
+        match segments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
+            [.., "frame_construct_runtime"] => true,
+            [_, .., "runtime"] => true,
+            ["runtime"] => has_runtime_item_attr(items),
+            _ => false,
         }
-        fn visit_item_mod(&mut self, item: &'ast ItemMod) {
-            let items = item
-                .content
-                .as_ref()
-                .map(|(_, items)| items.as_slice())
-                .unwrap_or_default();
-            if item.attrs.iter().any(|attr| {
-                let segments = attr_segments(attr);
-                match segments.iter().map(String::as_str).collect::<Vec<_>>()[..] {
-                    [.., "frame_construct_runtime"] => true,
-                    [_, .., "runtime"] => true,
-                    ["runtime"] => has_runtime_item_attr(items),
-                    _ => false,
-                }
-            }) {
-                self.0 += 1;
-            }
-            visit::visit_item_mod(self, item);
-        }
-    }
-    let mut finder = Finder(0);
-    finder.visit_file(file);
-    finder.0
+    })
 }
 
 /// Lower-cased name tokens, split on `-`, `_` and `.`.
@@ -425,55 +492,58 @@ fn runtime_scope(ctx: &FileContext, config: &RuntimeConfigConfig) -> Option<Arc<
 
 const NON_PRODUCTION_FEATURES: &[&str] = &["runtime-benchmarks", "try-runtime", "test-helpers"];
 
-fn cfg_is_non_production(meta: &Meta) -> bool {
-    match meta {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::NameValue(name_value) => {
-            name_value.path.is_ident("feature")
-                && matches!(
-                    &name_value.value,
-                    Expr::Lit(expr) if matches!(
-                        &expr.lit,
-                        Lit::Str(feature) if NON_PRODUCTION_FEATURES.contains(&feature.value().as_str())
-                    )
-                )
-        }
-        Meta::List(list) => {
-            let Ok(nested) = list.parse_args_with(
-                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-            ) else {
-                return false;
-            };
-            if list.path.is_ident("all") {
-                nested.iter().any(cfg_is_non_production)
-            } else if list.path.is_ident("any") {
-                !nested.is_empty() && nested.iter().all(cfg_is_non_production)
-            } else {
-                false
-            }
-        }
+/// `leaf` holds for the cfg predicate: for `all(..)` some operand matches, for
+/// `any(..)` every operand does.
+fn cfg_matches(meta: &Meta, leaf: &dyn Fn(&Meta) -> bool) -> bool {
+    let Meta::List(list) = meta else {
+        return leaf(meta);
+    };
+    let Ok(nested) =
+        list.parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+    else {
+        return false;
+    };
+    if list.path.is_ident("all") {
+        nested.iter().any(|meta| cfg_matches(meta, leaf))
+    } else if list.path.is_ident("any") {
+        !nested.is_empty() && nested.iter().all(|meta| cfg_matches(meta, leaf))
+    } else {
+        false
     }
 }
 
-fn cfg_is_test(meta: &Meta) -> bool {
-    match meta {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::NameValue(_) => false,
-        Meta::List(list) => {
-            let Ok(nested) = list.parse_args_with(
-                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
-            ) else {
-                return false;
-            };
-            if list.path.is_ident("all") {
-                nested.iter().any(cfg_is_test)
-            } else if list.path.is_ident("any") {
-                !nested.is_empty() && nested.iter().all(cfg_is_test)
-            } else {
-                false
-            }
-        }
+fn is_test_cfg(meta: &Meta) -> bool {
+    matches!(meta, Meta::Path(path) if path.is_ident("test"))
+}
+
+fn is_non_production_cfg(meta: &Meta) -> bool {
+    is_test_cfg(meta)
+        || matches!(meta, Meta::NameValue(name_value) if name_value.path.is_ident("feature")
+        && matches!(
+            &name_value.value,
+            Expr::Lit(expr) if matches!(
+                &expr.lit,
+                Lit::Str(feature) if NON_PRODUCTION_FEATURES.contains(&feature.value().as_str())
+            )
+        ))
+}
+
+/// A `#[cfg(..)]` whose predicate mentions `feature`, at any depth.
+fn feature_gated(attrs: &[Attribute]) -> bool {
+    fn mentions(tokens: TokenStream) -> bool {
+        tokens.into_iter().any(|token| match token {
+            TokenTree::Ident(ident) => ident == "feature",
+            TokenTree::Group(group) => mentions(group.stream()),
+            _ => false,
+        })
     }
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .meta
+                .require_list()
+                .is_ok_and(|list| mentions(list.tokens.clone()))
+    })
 }
 
 /// The most restrictive gate implied by `#[test]` / `#[cfg(..)]` attributes.
@@ -488,8 +558,8 @@ fn attrs_gate(attrs: &[Attribute]) -> Gate {
                 return Gate::Production;
             }
             match attr.parse_args::<Meta>() {
-                Ok(meta) if cfg_is_test(&meta) => Gate::Test,
-                Ok(meta) if cfg_is_non_production(&meta) => Gate::NonProduction,
+                Ok(meta) if cfg_matches(&meta, &is_test_cfg) => Gate::Test,
+                Ok(meta) if cfg_matches(&meta, &is_non_production_cfg) => Gate::NonProduction,
                 _ => Gate::Production,
             }
         })
