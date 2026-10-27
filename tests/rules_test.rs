@@ -8191,7 +8191,6 @@ fn ben003_resolves_function_and_block_local_imports() {
     check_ben003_binding_body("use crate::Pallet as Local; #[block] { use other::Pallet as Local; Local::<T>::transfer(); }", true);
 }
 
-
 // ==========================================================================
 // Runtime configuration rules (RTC001-RTC005)
 // ==========================================================================
@@ -8677,4 +8676,37 @@ fn rtc_rules_skip_files_behind_test_or_benchmark_module_declarations() {
         vec!["src/configs/mod.rs".to_string()],
         "{diags:?}"
     );
+}
+
+#[test]
+fn rtc_rules_lint_runtimes_switched_by_feature() {
+    let decl =
+        "construct_runtime!(\n    pub enum Runtime {\n        Sudo: pallet_sudo = 15,\n    }\n);\n";
+    let config = "impl pallet_sudo::Config for Runtime {\n    type WeightInfo = ();\n}\n";
+    // Both declarations gated by `feature` (directly, inside `not`, or via
+    // an enclosing module or file): the crate is still a runtime.
+    for lib in [
+        format!("{config}#[cfg(feature = \"with-evm\")]\n{decl}#[cfg(not(feature = \"with-evm\"))]\n{decl}"),
+        format!("{config}#[cfg(any(feature = \"a\", test))]\nmod a {{\n{decl}}}\n#[cfg(not(any(feature = \"a\", test)))]\nmod b {{\n{decl}}}\n"),
+        format!("{config}#[cfg(feature = \"a\")]\nmod a;\n#[cfg(not(feature = \"a\"))]\nmod b;\n"),
+    ] {
+        let krate = rtc_runtime_crate(
+            "switched-runtime",
+            &[
+                ("src/lib.rs", lib.as_str()),
+                ("src/a.rs", decl),
+                ("src/b.rs", &format!("#![cfg(feature = \"x\")]\n{decl}")),
+            ],
+        );
+        let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+        assert_eq!(rtc_findings(&diags), vec!["RTC001:2".to_string()], "{lib}\n{diags:?}");
+    }
+
+    // Two ungated runtimes (an XCM simulator) stay excluded, even next to a
+    // feature-gated one.
+    let lib =
+        format!("{config}mod a {{\n{decl}}}\nmod b {{\n{decl}}}\n#[cfg(feature = \"c\")]\n{decl}");
+    let krate = rtc_runtime_crate("simulator", &[("src/lib.rs", lib.as_str())]);
+    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
 }
