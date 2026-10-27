@@ -1,8 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -57,8 +59,12 @@ impl ProjectModel {
         };
 
         let rustc_cfgs = rustc_cfgs();
-        let resolved_features =
-            workspace_features(&metadata.packages, no_default_features, features);
+        let resolved_features = workspace_features(
+            &metadata.packages,
+            &patched_members(&metadata),
+            no_default_features,
+            features,
+        );
 
         let mut file_target_kinds = HashMap::<PathBuf, Vec<SourceTargetKind>>::new();
         let mut proc_macro_source_roots = Vec::<PathBuf>::new();
@@ -368,43 +374,72 @@ fn workspace_metadata(manifest_dir: &Path) -> Result<Metadata, String> {
     let mut child = command
         .cargo_command()
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| error.to_string())?;
-    let mut stdout = child.stdout.take().expect("stdout is piped");
-    let reader = thread::spawn(move || {
-        let mut output = String::new();
-        stdout.read_to_string(&mut output).map(|_| output)
-    });
+    let stdout = read_in_background(child.stdout.take().expect("stdout is piped"));
+    let stderr = read_in_background(child.stderr.take().expect("stderr is piped"));
 
+    // A descendant of cargo can keep the pipes open after cargo exits, so
+    // the deadline bounds reading the output as well as waiting for exit. On
+    // timeout the reader threads are leaked.
     let deadline = Instant::now() + METADATA_TIMEOUT;
+    let timed_out = |mut child: std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+        format!("timed out after {}s", METADATA_TIMEOUT.as_secs())
+    };
+    let output = match stdout.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(output) => output.map_err(|error| error.to_string())?,
+        Err(_) => return Err(timed_out(child)),
+    };
     let status = loop {
         if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
             break status;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("timed out after {}s", METADATA_TIMEOUT.as_secs()));
+            return Err(timed_out(child));
         }
         thread::sleep(Duration::from_millis(20));
     };
     if !status.success() {
-        return Err(status.to_string());
+        let stderr = stderr
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        return Err(
+            match stderr.lines().rev().find(|line| !line.trim().is_empty()) {
+                Some(line) => format!("{status}: {}", line.trim()),
+                None => status.to_string(),
+            },
+        );
     }
-    let output = reader
-        .join()
-        .map_err(|_| "stdout reader panicked".to_string())?
-        .map_err(|error| error.to_string())?;
     MetadataCommand::parse(output).map_err(|error| error.to_string())
+}
+
+fn read_in_background(
+    mut pipe: impl Read + Send + 'static,
+) -> mpsc::Receiver<std::io::Result<String>> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut output = String::new();
+        let _ = sender.send(pipe.read_to_string(&mut output).map(|_| output));
+    });
+    receiver
 }
 
 /// Resolves the Cargo features of each workspace member (indexed like
 /// `packages`) the way `cargo metadata` unifies them across the workspace,
 /// following feature tables and dependency edges between workspace members.
 /// Features of external dependencies are never needed for source analysis.
+///
+/// Known limitation: a path package outside the workspace that depends on a
+/// member and enables its features is not followed, because `--no-deps`
+/// metadata does not describe non-members.
 fn workspace_features(
     packages: &[Package],
+    patched: &HashMap<String, usize>,
     no_default_features: bool,
     requested: &[String],
 ) -> Vec<BTreeSet<String>> {
@@ -413,7 +448,10 @@ fn workspace_features(
         .enumerate()
         .filter_map(|(index, package)| Some((package.manifest_path.parent()?, index)))
         .collect::<HashMap<_, _>>();
-    let member = |dependency: &Dependency| member_by_dir.get(dependency.path.as_deref()?).copied();
+    let member = |dependency: &Dependency| match dependency.path.as_deref() {
+        Some(path) => member_by_dir.get(path).copied(),
+        None => patched.get(&dependency.name).copied(),
+    };
     let alias = |dependency: &Dependency| {
         dependency
             .rename
@@ -481,7 +519,8 @@ fn workspace_features(
             },
         };
 
-        if !weak && package.features.contains_key(dependency_name) {
+        // `dep:name` only activates the dependency, never a feature of that name.
+        if dependency_feature.is_some() && !weak && package.features.contains_key(dependency_name) {
             queue.push_back((index, dependency_name.to_string()));
         }
         let dependencies = package
@@ -512,6 +551,49 @@ fn workspace_features(
         }
     }
     enabled
+}
+
+/// Maps package names that the workspace root `[patch.*]` tables redirect to a
+/// workspace member onto that member's index in `metadata.packages`.
+fn patched_members(metadata: &Metadata) -> HashMap<String, usize> {
+    let root = metadata.workspace_root.as_std_path();
+    let Some(manifest) = fs::read_to_string(root.join("Cargo.toml"))
+        .ok()
+        .and_then(|manifest| manifest.parse::<toml::Table>().ok())
+    else {
+        return HashMap::new();
+    };
+    let member_dirs = metadata
+        .packages
+        .iter()
+        .map(|package| {
+            package
+                .manifest_path
+                .parent()
+                .and_then(|dir| dir.canonicalize().ok())
+        })
+        .collect::<Vec<_>>();
+    manifest
+        .get("patch")
+        .and_then(toml::Value::as_table)
+        .into_iter()
+        .flat_map(|sources| sources.values().filter_map(toml::Value::as_table))
+        .flatten()
+        .filter_map(|(name, patch)| {
+            let dir = root
+                .join(patch.get("path")?.as_str()?)
+                .canonicalize()
+                .ok()?;
+            let index = member_dirs
+                .iter()
+                .position(|member| member.as_ref() == Some(&dir))?;
+            let name = patch
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(name);
+            Some((name.to_string(), index))
+        })
+        .collect()
 }
 
 fn rustc_cfgs() -> BTreeSet<String> {
