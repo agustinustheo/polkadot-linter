@@ -758,6 +758,26 @@ pub fn rebound(amount: u32, key: u32) -> DispatchResult {
 }
 
 #[test]
+fn val001_overwrite_does_not_consume_the_value_it_replaces() {
+    // The left-hand side of a reassignment whose right-hand side ignores the
+    // old value does not consume the read.
+    let code = r#"
+pub fn overwritten(amount: u32, key: u32) -> DispatchResult {
+    let mut item = Items::<T>::get(key);
+    item = amount;
+    ensure!(item > 0, Error::<T>::Zero);
+    consume(item);
+    Ok(())
+}
+"#;
+    let diags = check_fixture("substrate/frame/foo/src/lib.rs", code);
+    assert!(
+        !val001_lines(&diags).is_empty(),
+        "an overwrite does not consume the read: {diags:?}"
+    );
+}
+
+#[test]
 fn val001_follows_free_helpers_to_storage() {
     let code = r#"
 fn read_limit(key: u32) -> u32 { Limits::<T>::get(key) }
