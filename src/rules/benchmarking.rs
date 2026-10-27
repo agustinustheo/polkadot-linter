@@ -797,8 +797,8 @@ fn discover_benchmarks(path: &Path) -> Discovery {
             .and_then(|m| m.get("package")?.get("name")?.as_str().map(str::to_owned))
         {
             modules.insert(package_name.replace('-', "_"));
-            // Resolve companion crates through Cargo's declared path dependency,
-            // never through a globally shared benchmark name.
+            // Find companion crates by directory scan, exact package name, and a
+            // declared dependency back on this crate.
             let workspace = crate_root
                 .ancestors()
                 .find(|dir| {
@@ -822,8 +822,7 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                 format!("{package_name}-benchmarking")
             };
             let mut candidates = Vec::new();
-            // Nested companions (e.g. session/benchmarking) and standalone
-            // fixture crates need not be listed as workspace dependencies.
+            // Nested companions (e.g. session/benchmarking) and sibling crates.
             for base in [Some(crate_root), crate_root.parent()]
                 .into_iter()
                 .flatten()
