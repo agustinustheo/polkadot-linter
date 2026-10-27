@@ -56,6 +56,22 @@ pub fn different_key(key: &u32, other: &u32) {
         frame_support::storage::types::StorageMap::<()>::remove(other);
     }
 }
+pub fn membership_controls_callback(key: &u32) {
+    if frame_support::storage::types::StorageMap::<()>::contains_key(key) {
+        frame_support::storage::types::StorageMap::<()>::remove(key);
+        callback();
+    }
+}
+fn callback() {}
+
+pub fn membership_controls_result(key: &u32) -> bool {
+    if frame_support::storage::types::StorageMap::<()>::contains_key(key) {
+        frame_support::storage::types::StorageMap::<()>::remove(key);
+        true
+    } else {
+        false
+    }
+}
 RS
 
 cargo +nightly-2025-09-01 build \
@@ -82,5 +98,6 @@ echo "SEM009 different-key findings: $different_key_count"
 test "$remove_count" -eq 1
 test "$take_count" -eq 1
 test "$different_key_count" -eq 0
+test "$(jq '[.[] | select(.rule_id == "SEM009")] | length' "$OUTPUT")" -eq 2
 
 echo "rustc SEM009 resolves FRAME storage owners and key bindings before reporting"
