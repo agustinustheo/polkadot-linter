@@ -55,6 +55,7 @@ struct PolkadotCallbacks {
     parsed_weight_attributes: Vec<ParsedWeightAttribute>,
     parsed_item_attributes: Vec<ParsedItemAttributes>,
     parsed_transactional_attributes: Vec<ParsedTransactionalAttribute>,
+    try_runtime_spans: Vec<Span>,
 }
 
 #[derive(Clone)]
@@ -104,6 +105,7 @@ impl Callbacks for PolkadotCallbacks {
             parsed_attributes: &mut self.parsed_weight_attributes,
             parsed_item_attributes: &mut self.parsed_item_attributes,
             parsed_transactional_attributes: &mut self.parsed_transactional_attributes,
+            try_runtime_spans: &mut self.try_runtime_spans,
         };
         ast_visit::walk_crate(&mut visitor, krate);
         Compilation::Continue
@@ -121,6 +123,8 @@ impl Callbacks for PolkadotCallbacks {
                 Compilation::Stop
             };
         }
+        let (genesis_bodies, bookkeeping_bodies) =
+            context_excluded_bodies(tcx, &self.parsed_weight_attributes, &self.try_runtime_spans);
         if self.rule_enabled("SEC013") {
             report_unbounded_storage_aliases(
                 tcx,
@@ -189,7 +193,12 @@ impl Callbacks for PolkadotCallbacks {
             );
         }
         if self.rule_enabled("SEM006") {
-            report_dbweight_missing_pov(tcx, tcx.sess.source_map(), &mut self.diagnostics);
+            report_dbweight_missing_pov(
+                tcx,
+                tcx.sess.source_map(),
+                &bookkeeping_bodies,
+                &mut self.diagnostics,
+            );
         }
         if self.rule_enabled("SEM016") {
             report_missing_authorize_call_in_create_authorized_transaction(
@@ -219,7 +228,7 @@ impl Callbacks for PolkadotCallbacks {
             || self.rule_enabled("SEC011")
             || self.rule_enabled("SEC012")
             || self.rule_enabled("SEC015"))
-        .then(|| reachable_local_function_bodies(tcx, false))
+        .then(|| reachable_local_function_bodies(tcx, false, &genesis_bodies))
         .unwrap_or_default();
         if self.rule_enabled("SEC017") {
             report_vec_event_fields(
@@ -233,7 +242,7 @@ impl Callbacks for PolkadotCallbacks {
         }
         let reachable_fallible_entry_point_bodies = self
             .rule_enabled("SEC009")
-            .then(|| reachable_local_function_bodies(tcx, true))
+            .then(|| reachable_local_function_bodies(tcx, true, &genesis_bodies))
             .unwrap_or_default();
         let sec003_tainted_bodies = self
             .rule_enabled("SEC003")
@@ -268,6 +277,7 @@ impl Callbacks for PolkadotCallbacks {
                 tcx,
                 tcx.sess.source_map(),
                 &reachable_entry_point_bodies,
+                &bookkeeping_bodies,
                 &mut self.diagnostics,
             );
         }
@@ -379,32 +389,9 @@ fn source_matches_filters(source: &str, filters: &[String]) -> bool {
 fn reachable_local_function_bodies(
     tcx: TyCtxt<'_>,
     fallible_entry_points_only: bool,
+    genesis_helpers: &HashSet<LocalDefId>,
 ) -> Vec<LocalDefId> {
-    let mut genesis_helpers = HashSet::new();
-    let mut genesis_pending = tcx
-        .hir_body_owners()
-        .filter(|id| {
-            implemented_trait_id(tcx, id.to_def_id()).is_some_and(|trait_id| {
-                let path = tcx.def_path_str(trait_id);
-                is_frame_support_path(&path) && path.ends_with("::BuildGenesisConfig")
-            })
-        })
-        .collect::<Vec<_>>();
-    while let Some(id) = genesis_pending.pop() {
-        if !genesis_helpers.insert(id) {
-            continue;
-        }
-        if let Some(body) = tcx.hir_maybe_body_owned_by(id) {
-            let mut visitor = LocalCalleeVisitor {
-                typeck: tcx.typeck(id),
-                callees: HashSet::new(),
-                function_bindings: HashMap::new(),
-            };
-            visitor.visit_body(body);
-            genesis_pending.extend(visitor.callees);
-        }
-    }
-    let mut pending = tcx
+    let pending = tcx
         .hir_body_owners()
         .filter(|def_id| {
             matches!(tcx.hir_body_owner_kind(*def_id), BodyOwnerKind::Fn)
@@ -413,6 +400,10 @@ fn reachable_local_function_bodies(
                 && (!fallible_entry_points_only || returns_fallible(tcx, *def_id))
         })
         .collect::<Vec<_>>();
+    collect_local_callees(tcx, pending)
+}
+
+fn collect_local_callees(tcx: TyCtxt<'_>, mut pending: Vec<LocalDefId>) -> Vec<LocalDefId> {
     let mut visited = HashSet::new();
     let mut reachable = Vec::new();
 
@@ -625,6 +616,7 @@ fn report_reachable_debug_assertions<'tcx>(
     for def_id in reachable_bodies {
         if let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) {
             let mut debug_assert_visitor = Sec002Visitor {
+                tcx,
                 source_map,
                 diagnostics,
                 reported_lines: &mut reported_lines,
@@ -962,10 +954,11 @@ fn report_reachable_storage_iteration<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
     reachable_bodies: &[LocalDefId],
+    bookkeeping_bodies: &HashSet<LocalDefId>,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     for def_id in reachable_bodies {
-        if is_bookkeeping_context(tcx, *def_id) {
+        if bookkeeping_bodies.contains(def_id) {
             continue;
         }
         let Some(body) = tcx.hir_maybe_body_owned_by(*def_id) else {
@@ -1525,7 +1518,9 @@ impl<'tcx> Visitor<'tcx> for Sec007Visitor<'_, 'tcx> {
                 if let ExprKind::Block(block, _) = then_branch.kind {
                     for (index, statement) in block.stmts.iter().enumerate() {
                         if index == 0
-                            && matches!(statement.kind, StmtKind::Let(local) if local.init.is_some_and(|init| matches!(init.kind, ExprKind::MethodCall(segment, receiver, _, _) if segment.ident.name.as_str() == "try_push" && local_binding_id(self.typeck, receiver) == Some(binding))))
+                            && matches!(statement.kind, StmtKind::Let(local)
+                                if local.init.is_some_and(|init| is_capacity_checked_try_push(
+                                    self.typeck, init, &HashSet::from([binding]))))
                         {
                             self.push_capacity.insert(binding);
                         }
@@ -1549,9 +1544,9 @@ impl<'tcx> Visitor<'tcx> for Sec007Visitor<'_, 'tcx> {
         if matches!(local.pat.kind, PatKind::Wild)
             && local.init.is_some_and(|init| {
                 !is_defensive_result_handler(self.tcx, self.typeck, init)
-                    && !matches!(init.kind, ExprKind::MethodCall(segment, receiver, _, _) if segment.ident.name.as_str() == "try_push" && local_binding_id(self.typeck, receiver).is_some_and(|id| self.push_capacity.contains(&id)))
+                    && !is_capacity_checked_try_push(self.typeck, init, &self.push_capacity)
                     && result_error_type(self.tcx, self.typeck.expr_ty(init))
-                    .is_some_and(|error_ty| !type_is_unit(self.tcx, error_ty))
+                        .is_some_and(|error_ty| !type_is_unit(self.tcx, error_ty))
             })
         {
             let (file, line, column) = span_location(self.source_map, local.span);
@@ -1689,11 +1684,12 @@ fn report_redundant_storage_contains_key<'tcx>(
 fn report_dbweight_missing_pov<'tcx>(
     tcx: TyCtxt<'tcx>,
     source_map: &SourceMap,
+    bookkeeping_bodies: &HashSet<LocalDefId>,
     diagnostics: &mut Vec<RustcDiagnostic>,
 ) {
     let mut reported_lines = HashSet::new();
     for def_id in tcx.hir_body_owners() {
-        if is_bookkeeping_context(tcx, def_id) {
+        if bookkeeping_bodies.contains(&def_id) {
             continue;
         }
         let Some(body) = tcx.hir_maybe_body_owned_by(def_id) else {
@@ -2799,6 +2795,7 @@ struct InputBoundVisitor<'a, 'tcx> {
     bounded: bool,
     used: bool,
     follow_helper: bool,
+    // A helper call proves a bound only when its Result is propagated by ? or return.
     enforced: bool,
 }
 
@@ -2808,6 +2805,13 @@ impl<'tcx> Visitor<'tcx> for InputBoundVisitor<'_, 'tcx> {
         for statement in block.stmts {
             self.enforced = false;
             self.visit_stmt(statement);
+            if !self.follow_helper && !self.bounded {
+                let mut returns = ReturnVisitor { found: false };
+                returns.visit_stmt(statement);
+                if returns.found {
+                    self.used = true;
+                }
+            }
         }
         if let Some(tail) = block.expr {
             self.enforced = incoming;
@@ -2939,6 +2943,19 @@ impl<'tcx> Visitor<'tcx> for InputBoundVisitor<'_, 'tcx> {
             return;
         }
         intravisit::walk_expr(self, expr);
+    }
+}
+
+struct ReturnVisitor {
+    found: bool,
+}
+
+impl<'tcx> Visitor<'tcx> for ReturnVisitor {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        self.found |= matches!(expr.kind, ExprKind::Ret(_));
+        if !matches!(expr.kind, ExprKind::Closure(_)) {
+            intravisit::walk_expr(self, expr);
+        }
     }
 }
 
@@ -3080,7 +3097,15 @@ fn expr_is_input_length(
 ) -> bool {
     let expr = strip_drop_temps(expr);
     if let ExprKind::Cast(inner, _) = expr.kind {
-        return expr_is_input_length(typeck, inner, binding, lengths);
+        return matches!(
+            typeck.expr_ty(expr).kind(),
+            TyKind::Uint(
+                rustc_middle::ty::UintTy::U32
+                    | rustc_middle::ty::UintTy::U64
+                    | rustc_middle::ty::UintTy::U128
+                    | rustc_middle::ty::UintTy::Usize
+            )
+        ) && expr_is_input_length(typeck, inner, binding, lengths);
     }
     expr_is_vec_length_of_binding(typeck, expr, binding)
         || local_binding_id(typeck, expr).is_some_and(|id| lengths.contains(&id))
@@ -3195,8 +3220,19 @@ fn type_is_named_privileged_origin<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> boo
         _ => return false,
     };
     let name = tcx.item_name(def_id);
-    name.as_str() == "EnsureRoot"
-        || (name.as_str().ends_with("Origin") && name.as_str() != "RuntimeOrigin")
+    matches!(
+        name.as_str(),
+        "EnsureRoot"
+            | "AdminOrigin"
+            | "ForceOrigin"
+            | "FounderSetOrigin"
+            | "GovernanceOrigin"
+            | "RelayChainOrigin"
+            | "RootOrigin"
+            | "UsernameAuthorityOrigin"
+            | "RegistrarOrigin"
+            | "ManagerOrigin"
+    )
 }
 
 fn report_missing_weight_for_unbounded_inputs<'tcx>(
@@ -3322,9 +3358,25 @@ struct ParsedWeightAttributeVisitor<'a> {
     parsed_attributes: &'a mut Vec<ParsedWeightAttribute>,
     parsed_item_attributes: &'a mut Vec<ParsedItemAttributes>,
     parsed_transactional_attributes: &'a mut Vec<ParsedTransactionalAttribute>,
+    try_runtime_spans: &'a mut Vec<Span>,
 }
 
 impl ParsedWeightAttributeVisitor<'_> {
+    fn collect_try_runtime(&mut self, span: Span, attributes: &[rustc_ast::ast::Attribute]) {
+        if attributes.iter().any(|attr| {
+            attr.has_name(Symbol::intern("cfg"))
+                && attr.meta_item_list().is_some_and(|items| {
+                    items.len() == 1
+                        && items[0].has_name(Symbol::intern("feature"))
+                        && items[0]
+                            .value_str()
+                            .is_some_and(|value| value.as_str() == "try-runtime")
+                })
+        }) {
+            self.try_runtime_spans.push(span);
+        }
+    }
+
     fn collect_function(
         &mut self,
         function_name: &str,
@@ -3415,6 +3467,7 @@ impl<'ast> ast_visit::Visitor<'ast> for ParsedWeightAttributeVisitor<'_> {
     type Result = ();
 
     fn visit_item(&mut self, item: &'ast rustc_ast::ast::Item) -> Self::Result {
+        self.collect_try_runtime(item.span, &item.attrs);
         if matches!(
             item.kind,
             rustc_ast::ast::ItemKind::TyAlias(..) | rustc_ast::ast::ItemKind::Enum(..)
@@ -3432,6 +3485,7 @@ impl<'ast> ast_visit::Visitor<'ast> for ParsedWeightAttributeVisitor<'_> {
         item: &'ast rustc_ast::ast::AssocItem,
         context: ast_visit::AssocCtxt,
     ) -> Self::Result {
+        self.collect_try_runtime(item.span, &item.attrs);
         if let rustc_ast::ast::AssocItemKind::Fn(function) = &item.kind {
             self.collect_function(function.ident.name.as_str(), item.span, &item.attrs);
         }
@@ -3597,15 +3651,16 @@ fn balanced_attribute(source: &str) -> Option<&str> {
     None
 }
 
-struct Sec002Visitor<'a> {
+struct Sec002Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
     source_map: &'a SourceMap,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
     reported_lines: &'a mut HashSet<(String, usize)>,
 }
 
-impl<'tcx> Visitor<'tcx> for Sec002Visitor<'_> {
+impl<'tcx> Visitor<'tcx> for Sec002Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if let Some(call_site) = debug_assert_call_site(self.source_map, expr.span) {
+        if let Some(call_site) = debug_assert_call_site(self.tcx, self.source_map, expr.span) {
             if self
                 .source_map
                 .span_to_snippet(call_site)
@@ -3874,7 +3929,7 @@ impl<'tcx> Visitor<'tcx> for Sec008Visitor<'_, 'tcx> {
     }
 
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        if debug_assert_call_site(self.source_map, expr.span).is_some() {
+        if debug_assert_call_site(self.tcx, self.source_map, expr.span).is_some() {
             return;
         }
         if let ExprKind::If(condition, then_branch, else_branch) = expr.kind {
@@ -5350,23 +5405,10 @@ fn implemented_trait_id(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<DefId> 
         .and_then(|impl_def_id| tcx.trait_id_of_impl(impl_def_id))
 }
 
-fn expansion_has_macro(mut span: Span, predicate: impl Fn(&str) -> bool) -> bool {
-    for _ in 0..32 {
-        if span.ctxt().is_root() {
-            break;
-        }
-        let expansion = span.ctxt().outer_expn_data();
-        if matches!(expansion.kind, ExpnKind::Macro(_, name) if predicate(name.as_str())) {
-            return true;
-        }
-        span = expansion.call_site;
-    }
-    false
-}
-
 fn is_frame_generated_span(source_map: &SourceMap, span: Span) -> bool {
     // FRAME sometimes forwards an attribute's identifier span with a root syntax context.
-    // Inspect that source line as well as the expansion callsite; never skip weight expressions.
+    // Inspect that source line as well as the expansion callsite. Weight-expression
+    // visitors do not call this filter, so authored weight expressions remain checked.
     let site = span.source_callsite();
     let Ok(snippet) = source_map.span_to_snippet(site) else {
         return false;
@@ -5394,27 +5436,76 @@ fn is_frame_generated_span(source_map: &SourceMap, span: Span) -> bool {
         })
 }
 
-fn is_bookkeeping_context(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
-    let name = tcx
-        .opt_item_name(def_id.to_def_id())
-        .unwrap_or(Symbol::intern(""));
-    if matches!(
-        name.as_str(),
-        "try_state" | "do_try_state" | "pre_upgrade" | "post_upgrade" | "on_runtime_upgrade"
-    ) {
-        return true;
-    }
-    let path = tcx.def_path_str(def_id.to_def_id());
-    let (file, _, _) = span_location(tcx.sess.source_map(), tcx.def_span(def_id));
-    path.split("::")
-        .any(|part| matches!(part, "migration" | "migrations"))
-        || file.split('/').any(|part| {
+fn context_excluded_bodies(
+    tcx: TyCtxt<'_>,
+    parsed_weight_attributes: &[ParsedWeightAttribute],
+    try_runtime_spans: &[Span],
+) -> (HashSet<LocalDefId>, HashSet<LocalDefId>) {
+    let mut genesis = Vec::new();
+    let mut bookkeeping = Vec::new();
+    let mut production = Vec::new();
+    for id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let trait_path =
+            implemented_trait_id(tcx, id.to_def_id()).map(|trait_id| tcx.def_path_str(trait_id));
+        let frame_trait = trait_path
+            .as_deref()
+            .filter(|path| is_frame_support_path(path));
+        let name = tcx.item_name(id.to_def_id());
+        let is_genesis = frame_trait.is_some_and(|path| path.ends_with("::BuildGenesisConfig"));
+        let is_bookkeeping = frame_trait.is_some_and(|path| {
             matches!(
-                part,
-                "migration" | "migrations" | "migration.rs" | "migrations.rs"
-            )
+                path.rsplit("::").next(),
+                Some("OnRuntimeUpgrade" | "UncheckedOnRuntimeUpgrade")
+            ) || (path.ends_with("::Hooks")
+                && matches!(
+                    name.as_str(),
+                    "on_runtime_upgrade" | "try_state" | "pre_upgrade" | "post_upgrade"
+                ))
+        }) || try_runtime_spans
+            .iter()
+            .any(|span| span.contains(tcx.def_span(id).source_callsite()));
+        if is_genesis {
+            genesis.push(id);
+        }
+        if is_bookkeeping {
+            bookkeeping.push(id);
+        }
+        if is_frame_dispatchable(tcx, id, tcx.sess.source_map(), parsed_weight_attributes)
+            || (!is_genesis
+                && !is_bookkeeping
+                && trait_path.is_some()
+                && is_reachable_entry_point(tcx, id))
+        {
+            production.push(id);
+        }
+    }
+    let production: HashSet<_> = collect_local_callees(tcx, production).into_iter().collect();
+    let genesis_roots: HashSet<_> = genesis.iter().copied().collect();
+    let genesis = collect_local_callees(tcx, genesis)
+        .into_iter()
+        .filter(|id| {
+            !production.contains(id)
+                && (genesis_roots.contains(id) || !tcx.local_visibility(*id).is_public())
         })
-        || name.as_str().starts_with("migrate_")
+        .collect();
+    let bookkeeping = collect_local_callees(tcx, bookkeeping)
+        .into_iter()
+        .filter(|id| !production.contains(id))
+        .collect();
+    (genesis, bookkeeping)
+}
+
+fn is_capacity_checked_try_push(
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    expr: &Expr<'_>,
+    capacity: &HashSet<HirId>,
+) -> bool {
+    matches!(expr.kind, ExprKind::MethodCall(segment, receiver, _, _)
+        if segment.ident.name.as_str() == "try_push"
+            && local_binding_id(typeck, receiver).is_some_and(|id| capacity.contains(&id)))
 }
 
 fn bounded_vec_spare_capacity<'tcx>(
@@ -5532,13 +5623,21 @@ fn type_is_fallible(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
     }
 }
 
-fn debug_assert_call_site(source_map: &SourceMap, span: Span) -> Option<Span> {
-    if expansion_has_macro(span, |name| name.starts_with("defensive"))
-        || source_map
-            .span_to_snippet(span.source_callsite())
-            .is_ok_and(|text| text.contains("defensive!") || text.contains("defensive_assert!"))
-    {
-        return None;
+fn debug_assert_call_site(tcx: TyCtxt<'_>, source_map: &SourceMap, span: Span) -> Option<Span> {
+    let mut provenance = span;
+    for _ in 0..32 {
+        if provenance.ctxt().is_root() {
+            break;
+        }
+        let expansion = provenance.ctxt().outer_expn_data();
+        if expansion
+            .macro_def_id
+            .is_some_and(|id| tcx.crate_name(id.krate).as_str() == "frame_support")
+            && matches!(expansion.kind, ExpnKind::Macro(_, name) if name.as_str().starts_with("defensive"))
+        {
+            return None;
+        }
+        provenance = expansion.call_site;
     }
     let mut call_site = span;
     for _ in 0..32 {

@@ -2156,8 +2156,22 @@ cat > "$NOISE_FIXTURE" <<'RS'
 #![feature(register_tool)]
 #![register_tool(pallet)]
 pub mod frame_support {
-    pub mod traits { pub trait BuildGenesisConfig { fn build(&self); } }
+    pub mod traits {
+        pub trait BuildGenesisConfig { fn build(&self); }
+        pub trait OnRuntimeUpgrade { fn on_runtime_upgrade(); }
+        pub trait UncheckedOnRuntimeUpgrade { fn on_runtime_upgrade(); }
+        pub trait Hooks { fn try_state(); }
+        pub trait EnsureOrigin { fn ensure_origin(origin: ()) -> Result<(), ()>; }
+    }
+    pub mod weights {
+        pub struct RuntimeDbWeight;
+        impl RuntimeDbWeight { pub fn reads(&self, n: u64) -> u64 { n } }
+    }
     pub mod storage {
+        pub mod types {
+            pub struct StorageMap;
+            impl StorageMap { pub fn iter() -> std::vec::IntoIter<u8> { vec![1].into_iter() } }
+        }
         pub fn with_storage_layer<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E> { f() }
     }
 }
@@ -2251,11 +2265,13 @@ pub fn unrelated_capacity(values: &mut BoundedVec<u8, Limit>) {
 
 pub struct Genesis;
 impl frame_support::traits::BuildGenesisConfig for Genesis {
-    fn build(&self) { genesis_only(); shared_with_runtime(); }
+    fn build(&self) { genesis_only(); shared_with_runtime(); exported_api(None); }
 }
-pub fn genesis_only() -> u8 { None::<u8>.unwrap() }
+fn genesis_only() -> u8 { None::<u8>.unwrap() }
 pub fn shared_with_runtime() -> u8 { None::<u8>.unwrap() } // SEC008-positive
+#[pallet::call_index(20)] #[pallet::weight(1)]
 pub fn runtime_path() { shared_with_runtime(); }
+pub fn exported_api(value: Option<u8>) -> u8 { value.unwrap() } // SEC008-positive
 pub fn documented_proof(value: Result<u8, u8>) -> u8 {
     value.expect("the input invariant is established; qed")
 }
@@ -2263,17 +2279,108 @@ pub fn debug_only_panic(value: Option<u8>) {
     debug_assert!(value.unwrap() == 1);
 }
 
+fn ensure_signed(_: ()) -> Result<(), ()> { Ok(()) }
+#[pallet::call_index(21)] #[pallet::weight(1)]
+pub fn migrate_user(origin: ()) -> Result<(), ()> {
+    ensure_signed(origin)?;
+    for _ in frame_support::storage::types::StorageMap::iter() {} // SEC011-positive
+    Ok(())
+}
+#[pallet::call_index(22)] #[pallet::weight(1)]
+pub fn call_migration(origin: ()) -> Result<(), ()> {
+    ensure_signed(origin)?;
+    migration::shared();
+    Ok(())
+}
+pub mod migration {
+    pub fn shared() {
+        for _ in super::frame_support::storage::types::StorageMap::iter() {} // SEC011-positive
+        let _ = super::frame_support::weights::RuntimeDbWeight.reads(1); // SEM006-positive
+    }
+}
+pub struct Upgrade;
+impl frame_support::traits::OnRuntimeUpgrade for Upgrade {
+    fn on_runtime_upgrade() { upgrade_only(); migration::shared(); }
+}
+fn upgrade_only() {
+    for _ in frame_support::storage::types::StorageMap::iter() {}
+    let _ = frame_support::weights::RuntimeDbWeight.reads(1);
+}
+pub struct UncheckedUpgrade;
+impl frame_support::traits::UncheckedOnRuntimeUpgrade for UncheckedUpgrade {
+    fn on_runtime_upgrade() { upgrade_only(); }
+}
+pub struct TryState;
+impl frame_support::traits::Hooks for TryState {
+    fn try_state() { upgrade_only(); }
+}
+#[cfg(feature = "try-runtime")]
+pub mod inspection {
+    pub fn inspect() {
+        for _ in super::frame_support::storage::types::StorageMap::iter() {}
+        let _ = super::frame_support::weights::RuntimeDbWeight.reads(1);
+    }
+}
+use frame_support::traits::EnsureOrigin;
+pub trait Config { type CreateOrigin: EnsureOrigin; type UserOrigin: EnsureOrigin; }
+#[pallet::call_index(23)] #[pallet::weight(1)]
+pub fn create_origin<T: Config>(values: Vec<u8>) -> Result<(), ()> {
+    T::CreateOrigin::ensure_origin(())?;
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(24)] #[pallet::weight(1)]
+pub fn user_origin<T: Config>(values: Vec<u8>) -> Result<(), ()> {
+    T::UserOrigin::ensure_origin(())?;
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(25)] #[pallet::weight(1)]
+pub fn truncated_length(values: Vec<u8>) -> Result<(), ()> {
+    let n = values.len() as u8;
+    if n > 32 { return Err(()); }
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(26)] #[pallet::weight(1)]
+pub fn truncated_u16(values: Vec<u8>) -> Result<(), ()> {
+    let n = values.len() as u16;
+    if n > 32 { return Err(()); }
+    for _ in values {}
+    Ok(())
+}
+#[pallet::call_index(27)] #[pallet::weight(1)]
+pub fn wide_length(values: Vec<u8>) -> Result<(), ()> {
+    let n = values.len() as u64;
+    if n > 32 { return Err(()); }
+    for _ in values {}
+    Ok(())
+}
+fn bypass_check(values: &Vec<u8>, bypass: bool) -> Result<(), ()> {
+    if bypass { return Ok(()); }
+    if values.len() > 32 { return Err(()); }
+    Ok(())
+}
+#[pallet::call_index(28)] #[pallet::weight(1)]
+pub fn bypass_helper(values: Vec<u8>, bypass: bool) -> Result<(), ()> {
+    bypass_check(&values, bypass)?;
+    for _ in values {}
+    Ok(())
+}
+macro_rules! defensive_user { ($value:expr) => { debug_assert!($value) }; }
+pub fn local_defensive_macro(flag: bool) { defensive_user!(flag); } // SEC002-positive
+
 RS
 CONTEXT_JSON="$WORK_DIR/context.json"
 cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver --bin polkadot-linter-driver -- \
-  "$NOISE_FIXTURE" --crate-type lib --edition 2021 --emit metadata --out-dir "$RUSTC_TARGET_DIR" > "$CONTEXT_JSON"
-for name in wrapped_helper aliased_length; do
-  line="$(grep -n "pub fn $name(" "$NOISE_FIXTURE" | cut -d: -f1)"
+  '--cfg=feature="try-runtime"' "$NOISE_FIXTURE" --crate-type lib --edition 2021 --emit metadata --out-dir "$RUSTC_TARGET_DIR" > "$CONTEXT_JSON"
+for name in wrapped_helper aliased_length wide_length; do
+  line="$(grep -n "pub fn $name" "$NOISE_FIXTURE" | cut -d: -f1)"
   test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 0
 done
-for name in ignored_helper late_bound conditional_bound conditional_use_before_bound helper_returns_success; do
-  line="$(grep -n "pub fn $name(" "$NOISE_FIXTURE" | cut -d: -f1)"
+for name in ignored_helper late_bound conditional_bound conditional_use_before_bound helper_returns_success create_origin user_origin truncated_length truncated_u16 bypass_helper; do
+  line="$(grep -n "pub fn $name" "$NOISE_FIXTURE" | cut -d: -f1)"
   test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 2
 done
 
@@ -2283,6 +2390,12 @@ while IFS=: read -r line _; do
   test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC007" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
 done < <(grep -n 'SEC007-positive' "$NOISE_FIXTURE")
 
-test "$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$CONTEXT_JSON")" -eq 1
-line="$(grep -n 'SEC008-positive' "$NOISE_FIXTURE" | cut -d: -f1)"
-test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
+test "$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$CONTEXT_JSON")" -eq 2
+for rule in SEC008 SEC011 SEM006 SEC002; do
+  while IFS=: read -r line _; do
+    test "$(jq --arg rule "$rule" --argjson line "$line" '[.[] | select(.rule_id == $rule and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
+  done < <(grep -n "$rule-positive" "$NOISE_FIXTURE")
+done
+test "$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$CONTEXT_JSON")" -eq 2
+test "$(jq '[.[] | select(.rule_id == "SEM006")] | length' "$CONTEXT_JSON")" -eq 1
+test "$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$CONTEXT_JSON")" -eq 2
