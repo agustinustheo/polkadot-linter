@@ -1949,6 +1949,11 @@ impl LintRule for ValidationBeforeHeavyRead {
 
                 // If we already saw a heavy op, check for cheap validations after it
                 if let Some((heavy_line, ref heavy_pattern)) = first_heavy_op {
+                    // A name consumes the read only while it still holds the read value.
+                    let function = val001_function_at(&functions, heavy_line);
+                    let holds_read = |binding: &str| {
+                        function.is_none_or(|function| function.holds_read(binding, heavy_line, i))
+                    };
                     let mut consumed_heavy_read = false;
                     for pattern in &config.validation_order.cheap_validations {
                         if code.contains(pattern.as_str()) && i > heavy_line {
@@ -1967,8 +1972,9 @@ impl LintRule for ValidationBeforeHeavyRead {
                                     .map(String::as_str)
                                     .unwrap_or("");
                                 if bindings.iter().any(|binding| {
-                                    val001_references_binding(&code, binding)
-                                        || val001_references_binding(guard_tokens, binding)
+                                    (val001_references_binding(&code, binding)
+                                        || val001_references_binding(guard_tokens, binding))
+                                        && holds_read(binding)
                                 }) {
                                     consumed_heavy_read = true;
                                     break;
@@ -1990,11 +1996,9 @@ impl LintRule for ValidationBeforeHeavyRead {
                             );
                             if cost.reads_storage
                                 || cost.opaque_call
-                                || val001_function_at(&functions, heavy_line).is_some_and(
-                                    |function| {
-                                        function.guard_is_not_hoistable(heavy_line, i, &guard_text)
-                                    },
-                                )
+                                || function.is_some_and(|function| {
+                                    function.guard_is_not_hoistable(heavy_line, i, &guard_text)
+                                })
                             {
                                 break;
                             }
@@ -2034,9 +2038,9 @@ impl LintRule for ValidationBeforeHeavyRead {
                     if !consumed_heavy_read {
                         if let Some(ref bindings) = heavy_op_bindings {
                             consumed_heavy_read = i > heavy_line
-                                && bindings
-                                    .iter()
-                                    .any(|binding| val001_references_binding(&code, binding));
+                                && bindings.iter().any(|binding| {
+                                    val001_references_binding(&code, binding) && holds_read(binding)
+                                });
                         }
                     }
                     if consumed_heavy_read {
@@ -2315,9 +2319,10 @@ fn val001_diagnostic_macro_mask(ast: &SynFile, line_count: usize) -> Vec<bool> {
 
 /// Calls found in an expression: storage reads matching the configured heavy
 /// patterns, macros, and calls into pallet or config code. Same-pallet helpers
-/// (`Self::f`, `Pallet::<T>::f`) are resolved through `helpers`: they count as
-/// storage reads when their body reads storage and as opaque when they cannot
-/// be resolved. Config and trait calls (`T::..`, `<T as ..>::..`) stay opaque;
+/// (`Self::f`, `Pallet::<T>::f`) and same-crate free functions (`f(..)`) are
+/// resolved through `helpers`: they count as storage reads when their body
+/// reads storage and as opaque when they cannot be resolved; a bare call to a
+/// function the crate does not define is ignored. Config and trait calls (`T::..`, `<T as ..>::..`) stay opaque;
 /// `T::Constant::get()` is a type-level constant.
 #[derive(Default)]
 struct Val001CallScan<'a> {
@@ -2327,7 +2332,7 @@ struct Val001CallScan<'a> {
     heavy: bool,
     opaque: bool,
     macro_call: bool,
-    helper_calls: Vec<String>,
+    helper_calls: Vec<(String, bool)>,
 }
 
 impl<'a> Val001CallScan<'a> {
@@ -2365,6 +2370,16 @@ fn val001_helper_call_name(path: &syn::ExprPath) -> Option<String> {
     (owner.ident == "Self" || owner.ident == "Pallet").then(|| rest.ident.to_string())
 }
 
+/// The name of a bare call `f(..)`, which may be a same-crate free function.
+fn val001_free_call_name(path: &syn::ExprPath) -> Option<String> {
+    match path.path.segments.iter().collect::<Vec<_>>().as_slice() {
+        [name] if path.qself.is_none() && path.path.leading_colon.is_none() => {
+            Some(name.ident.to_string())
+        }
+        _ => None,
+    }
+}
+
 impl<'ast> Visit<'ast> for Val001CallScan<'_> {
     fn visit_expr_call(&mut self, call: &'ast ExprCall) {
         if let Expr::Path(path) = &*call.func {
@@ -2385,10 +2400,13 @@ impl<'ast> Visit<'ast> for Val001CallScan<'_> {
                         .any(|(index, _)| index < head.len())
             });
 
-            if let Some(name) = val001_helper_call_name(path) {
+            let helper = val001_helper_call_name(path)
+                .map(|name| (name, false))
+                .or_else(|| val001_free_call_name(path).map(|name| (name, true)));
+            if let Some((name, free)) = helper {
                 match self.helpers {
-                    None => self.helper_calls.push(name),
-                    Some(helpers) => match helpers.cost(&name) {
+                    None => self.helper_calls.push((name, free)),
+                    Some(helpers) => match helpers.cost(&name, free) {
                         Val001HelperCost::Cheap => {}
                         Val001HelperCost::Heavy => self.heavy = true,
                         Val001HelperCost::Unknown => self.opaque = true,
@@ -2428,12 +2446,13 @@ enum Val001HelperCost {
     Unknown,
 }
 
-/// A helper body's direct calls; helper calls are resolved lazily.
+/// A helper body's direct calls; helper calls are resolved lazily. Calls are
+/// `(name, free)`, where `free` marks a bare `f(..)` call.
 #[derive(Clone)]
 struct Val001HelperSummary {
     heavy: bool,
     opaque: bool,
-    calls: Vec<String>,
+    calls: Vec<(String, bool)>,
 }
 
 #[derive(Default)]
@@ -2501,11 +2520,13 @@ struct Val001Helpers {
     index: Rc<Val001HelperIndex>,
 }
 
-/// Helper calls are followed at most this deep before the cost is unknown.
+/// Helper calls are followed at most this deep. This only bounds the cost of
+/// the lookup: a deeper chain is unknown, so the guard is suppressed.
 const VAL001_HELPER_DEPTH: usize = 4;
 
-/// Crate helper indexes, keyed by crate directory and heavy-operation patterns.
-type Val001CrateHelperCache = HashMap<(PathBuf, Vec<String>), Rc<Val001HelperIndex>>;
+/// Crate helper indexes, keyed by crate directory. The heavy-operation
+/// patterns come from the config and are the same for the whole run.
+type Val001CrateHelperCache = HashMap<PathBuf, Rc<Val001HelperIndex>>;
 
 thread_local! {
     static VAL001_CRATE_HELPERS: RefCell<Val001CrateHelperCache> = RefCell::default();
@@ -2528,33 +2549,37 @@ impl Val001Helpers {
                 index: Rc::new(index),
             };
         };
-        let key = (crate_dir, heavy_operations.to_vec());
         let index = VAL001_CRATE_HELPERS.with(|cache| {
-            Rc::clone(cache.borrow_mut().entry(key.clone()).or_insert_with(|| {
-                let mut index = Val001HelperIndex::default();
-                for entry in walkdir::WalkDir::new(key.0.join("src"))
-                    .into_iter()
-                    .filter_map(Result::ok)
-                    .filter(|entry| {
-                        entry.file_type().is_file()
-                            && entry.path().extension().is_some_and(|ext| ext == "rs")
-                    })
-                {
-                    if let Some(ast) = fs::read_to_string(entry.path())
-                        .ok()
-                        .and_then(|source| syn::parse_file(&source).ok())
-                    {
-                        index.add_file(&ast, heavy_operations);
-                    }
-                }
-                Rc::new(index)
-            }))
+            Rc::clone(
+                cache
+                    .borrow_mut()
+                    .entry(crate_dir.clone())
+                    .or_insert_with(|| {
+                        let mut index = Val001HelperIndex::default();
+                        for entry in walkdir::WalkDir::new(crate_dir.join("src"))
+                            .into_iter()
+                            .filter_map(Result::ok)
+                            .filter(|entry| {
+                                entry.file_type().is_file()
+                                    && entry.path().extension().is_some_and(|ext| ext == "rs")
+                            })
+                        {
+                            if let Some(ast) = fs::read_to_string(entry.path())
+                                .ok()
+                                .and_then(|source| syn::parse_file(&source).ok())
+                            {
+                                index.add_file(&ast, heavy_operations);
+                            }
+                        }
+                        Rc::new(index)
+                    }),
+            )
         });
         Self { index }
     }
 
-    fn cost(&self, name: &str) -> Val001HelperCost {
-        self.cost_at(name, 0, &mut HashSet::new())
+    fn cost(&self, name: &str, free: bool) -> Val001HelperCost {
+        self.cost_at(name, free, 0, &mut HashSet::new())
     }
 
     /// Combines every definition named `name`: a heavy one wins, then an
@@ -2562,15 +2587,22 @@ impl Val001Helpers {
     fn cost_at(
         &self,
         name: &str,
+        free: bool,
         depth: usize,
         resolving: &mut HashSet<String>,
     ) -> Val001HelperCost {
+        let Some(definitions) = self.index.summaries.get(name) else {
+            // A bare call to something the crate does not define is a
+            // constructor or an imported function, judged as before.
+            return if free {
+                Val001HelperCost::Cheap
+            } else {
+                Val001HelperCost::Unknown
+            };
+        };
         if depth >= VAL001_HELPER_DEPTH {
             return Val001HelperCost::Unknown;
         }
-        let Some(definitions) = self.index.summaries.get(name) else {
-            return Val001HelperCost::Unknown;
-        };
         if !resolving.insert(name.to_string()) {
             return Val001HelperCost::Cheap;
         }
@@ -2583,8 +2615,8 @@ impl Val001Helpers {
             if definition.opaque {
                 cost = Val001HelperCost::Unknown;
             }
-            for call in &definition.calls {
-                match self.cost_at(call, depth + 1, resolving) {
+            for (call, free) in &definition.calls {
+                match self.cost_at(call, *free, depth + 1, resolving) {
                     Val001HelperCost::Cheap => {}
                     Val001HelperCost::Heavy => {
                         resolving.remove(name);
@@ -2619,16 +2651,24 @@ struct Val001Binding {
     /// Visible from this position to the end of line `scope_end`.
     visible_from: Val001Position,
     scope_end: usize,
-    /// Initializer and later assignments, with the position each one's names
-    /// resolve at.
-    sources: Vec<(String, Val001Position)>,
-    /// Some source reads storage directly.
+    /// The initializer, then later assignments, in source order.
+    sources: Vec<Val001Source>,
+}
+
+/// A value a binding receives from its initializer or an assignment.
+#[derive(Clone)]
+struct Val001Source {
+    text: String,
+    /// Where the source's names resolve; sources are ordered by it.
+    position: Val001Position,
+    /// The source expression's lines.
+    lines: (usize, usize),
     reads_storage: bool,
-    /// Lines where the binding receives a value from storage, pallet/config
-    /// code, or an unanalysed macro; pure arithmetic on arguments can move
-    /// along with the guard that uses it.
-    computed_at: Vec<usize>,
-    /// The bindings its sources reference.
+    /// The line the value is computed on, when it comes from storage,
+    /// pallet/config code, or an unanalysed macro; pure arithmetic on
+    /// arguments can move along with the guard that uses it.
+    computed_at: Option<usize>,
+    /// The bindings the source references.
     deps: Vec<usize>,
 }
 
@@ -2673,46 +2713,65 @@ impl Val001FunctionFacts {
             .map(|(index, _)| index)
     }
 
+    /// The latest value binding `index` received before `position`.
+    fn source_before(&self, index: usize, position: Val001Position) -> Option<&Val001Source> {
+        self.bindings[index]
+            .sources
+            .iter()
+            .rev()
+            .find(|source| source.position < position)
+    }
+
+    /// Whether `name` still holds the value read at `heavy_line` when used on
+    /// `line`. Names that are not locals are assumed to.
+    fn holds_read(&self, name: &str, heavy_line: usize, line: usize) -> bool {
+        let position = (line, usize::MAX);
+        self.resolve(name, position).is_none_or(|index| {
+            self.source_before(index, position)
+                .is_none_or(|source| source.lines.0 <= heavy_line && heavy_line <= source.lines.1)
+        })
+    }
+
     fn link_dependencies(&mut self) {
         for index in 0..self.bindings.len() {
-            let mut deps = Vec::new();
-            for (source, position) in &self.bindings[index].sources {
-                for name in val001_identifiers(source) {
+            for source in 0..self.bindings[index].sources.len() {
+                let Val001Source { text, position, .. } = &self.bindings[index].sources[source];
+                let mut deps = Vec::new();
+                for name in val001_identifiers(text) {
                     if let Some(dep) = self.resolve(name, *position) {
-                        if dep != index && !deps.contains(&dep) {
+                        if !deps.contains(&dep) {
                             deps.push(dep);
                         }
                     }
                 }
+                self.bindings[index].sources[source].deps = deps;
             }
-            self.bindings[index].deps = deps;
         }
     }
 
     /// Whether the guard at `guard_line` is not an independent precondition
     /// of the read at `heavy_line`: it consumes storage-derived data, a value
     /// computed after the read, or it lives where it cannot be hoisted from.
-    /// Only bindings visible at the guard count, followed through aliases.
+    /// Only bindings visible at the guard count, each with the latest value
+    /// it received before the guard, followed through aliases.
     fn guard_is_not_hoistable(&self, heavy_line: usize, guard_line: usize, guard: &str) -> bool {
         let position = (guard_line, usize::MAX);
         let mut pending = val001_identifiers(guard)
             .filter_map(|name| self.resolve(name, position))
+            .map(|index| (index, position))
             .collect::<Vec<_>>();
         let mut seen = HashSet::new();
-        while let Some(index) = pending.pop() {
-            if !seen.insert(index) {
+        while let Some((index, position)) = pending.pop() {
+            if !seen.insert((index, position)) {
                 continue;
             }
-            let binding = &self.bindings[index];
-            if binding.reads_storage
-                || binding
-                    .computed_at
-                    .iter()
-                    .any(|&line| line > heavy_line && line <= guard_line)
-            {
+            let Some(source) = self.source_before(index, position) else {
+                continue;
+            };
+            if source.reads_storage || source.computed_at.is_some_and(|line| line > heavy_line) {
                 return true;
             }
-            pending.extend(&binding.deps);
+            pending.extend(source.deps.iter().map(|&dep| (dep, source.position)));
         }
         let within = |(start, end): (usize, usize), line: usize| start <= line && line <= end;
         if self
@@ -2756,7 +2815,7 @@ fn val001_function_facts(
         /// The end of the `if`/`while` body an `if let` condition binds into.
         let_scope_end: Option<usize>,
         /// `name = value` assignments, resolved once all bindings are known.
-        assignments: Vec<(String, Val001Position, String, Val001CallScan<'a>)>,
+        assignments: Vec<(String, Val001Position, Val001Source)>,
     }
 
     fn line_range<T: Spanned>(node: &T) -> (usize, usize) {
@@ -2815,14 +2874,14 @@ fn val001_function_facts(
                     name: String::new(),
                     visible_from,
                     scope_end,
-                    sources: vec![(compact_tokens(source), start_position(source))],
-                    reads_storage: scan.heavy,
-                    computed_at: if computed {
-                        vec![visible_from.0]
-                    } else {
-                        Vec::new()
-                    },
-                    deps: Vec::new(),
+                    sources: vec![Val001Source {
+                        text: compact_tokens(source),
+                        position: start_position(source),
+                        lines: line_range(source),
+                        reads_storage: scan.heavy,
+                        computed_at: computed.then_some(visible_from.0),
+                        deps: Vec::new(),
+                    }],
                 },
             );
         }
@@ -2887,8 +2946,15 @@ fn val001_function_facts(
                     self.assignments.push((
                         name.to_string(),
                         start_position(expr),
-                        compact_tokens(&expr.right),
-                        scan,
+                        Val001Source {
+                            text: compact_tokens(&expr.right),
+                            position: start_position(&expr.right),
+                            lines: line_range(&expr.right),
+                            reads_storage: scan.heavy,
+                            computed_at: (scan.heavy || scan.opaque || scan.macro_call)
+                                .then_some(expr.span().start().line.saturating_sub(1)),
+                            deps: Vec::new(),
+                        },
                     ));
                 }
             }
@@ -2981,10 +3047,14 @@ fn val001_function_facts(
                     name: String::new(),
                     visible_from: start_position(&closure.body),
                     scope_end: body.1,
-                    sources: vec![(context.source, start_position(closure))],
-                    reads_storage: context.reads_storage,
-                    computed_at: vec![body.0],
-                    deps: Vec::new(),
+                    sources: vec![Val001Source {
+                        text: context.source,
+                        position: start_position(closure),
+                        lines: line_range(closure),
+                        reads_storage: context.reads_storage,
+                        computed_at: Some(body.0),
+                        deps: Vec::new(),
+                    }],
                 },
             );
             if !context.runs_once {
@@ -3016,14 +3086,9 @@ fn val001_function_facts(
         visitor.visit_block(block);
 
         let mut facts = visitor.facts;
-        for (name, position, source, scan) in visitor.assignments {
+        for (name, position, source) in visitor.assignments {
             if let Some(index) = facts.resolve(&name, position) {
-                let binding = &mut facts.bindings[index];
-                binding.sources.push((source, position));
-                binding.reads_storage |= scan.heavy;
-                if scan.heavy || scan.opaque || scan.macro_call {
-                    binding.computed_at.push(position.0);
-                }
+                facts.bindings[index].sources.push(source);
             }
         }
         facts.link_dependencies();
