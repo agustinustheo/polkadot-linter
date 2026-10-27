@@ -3,7 +3,7 @@ BEN001	substrate/frame/assets/src/weights.rs	74	FP	oracle:macro-expansion	pallet
 BEN001	substrate/frame/assets/src/weights.rs	94	FP	oracle:macro-expansion	pallet-assets compiler SelectedBenchmark contains force_set_metadata; source benchmarks_instance_pallet! at benchmarking.rs:158
 BEN001	substrate/frame/contracts/src/weights.rs	115	FP	manual	seal_terminate exists at substrate/frame/contracts/src/benchmarking/mod.rs:924; crate ownership verified from Cargo path/workspace dependency
 BEN001	substrate/frame/contracts/src/weights.rs	75	FP	manual	on_process_deletion_queue_batch exists at substrate/frame/contracts/src/benchmarking/mod.rs:233; crate ownership verified from Cargo path/workspace dependency
-BEN001	substrate/frame/membership/src/weights.rs	78	FP	oracle:macro-expansion	pallet-membership compiler SelectedBenchmark contains reset_members; measured Membership::reset_members at benchmarking.rs:114
+BEN001	substrate/frame/membership/src/weights.rs	78	FP	manual	benchmarking.rs:114 measures Membership::<T, I>::reset_members; use super::{Pallet as Membership, *} at benchmarking.rs:20 establishes the owning alias
 BEN001	substrate/frame/node-authorization/src/weights.rs	27	TP	manual	add_well_known_node has a hardcoded 50000000 weight in weights.rs:39-43; node-authorization has no benchmark definitions or companion benchmark crate in pinned SDK
 BEN001	substrate/frame/node-authorization/src/weights.rs	31	TP	manual	claim_node has a hardcoded 50000000 weight in weights.rs:39-43; node-authorization has no benchmark definitions or companion benchmark crate in pinned SDK
 BEN001	substrate/frame/nomination-pools/src/weights.rs	66	FP	manual	chill exists at substrate/frame/nomination-pools/benchmarking/src/inner.rs:752; crate ownership verified from Cargo path/workspace dependency
@@ -31,9 +31,9 @@ BEN002	substrate/frame/vesting/src/benchmarking.rs	333	FP	oracle:macro-expansion
 BEN002	substrate/frame/vesting/src/benchmarking.rs	77	FP	oracle:macro-expansion	Expanded pallet-vesting vest_locked has verification guarded by if verify after recording.stop(); source assertion at L99
 BEN003	substrate/frame/assets/src/lib.rs	760	FP	oracle:macro-expansion	v1 create uses _<T::RuntimeOrigin>(...) at benchmarking.rs:166; compiler constructs new_call_variant_create
 BEN003	substrate/frame/contracts/src/lib.rs	1052	FP	manual	benchmarking/mod.rs:514 defines instantiate; measured #[extrinsic_call] _(RawOrigin::Signed(...)) at L531-532 targets instantiate
-BEN003	substrate/frame/membership/src/lib.rs	172	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::add_member inside v1 measured block
-BEN003	substrate/frame/membership/src/lib.rs	261	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::reset_members inside v1 measured block
-BEN003	substrate/frame/membership/src/lib.rs	343	FP	oracle:macro-expansion	pallet-membership compiler expansion measures Membership::clear_prime inside v1 measured block
+BEN003	substrate/frame/membership/src/lib.rs	172	FP	manual	benchmarking.rs:51 measures Membership::<T, I>::add_member; owning Pallet alias at benchmarking.rs:20
+BEN003	substrate/frame/membership/src/lib.rs	261	FP	manual	benchmarking.rs:114 measures Membership::<T, I>::reset_members; owning Pallet alias at benchmarking.rs:20
+BEN003	substrate/frame/membership/src/lib.rs	343	FP	manual	benchmarking.rs:168 measures Membership::<T, I>::clear_prime; owning Pallet alias at benchmarking.rs:20
 BEN003	substrate/frame/multi-asset-bounties/src/lib.rs	1046	FP	manual	benchmarking.rs:521 close_parent_bounty measures Bounties::close_bounty inside assert_ok! at L529
 BEN003	substrate/frame/node-authorization/src/lib.rs	205	TP	manual	Dispatchable add_well_known_node at lib.rs:213/325 has hardcoded WeightInfo weights; no benchmark sources or companion benchmark package in pinned SDK
 BEN003	substrate/frame/node-authorization/src/lib.rs	319	TP	manual	Dispatchable claim_node at lib.rs:213/325 has hardcoded WeightInfo weights; no benchmark sources or companion benchmark package in pinned SDK

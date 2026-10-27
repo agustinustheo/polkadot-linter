@@ -15,13 +15,23 @@ It checks the SDK commit, compiler-created `SelectedBenchmark` variants, measure
 dispatch mappings in `BenchmarkingSetup` implementations, and verification
 branches after `recording.stop()`, against `BEN-oracle.json`. Expansion outputs
 and expected/actual TSV files are preserved in the requested output directory.
-Membership uses its explicit compiler-resolved `Membership` receiver; assets and
-vesting use generated Call constructors (and three dispatched local Call
-variants in assets). Arbitrary terminal function names are not coverage evidence.
+The expected values in `BEN-oracle.json` are hand-written. The membership
+extractor pattern-matches the authored `Membership::<...>::call` spelling in
+expanded measured blocks; expansion does not resolve use aliases. Its seven
+call mappings therefore require manual source checks. Assets and vesting use
+generated Call constructors (and three dispatched local Call variants in assets).
+
+All seven membership calls were read in `substrate/frame/membership/src/benchmarking.rs`:
+`add_member` at L51, `remove_member` at L71, `swap_member` at L93,
+`reset_members` at L114, `change_key` at L138, `set_prime` at L154, and
+`clear_prime` at L168. Each measures `Membership::<T, I>::<same name>`;
+`use super::{Pallet as Membership, *}` at L20 establishes the owning alias.
+`BEN.tsv` has four membership labels (one BEN001 and three BEN003), all now
+`manual`; the seven entries in the JSON are call mappings, not seven TSV labels.
 
 Fresh expansions passed in round two: membership has seven v1 benchmarks,
 assets has 39 v1 instance benchmarks, and vesting has nine v2 benchmarks. All 55
-names and mappings agree with the compiler fixture. Fifty measure dispatchables;
+names and mappings agree with the hand-written expected fixture. Fifty measure dispatchables;
 five assets definitions measure helpers and have empty dispatch mappings.
 The assets create and vesting verification labels are backed by expanded
 post-measurement `if verify` branches.
@@ -35,8 +45,9 @@ pinned compiler output, not arbitrary Rust syntax. A runtime/node
 
 The former Python source inventory was removed. Its exclusion and terminal-call
 heuristics shared blind spots with the implementation, so it was not independent
-evidence. Only compiler-expansion-backed labels retain `oracle:macro-expansion`.
-All other labels are `manual` and cite source locations and concrete facts.
+evidence. Labels supported by generated variants or verification branches retain
+`oracle:macro-expansion`. Membership call ownership and other source-read
+labels are `manual` and cite source locations and concrete facts.
 Weight-generation headers are supporting provenance, not proof of coverage.
 
 ## Corpus counts
@@ -55,9 +66,8 @@ Round-two FRAME changes: two BEN002 findings in example libraries are restored;
 eight BEN003 gaps in example libraries are restored; three nomination-pools
 BEN003 FPs disappear because assertion arguments now expose the owning `Pools`
 call. No other findings change. Empty v1 verification rejection has no additional
-pinned-corpus impact. Tight companion naming preserves the SDK's
-`pallet-election-provider-support-benchmarking` / `frame-election-provider-support`
-relationship while rejecting arbitrary nested packages containing "benchmark".
+pinned-corpus impact. Companion discovery requires matching package names and declared ownership;
+arbitrary nested packages containing "benchmark" are rejected.
 
 Scan-scoped caching memoizes discovery by crate root and Cargo manifests by path.
 On this machine, separately compiled debug binaries scanned FRAME BEN rules in

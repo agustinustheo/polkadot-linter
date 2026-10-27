@@ -8113,3 +8113,80 @@ fn ben003_foreign_imports_can_shadow_conventional_names() {
         assert!(has_rule(&check_fixture(path.to_str().unwrap(), code), "BEN003"), "{source}");
     }
 }
+
+fn check_ben003_binding_body(body: &str, missing: bool) {
+    for syntax in ["v1", "v2"] {
+        let dir = tempfile::tempdir().unwrap();
+        let source = if syntax == "v1" {
+            format!("benchmarks! {{ renamed {{}}: {{ {body} }} verify {{ assert!(true); }} }}")
+        } else {
+            format!("#[benchmark] fn renamed() {{ {body} assert!(true); }}")
+        };
+        std::fs::write(dir.path().join("benchmarking.rs"), source).unwrap();
+        let code = "#[pallet::call] impl Pallet { pub fn transfer() {} }";
+        let path = dir.path().join("lib.rs");
+        std::fs::write(&path, code).unwrap();
+        assert_eq!(
+            has_rule(&check_fixture(path.to_str().unwrap(), code), "BEN003"),
+            missing,
+            "{syntax}: {body}"
+        );
+    }
+}
+
+#[test]
+fn ben003_later_call_binding_does_not_credit_dispatch() {
+    check_ben003_binding_body("let call = other::Call::<T>::transfer {}; #[block] { call.dispatch(origin); } let call = Call::<T>::transfer {};", true);
+}
+
+#[test]
+fn ben003_latest_call_binding_wins() {
+    check_ben003_binding_body("let call = Call::<T>::transfer {}; #[block] { let call = other::Call::<T>::transfer {}; call.dispatch(origin); }", true);
+    check_ben003_binding_body("let call = Call::<T>::transfer {}; let call = other::Call::<T>::transfer {}; #[block] { call.dispatch(origin); }", true);
+    check_ben003_binding_body("let call = other::Call::<T>::transfer {}; let call = Call::<T>::transfer {}; #[block] { call.dispatch(origin); }", false);
+}
+
+#[test]
+fn ben003_construct_and_dispatch_inside_measured_block() {
+    check_ben003_binding_body(
+        "#[block] { let call = Call::<T>::transfer {}; call.dispatch(origin); }",
+        false,
+    );
+}
+
+#[test]
+fn ben001_follows_custom_lib_root_sibling_modules() {
+    use polkadot_linter::{config::Config, engine::LintEngine};
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"custom-root\"\nversion = \"0.1.0\"\n[lib]\npath = \"src/runtime.rs\"\n").unwrap();
+    std::fs::write(
+        src.join("runtime.rs"),
+        "pub mod weights; pub mod benchmarking;",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("weights.rs"),
+        "pub trait WeightInfo { fn missing(); }",
+    )
+    .unwrap();
+    std::fs::write(src.join("benchmarking.rs"), "").unwrap();
+    let mut engine = LintEngine::new(Config::default());
+    engine.filter_rules(&["BEN001".into()]);
+    let findings = engine.scan(dir.path());
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert!(findings[0].message.contains("`missing`"));
+}
+
+#[test]
+fn ben003_resolves_function_and_block_local_imports() {
+    for body in [
+        "use crate::Pallet as Local; #[block] { Local::<T>::transfer(); }",
+        "#[block] { use crate::Pallet as Local; Local::<T>::transfer(); }",
+        "use other::Pallet as Local; #[block] { use crate::Pallet as Local; Local::<T>::transfer(); }",
+    ] {
+        check_ben003_binding_body(body, false);
+    }
+    check_ben003_binding_body("use crate::Pallet as Local; #[block] { use other::Pallet as Local; Local::<T>::transfer(); }", true);
+}
