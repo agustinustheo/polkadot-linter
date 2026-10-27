@@ -2723,13 +2723,18 @@ impl Val001FunctionFacts {
     }
 
     /// Whether `name` still holds the value read at `heavy_line` when used on
-    /// `line`. Names that are not locals are assumed to. A use inside the
-    /// right-hand side of a reassignment of `name` sees the value it replaces.
+    /// `line`. Names that are not locals are assumed to. A use inside a
+    /// reassignment of `name` whose right-hand side references `name` sees the
+    /// value it replaces.
     fn holds_read(&self, name: &str, heavy_line: usize, line: usize) -> bool {
         let position = (line, usize::MAX);
         self.resolve(name, position).is_none_or(|index| {
             let source = match self.source_before(index, position) {
-                Some(source) if source.lines.0 <= line && line <= source.lines.1 => {
+                Some(source)
+                    if source.lines.0 <= line
+                        && line <= source.lines.1
+                        && val001_identifiers(&source.text).any(|ident| ident == name) =>
+                {
                     self.source_before(index, source.position).or(Some(source))
                 }
                 source => source,
