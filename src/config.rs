@@ -275,7 +275,16 @@ impl Default for TerminologyConfig {
 impl Config {
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
+        // A `[rules]` table overrides the bundled per-rule entries instead of
+        // replacing them, so default-off rules stay off unless re-enabled.
+        let defaults = Config::default().rules;
+        for (rule_id, enabled) in defaults.enabled {
+            config.rules.enabled.entry(rule_id).or_insert(enabled);
+        }
+        for (rule_id, severity) in defaults.severity {
+            config.rules.severity.entry(rule_id).or_insert(severity);
+        }
         config.validate()?;
         Ok(config)
     }
@@ -374,6 +383,33 @@ mod tests {
             Some(&"error".to_string())
         );
         assert_eq!(config.general.exclude.first(), Some(&"*.lock".to_string()));
+        assert!(!config.rule_enabled("SEM002"));
+        assert_eq!(
+            config.rule_severity("SEM008", Severity::Warning),
+            Severity::Advisory
+        );
+    }
+
+    #[test]
+    fn loaded_rules_tables_override_bundled_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("polkadot-linter.toml");
+        std::fs::write(
+            &path,
+            "[rules.enabled]\nSEM003 = true\n[rules.severity]\nVAL001 = \"error\"\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert!(config.rule_enabled("SEM003"));
+        assert!(!config.rule_enabled("SEM002"));
+        assert_eq!(
+            config.rules.severity.get("TST002"),
+            Some(&"error".to_string())
+        );
+        assert_eq!(
+            config.rules.severity.get("VAL001"),
+            Some(&"error".to_string())
+        );
     }
 
     #[test]

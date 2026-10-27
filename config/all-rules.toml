@@ -1,0 +1,14 @@
+# Every rule enabled, for the pinned-SDK corpus baselines and labeled findings
+# (scripts/check-source-rule-corpus.sh, check-source-runtime-corpus.sh and
+# check-labeled-findings.sh), so they keep exercising the rules that
+# config/default.toml turns off. Every other setting is the bundled default.
+
+[rules.enabled]
+MOK001 = true
+SEM002 = true
+SEM003 = true
+SEM004 = true
+SEM007 = true
+SEM012 = true
+TST003 = true
+TST005 = true

@@ -206,7 +206,7 @@ while IFS= read -r scan_root; do
   results_json="$WORK_DIR/scan.json"
   set +e
   "${linter[@]}" \
-    --config "$ROOT_DIR/config/default.toml" \
+    --config "$ROOT_DIR/config/all-rules.toml" \
     --syntax-only \
     --format json \
     "$SDK_DIR/$scan_root" >"$results_json"

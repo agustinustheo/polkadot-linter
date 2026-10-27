@@ -13,3 +13,15 @@ construct_runtime!(
 		PolkadotXcm: pallet_xcm = 31,
 	}
 );
+
+// Priced delivery still collects fees for `()` to burn.
+pub type XcmRouter = (
+	cumulus_primitives_utility::ParentAsUmp<ParachainSystem, PolkadotXcm, PriceForParentDelivery>,
+	XcmpQueue,
+);
+pub type PriceForParentDelivery =
+	ExponentialPrice<FeeAssetId, BaseDeliveryFee, TransactionByteFee, ParachainSystem>;
+
+impl cumulus_pallet_xcmp_queue::Config for Runtime {
+	type PriceForSiblingDelivery = NoPriceForMessageDelivery<ParaId>;
+}

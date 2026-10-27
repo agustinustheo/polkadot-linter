@@ -6,7 +6,11 @@ use std::path::Path;
 
 #[test]
 fn benchmark_labels_name_syntax_engine_rules() {
-    let config = polkadot_linter::config::Config::default();
+    // The scan uses config/all-rules.toml, which also enables the default-off rules.
+    let config = polkadot_linter::config::Config::load(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("config/all-rules.toml"),
+    )
+    .expect("config/all-rules.toml is valid");
     let registered = polkadot_linter::rules::all_rules(&config)
         .into_iter()
         .map(|rule| rule.id().to_string())

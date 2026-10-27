@@ -1170,6 +1170,10 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
         aliases: &'a Aliases,
         findings: Vec<(XcmFeeFinding, usize, String)>,
         lines: HashSet<usize>,
+        /// Delivery prices in the file: (any free, any priced).
+        prices: (bool, bool),
+        /// Fee managers of executors that send but cannot export.
+        export_free_fee_managers: Vec<Type>,
     }
 
     impl Visitor<'_> {
@@ -1179,8 +1183,25 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
             }
         }
 
+        /// Records whether the delivery price `ty` (or the same-file alias it
+        /// names) is free, and returns whether `ty` itself is, for RTC003.
+        fn note_price(&mut self, ty: &Type) -> bool {
+            let free = is_free_delivery_price(ty)
+                || type_path(ty)
+                    .filter(|path| path.segments.len() == 1)
+                    .and_then(last_ident)
+                    .and_then(|ident| self.aliases.get(&ident)?.as_ref())
+                    .is_some_and(is_free_delivery_price);
+            if free {
+                self.prices.0 = true;
+            } else {
+                self.prices.1 = true;
+            }
+            is_free_delivery_price(ty)
+        }
+
         fn check_price(&mut self, ident: &str, ty: &Type) {
-            if DELIVERY_PRICE_TYPES.contains(&ident) && is_free_delivery_price(ty) {
+            if DELIVERY_PRICE_TYPES.contains(&ident) && self.note_price(ty) {
                 self.push(
                     XcmFeeFinding::Waived,
                     line_of(ty),
@@ -1238,8 +1259,11 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                 let exports = impl_type_named(item_impl, "MessageExporter")
                     .is_none_or(|item| !is_unit_type(&item.ty));
                 if let Some(fee_manager) = impl_type_named(item_impl, "FeeManager") {
-                    if sends || exports {
+                    if exports {
                         self.check_fee_manager(&fee_manager.ty);
+                    } else if sends {
+                        // Checked once every delivery price in the file is known.
+                        self.export_free_fee_managers.push(fee_manager.ty.clone());
                     }
                 }
             }
@@ -1259,7 +1283,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                 let ident = segment.ident.to_string();
                 if PRICED_ROUTERS.contains(&ident.as_str()) {
                     if let Some(price) = generic_type_args(segment).get(2) {
-                        if is_free_delivery_price(price) {
+                        if self.note_price(price) {
                             self.push(
                                 XcmFeeFinding::Waived,
                                 line_of(*price),
@@ -1281,8 +1305,18 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
         aliases: &aliases,
         findings: Vec::new(),
         lines: HashSet::new(),
+        prices: (false, false),
+        export_free_fee_managers: Vec::new(),
     };
     visitor.visit_file(file);
+    // Without an exporter, fees are only delivery prices: when every one in
+    // the file is free, a `()` fee manager has nothing to burn.
+    let all_prices_free = visitor.prices == (true, false);
+    for fee_manager in std::mem::take(&mut visitor.export_free_fee_managers) {
+        if !(all_prices_free && is_unit_type(&fee_manager)) {
+            visitor.check_fee_manager(&fee_manager);
+        }
+    }
     visitor.findings
 }
 

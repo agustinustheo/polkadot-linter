@@ -19,7 +19,7 @@ trap 'rm -f "$RESULTS_JSON" "$ACTUAL_BASELINE"' EXIT
 
 set +e
 cargo +1.93.0 run --quiet --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" \
+  --config "$ROOT_DIR/config/all-rules.toml" \
   --syntax-only \
   --format json \
   "$SDK_DIR/substrate/frame" >"$RESULTS_JSON"

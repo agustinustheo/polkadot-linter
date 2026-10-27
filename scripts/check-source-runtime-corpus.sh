@@ -45,7 +45,7 @@ for scan_root in "${SCAN_ROOTS[@]}"; do
   output="$WORK_DIR/$(echo "$scan_root" | tr '/' '_').json"
   set +e
   "$LINTER" \
-    --config "$ROOT_DIR/config/default.toml" \
+    --config "$ROOT_DIR/config/all-rules.toml" \
     --syntax-only \
     --format json \
     --rules runtime-config \
