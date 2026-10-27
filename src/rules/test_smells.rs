@@ -292,6 +292,8 @@ impl LintRule for ApplyExtrinsicAssertOk {
 /// `apply_extrinsics`, which return a plain `Result`, are not mistaken for it.
 /// `apply_extrinsic(xt).unwrap()` / `.expect(..)` / `?` peel the outer
 /// validity layer, leaving `assert_ok!` to check the inner `DispatchResult`.
+/// The two-argument form `assert_ok!(x, y)` expands to
+/// `assert_eq!(x, Ok(y))`, which compares the whole value, so it is exact.
 fn asserts_on_apply_extrinsic(mac: &Macro) -> bool {
     fn is_apply_extrinsic_call(expr: &Expr) -> bool {
         match expr {
@@ -330,6 +332,9 @@ fn asserts_on_apply_extrinsic(mac: &Macro) -> bool {
     let Ok(arguments) = mac.parse_body_with(Punctuated::<Expr, Token![,]>::parse_terminated) else {
         return false;
     };
+    if arguments.len() != 1 {
+        return false;
+    }
     arguments.first().is_some_and(|asserted| {
         let mut visitor = ApplyExtrinsicCall(false);
         visitor.visit_expr(asserted);
