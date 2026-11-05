@@ -1752,6 +1752,25 @@ fn sem011_detects_weight_zero_in_attribute() {
 }
 
 #[test]
+fn sem011_detects_literal_zero_weights() {
+    let diags = check_fixture(
+        "pallets/foo/src/lib.rs",
+        include_str!("fixtures/bad_sem011.rs"),
+    );
+    let lines: Vec<_> = diags
+        .iter()
+        .filter(|d| d.rule_id == "SEM011")
+        .map(|d| d.line)
+        .collect();
+    assert_eq!(lines, vec![6, 20, 27], "{diags:?}");
+    let good = check_fixture(
+        "pallets/foo/src/lib.rs",
+        include_str!("fixtures/good_sem011.rs"),
+    );
+    assert!(!has_rule(&good, "SEM011"), "{good:?}");
+}
+
+#[test]
 fn sem011_detects_weight_zero_in_qualified_frame_attribute() {
     let code = r#"
 #[frame_support::pallet::weight(Weight::zero())]

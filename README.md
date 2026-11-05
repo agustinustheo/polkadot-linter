@@ -63,7 +63,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEM008` | Semantic | `sp-std-deprecated` | `advisory` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
 | `SEM009` | Semantic | `redundant-contains-key-before-remove` | `advisory` | A storage map is checked with `contains_key()` immediately before `remove()` or `take()`. |
 | `SEM010` | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
-| `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute uses `Weight::zero()`, making the call effectively free. |
+| `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute is zero (`Weight::zero()`, `0`, `Weight::from_parts(0, 0)`), making the call effectively free. |
 | `SEM012` | Semantic | `allow-dead-code-in-pallet` | `warning` | Production pallet code suppresses dead-code warnings instead of removing unused items. Off by default. |
 | `SEM013` | Semantic | `custom-invalidity-repr-u8` | `warning` | Custom invalidity enums that feed `InvalidTransaction::Custom(u8)` should declare `#[repr(u8)]` so discriminants stay explicit. |
 | `SEM014` | Semantic | `submit-transaction-log-target` | `advisory` | Nearby `log::...!` calls around `SubmitTransaction::<...>::submit_transaction(...)` should include `target: LOG_TARGET` for traceable OCW submission failures. |
