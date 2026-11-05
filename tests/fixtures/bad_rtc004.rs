@@ -43,3 +43,9 @@ construct_runtime!(
 		Balances: pallet_balances = 10,
 	}
 );
+
+// `()` is `Get<Balance>` returning 0: session keys are free to register
+// (polkadot-fellows/runtimes #1310).
+impl pallet_session::Config for Runtime {
+	type KeyDeposit = ();
+}

@@ -8719,7 +8719,7 @@ fn ben003_resolves_function_and_block_local_imports() {
 }
 
 // ==========================================================================
-// Runtime configuration rules (RTC001-RTC005)
+// Runtime configuration rules (RTC001-RTC008)
 // ==========================================================================
 
 fn rtc_lines(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -> Vec<usize> {
@@ -8932,7 +8932,7 @@ fn rtc004_detects_zero_deposits() {
     let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc004.rs"));
     assert_eq!(
         rtc_lines(&diags, "RTC004"),
-        vec![4, 7, 8, 9, 15, 16, 20, 24, 28, 29, 32, 38],
+        vec![4, 7, 8, 9, 15, 16, 20, 24, 28, 29, 32, 38, 50],
         "{diags:?}"
     );
 }
@@ -9135,6 +9135,47 @@ fn rtc006_ignores_unit_fee_managers_when_every_delivery_price_is_free() {
     );
     assert!(rtc_lines(&diags, "RTC006").is_empty(), "{diags:?}");
     assert_eq!(rtc_lines(&diags, "RTC003"), vec![6, 18], "{diags:?}");
+}
+
+#[test]
+fn rtc007_detects_non_recursive_instruction_denies() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/bad_rtc007.rs"),
+    );
+    assert_eq!(
+        rtc_lines(&diags, "RTC007"),
+        vec![7, 13, 13, 17],
+        "{diags:?}"
+    );
+    let good = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/good_rtc007.rs"),
+    );
+    assert!(rtc_findings(&good).is_empty(), "{good:?}");
+}
+
+#[test]
+fn rtc008_detects_fail_open_proxy_filters() {
+    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc008.rs"));
+    assert_eq!(rtc_lines(&diags, "RTC008"), vec![20, 60], "{diags:?}");
+    let messages: Vec<_> = diags.iter().map(|d| d.message.as_str()).collect();
+    assert!(
+        messages[0].contains("PolkadotXcm (pallet_xcm), ForeignAssets (pallet_assets)"),
+        "{messages:?}"
+    );
+    assert!(
+        messages[1].contains(
+            "`NonTransfer` can add `Collator` proxies, which admit `CollatorSelection` calls \
+             `NonTransfer` does not"
+        ),
+        "{messages:?}"
+    );
+    let good = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc008.rs"),
+    );
+    assert!(rtc_findings(&good).is_empty(), "{good:?}");
 }
 
 #[test]

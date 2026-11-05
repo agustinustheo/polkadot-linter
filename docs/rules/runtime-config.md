@@ -1,6 +1,6 @@
 # Runtime Configuration Rules (RTC)
 
-Runtime configuration rules inspect the *runtime crate* rather than individual pallets: `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` / `#[frame_support::runtime]` declarations, `define_benchmarks!`, `parameter_types!` and the XCM executor configuration. Every rule encodes a misconfiguration that Security Research Labs reported in at least one public audit of a Polkadot SDK runtime ([srlabs/audit-reports](https://github.com/srlabs/audit-reports)).
+Runtime configuration rules inspect the *runtime crate* rather than individual pallets: `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` / `#[frame_support::runtime]` declarations, `define_benchmarks!`, `parameter_types!` and the XCM executor configuration. Every rule encodes a misconfiguration that was reported in a public audit of a Polkadot SDK runtime ([srlabs/audit-reports](https://github.com/srlabs/audit-reports)) or fixed in polkadot-sdk or polkadot-fellows/runtimes (RTC007, RTC008).
 
 | Rule | Title | Default severity | Engine |
 | --- | --- | --- | --- |
@@ -10,6 +10,8 @@ Runtime configuration rules inspect the *runtime crate* rather than individual p
 | [`RTC004`](RTC004.md) | Zero Existential or Storage Deposit | Warning, off by default | source (syn) |
 | [`RTC005`](RTC005.md) | Insecure Collective-Flip Randomness in the Runtime | Warning | source (syn) |
 | [`RTC006`](RTC006.md) | XCM Fees Burned | Warning | source (syn) |
+| [`RTC007`](RTC007.md) | XCM Deny Barrier Not Applied to Nested Programs | Warning | source (syn) |
+| [`RTC008`](RTC008.md) | Proxy Filter Fails Open | Warning | source (syn) |
 
 ## Which code is inspected
 

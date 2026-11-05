@@ -1,4 +1,4 @@
-//! Runtime configuration rules (RTC001-RTC006).
+//! Runtime configuration rules (RTC001-RTC008).
 //!
 //! These rules inspect the *runtime* crate rather than individual pallets:
 //! `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` /
@@ -46,7 +46,7 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{scan_cached, FileContext},
     rules::LintRule,
-    syn_util::{path_attr, path_last_ident},
+    syn_util::{compact_tokens, macro_name, path_attr, path_last_ident, strip_expr_wrappers},
 };
 
 // ---------------------------------------------------------------------------
@@ -82,6 +82,9 @@ struct RuntimeCrate {
     /// Gate of every source file reachable from the library target through
     /// `mod` declarations, keyed by canonical path.
     modules: HashMap<PathBuf, Gate>,
+    /// Production runtime pallets from `VALUE_MOVING_PALLETS`: `RuntimeCall`
+    /// variant and pallet crate.
+    pallets: Vec<(String, String)>,
 }
 
 /// Locate the Cargo package owning `path`, or fall back to the file itself
@@ -100,18 +103,18 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
     // Fixtures and single files scanned outside any Cargo package.
     let Some(manifest_dir) = manifest_dir else {
         let ast = ctx.ast.as_ref();
-        let is_runtime = ast.is_some_and(|file| {
-            let mut counts = Declarations::default();
-            counts.count(&production_ast(file), false);
-            counts.is_runtime()
-        });
+        let mut declarations = Declarations::default();
+        if let Some(file) = ast {
+            declarations.count(&production_ast(file), false);
+        }
         let benchmarks = ast.and_then(|file| {
             let mut keys = HashSet::new();
             collect_define_benchmarks(&strip_ast(file, Gate::Test), &mut keys).then_some(keys)
         });
         return Arc::new(RuntimeCrate {
-            is_runtime,
+            is_runtime: declarations.is_runtime(),
             benchmarks,
+            pallets: declarations.pallets,
             ..RuntimeCrate::default()
         });
     };
@@ -171,6 +174,7 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         root: Some(root.to_path_buf()),
         is_runtime,
         benchmarks,
+        pallets: declarations.pallets,
         modules: modules
             .files
             .into_iter()
@@ -287,6 +291,7 @@ impl ModuleTree {
 struct Declarations {
     ungated: usize,
     featured: usize,
+    pallets: Vec<(String, String)>,
 }
 
 impl Declarations {
@@ -323,17 +328,40 @@ impl Finder<'_> {
             self.counts.ungated += 1;
         }
     }
+
+    /// Record a declared pallet whose crate moves value.
+    fn pallet(&mut self, name: Option<String>, tokens: TokenStream) {
+        if let (Some(name), Some((krate, _))) = (name, find_ident(tokens, VALUE_MOVING_PALLETS)) {
+            self.counts.pallets.push((name, krate));
+        }
+    }
 }
 
 impl<'ast> Visit<'ast> for Finder<'_> {
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
         if path_last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
             self.found(&item.attrs);
+            for entry in construct_runtime_entries(item.mac.tokens.clone()) {
+                // Attributes are `#[..]` groups; the first ident is the name.
+                let name = entry.iter().find_map(|tree| match tree {
+                    TokenTree::Ident(ident) => Some(ident.to_string()),
+                    _ => None,
+                });
+                self.pallet(name, entry.into_iter().collect());
+            }
         }
     }
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         if is_runtime_module(item) {
             self.found(&item.attrs);
+            for item in item.content.iter().flat_map(|(_, items)| items) {
+                if let Item::Type(item_type) = item {
+                    self.pallet(
+                        Some(item_type.ident.to_string()),
+                        item_type.ty.to_token_stream(),
+                    );
+                }
+            }
         }
         let outer = self.featured;
         self.featured |= feature_gated(&item.attrs);
@@ -1390,6 +1418,32 @@ fn is_deposit_name(name: &str) -> bool {
     lower.contains("deposit") && !lower.starts_with("max") && !lower.starts_with("min")
 }
 
+/// `type KeyDeposit = ();` is zero (`()` is `Get<T>` returning `T::default()`).
+/// Bare `Deposit` (pallet-revive's backend) is not an amount; `InvulnerableDeposit`
+/// is only charged from governance-set invulnerables.
+fn is_amount_deposit_name(name: &str) -> bool {
+    (name.ends_with("Deposit") && name != "Deposit" && name != "InvulnerableDeposit")
+        || ["DepositBase", "DepositPer", "DepositFactor"]
+            .iter()
+            .any(|part| name.contains(part))
+}
+
+/// `KeyDeposit` only guards `pallet_session::set_keys`; a production match arm
+/// `Session(.. set_keys ..) => false` (a call filter) makes it unreachable.
+fn set_keys_filtered(file: &SynFile) -> bool {
+    struct Finder(bool);
+    impl<'ast> Visit<'ast> for Finder {
+        fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+            self.0 |= find_ident(arm.pat.to_token_stream(), &["set_keys"]).is_some()
+                && matches!(strip_expr_wrappers(&arm.body), Expr::Lit(lit) if compact_tokens(lit) == "false");
+            visit::visit_arm(self, arm);
+        }
+    }
+    let mut finder = Finder(false);
+    finder.visit_file(file);
+    finder.0
+}
+
 /// Deposits that only guard origin-gated calls, with the gating origin type.
 /// A zero deposit is not a spam vector when the origin cannot be any signed
 /// account.
@@ -1564,6 +1618,7 @@ impl LintRule for ZeroDepositConfig {
             zero_items: &'a mut Vec<(String, usize)>,
             config_impl_hits: Vec<(String, usize)>,
             aliases: &'a Aliases,
+            set_keys_filtered: bool,
         }
         impl<'ast> Visit<'ast> for Collector<'_> {
             fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
@@ -1591,7 +1646,10 @@ impl LintRule for ZeroDepositConfig {
                 if runtime_config_impl(item_impl).is_some() {
                     for item_type in impl_types(item_impl) {
                         let name = item_type.ident.to_string();
-                        if const_type_is_zero(&item_type.ty)
+                        if (const_type_is_zero(&item_type.ty)
+                            || (is_unit_type(&item_type.ty)
+                                && is_amount_deposit_name(&name)
+                                && !(name == "KeyDeposit" && self.set_keys_filtered)))
                             && (is_existential_deposit_name(&name) || is_deposit_name(&name))
                             && (is_existential_deposit_name(&name)
                                 || !deposit_is_origin_gated(item_impl, &name, self.aliases))
@@ -1608,6 +1666,7 @@ impl LintRule for ZeroDepositConfig {
             zero_items: &mut zero_items,
             config_impl_hits: Vec::new(),
             aliases: &aliases,
+            set_keys_filtered: set_keys_filtered(&file),
         };
         collector.visit_file(&file);
         let config_impl_hits = collector.config_impl_hits;
@@ -1692,7 +1751,7 @@ const INSECURE_RANDOMNESS: &[&str] = &[
     "RandomnessCollectiveFlip",
 ];
 
-/// The first insecure-randomness ident in `tokens`, with its line.
+/// The first ident of `tokens` among `needles`, with its line.
 fn find_ident(tokens: TokenStream, needles: &[&str]) -> Option<(String, usize)> {
     tokens.into_iter().find_map(|tree| match tree {
         TokenTree::Ident(ident) if needles.iter().any(|needle| ident == needle) => {
@@ -1824,5 +1883,393 @@ impl LintRule for InsecureRandomnessInRuntime {
                 })
                 .collect(),
         )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC007: XCM deny barrier not applied to nested programs
+// ---------------------------------------------------------------------------
+
+/// Library denies that inspect the message's instructions
+/// (polkadot/xcm/xcm-builder/src/barriers.rs,
+/// cumulus/parachains/runtimes/bridge-hubs/common/src/barriers.rs).
+const INSTRUCTION_DENIES: &[&str] = &["DenyReserveTransferToRelayChain", "DenyExportMessageFrom"];
+
+pub struct XcmDenyBarrierNotRecursive;
+
+impl LintRule for XcmDenyBarrierNotRecursive {
+    fn id(&self) -> &str {
+        "RTC007"
+    }
+    fn name(&self) -> &str {
+        "xcm-deny-barrier-not-recursive"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        runtime_scope(ctx, &config.runtime_config)?;
+        let file = production_ast(ctx.ast.as_ref()?);
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+
+        struct Visitor<'a> {
+            aliases: &'a Aliases,
+            hits: Vec<(usize, String)>,
+        }
+        impl Visitor<'_> {
+            /// Report every instruction-inspecting deny in `ty` (a tuple of
+            /// denies, or an alias of one) not wrapped in `DenyRecursively`.
+            fn check_deny(&mut self, ty: &Type, depth: usize) {
+                if depth > 8 {
+                    return;
+                }
+                if let Type::Tuple(tuple) = ty {
+                    for elem in &tuple.elems {
+                        self.check_deny(elem, depth + 1);
+                    }
+                    return;
+                }
+                let Some(path) = type_path(ty) else { return };
+                let Some(ident) = path_last_ident(path) else {
+                    return;
+                };
+                if INSTRUCTION_DENIES.contains(&ident.as_str()) {
+                    self.hits.push((line_of(ty), type_text(ty)));
+                } else if path.segments.len() == 1 {
+                    if let Some(Some(alias)) = self.aliases.get(&ident) {
+                        let alias = alias.clone();
+                        self.check_deny(&alias, depth + 1);
+                    }
+                }
+            }
+        }
+        impl<'ast> Visit<'ast> for Visitor<'_> {
+            fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
+
+            fn visit_type_path(&mut self, type_path: &'ast TypePath) {
+                if let Some(segment) = type_path.path.segments.last() {
+                    if segment.ident == "DenyThenTry" {
+                        if let Some(deny) = generic_type_args(segment).first() {
+                            self.check_deny(deny, 0);
+                        }
+                    }
+                }
+                visit::visit_type_path(self, type_path);
+            }
+        }
+
+        let aliases = type_aliases(&file);
+        let mut visitor = Visitor {
+            aliases: &aliases,
+            hits: Vec::new(),
+        };
+        visitor.visit_file(&file);
+        visitor.hits.sort();
+        visitor.hits.dedup();
+        non_empty(
+            visitor
+                .hits
+                .into_iter()
+                .map(|(line, deny)| {
+                    diagnostic(
+                        self,
+                        ctx,
+                        severity,
+                        line,
+                        format!(
+                            "`DenyThenTry` deny `{deny}` is not wrapped in `DenyRecursively`, so \
+                             instructions nested in `SetAppendix`, `SetErrorHandler` or \
+                             `ExecuteWithOrigin` bypass it"
+                        ),
+                        "`DenyThenTry` checks only top-level instructions; nested programs run \
+                         without the barrier.",
+                        "Wrap the deny in `DenyRecursively<..>`.",
+                    )
+                })
+                .collect(),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC008: proxy filter fails open
+// ---------------------------------------------------------------------------
+
+/// Pallet crates whose calls move the caller's funds or assets.
+const VALUE_MOVING_PALLETS: &[&str] = &[
+    "pallet_balances",
+    "pallet_assets",
+    "pallet_xcm",
+    "pallet_revive",
+    "pallet_contracts",
+    "pallet_asset_conversion",
+    "pallet_psm",
+    "pallet_uniques",
+    "pallet_nfts",
+    "pallet_nft_fractionalization",
+    "pallet_vesting",
+    "pallet_indices",
+    "orml_tokens",
+    "orml_xtokens",
+    "orml_currencies",
+];
+
+/// A `RuntimeCall` pattern: pallet variant and call (`None`: every call).
+type CallPat = (String, Option<String>);
+
+/// What a proxy type's `filter` arm admits.
+enum Calls {
+    Allow(Vec<CallPat>),
+    Deny(Vec<CallPat>),
+    Unknown,
+}
+
+/// Appends the calls `pat` matches to `out`; `false` if `pat` has a shape
+/// (`_`, a binding, a nested pattern) that is not modelled precisely.
+fn call_pats(pat: &syn::Pat, out: &mut Vec<CallPat>) -> bool {
+    let call = |inner: Option<&syn::Pat>| match inner {
+        None | Some(syn::Pat::Rest(_) | syn::Pat::Wild(_)) => Some(None),
+        Some(syn::Pat::Ident(i)) if i.subpat.is_none() => Some(None),
+        Some(syn::Pat::Struct(s)) => Some(path_last_ident(&s.path)),
+        Some(syn::Pat::TupleStruct(s)) => Some(path_last_ident(&s.path)),
+        Some(syn::Pat::Path(p)) => Some(path_last_ident(&p.path)),
+        Some(_) => None,
+    };
+    let (path, inner) = match pat {
+        syn::Pat::Or(or) => return or.cases.iter().all(|case| call_pats(case, out)),
+        syn::Pat::TupleStruct(s) if s.elems.len() == 1 => (&s.path, Some(&s.elems[0])),
+        syn::Pat::TupleStruct(s) => (&s.path, None),
+        syn::Pat::Struct(s) => (&s.path, None),
+        syn::Pat::Path(p) => (&p.path, None),
+        _ => return false,
+    };
+    let Some(pallet) = path_last_ident(path) else {
+        return false;
+    };
+    let cases: Vec<Option<&syn::Pat>> = match inner {
+        Some(syn::Pat::Or(or)) => or.cases.iter().map(Some).collect(),
+        inner => vec![inner],
+    };
+    cases
+        .into_iter()
+        .all(|case| call(case).map(|c| out.push((pallet.clone(), c))).is_some())
+}
+
+fn filter_calls(body: &Expr) -> Calls {
+    let matches_pats = |expr: &Expr| {
+        let Expr::Macro(mac) = strip_expr_wrappers(expr) else {
+            return None;
+        };
+        (macro_name(&mac.mac).as_deref() == Some("matches")).then_some(())?;
+        let pat = mac
+            .mac
+            .parse_body_with(|input: syn::parse::ParseStream| {
+                input.parse::<Expr>()?;
+                input.parse::<syn::Token![,]>()?;
+                syn::Pat::parse_multi_with_leading_vert(input)
+            })
+            .ok()?;
+        let mut out = Vec::new();
+        call_pats(&pat, &mut out).then_some(out)
+    };
+    match strip_expr_wrappers(body) {
+        Expr::Block(block) => match block.block.stmts.as_slice() {
+            [syn::Stmt::Expr(expr, None)] => filter_calls(expr),
+            _ => Calls::Unknown,
+        },
+        Expr::Unary(unary) if matches!(unary.op, syn::UnOp::Not(_)) => {
+            matches_pats(&unary.expr).map_or(Calls::Unknown, Calls::Deny)
+        }
+        expr => matches_pats(expr).map_or(Calls::Unknown, Calls::Allow),
+    }
+}
+
+/// `a` matches every call `b` matches.
+fn covers(a: &CallPat, b: &CallPat) -> bool {
+    a.0 == b.0 && (a.1.is_none() || a.1 == b.1)
+}
+
+/// Calls `sub` admits that `sup` does not, if evident: "`Pallet` calls", "`Pallet::call`".
+fn subset_witness(sub: &Calls, sup: &Calls) -> Option<String> {
+    let show = |(pallet, call): &CallPat| {
+        call.as_ref()
+            .map_or(format!("`{pallet}` calls"), |c| format!("`{pallet}::{c}`"))
+    };
+    match (sub, sup) {
+        (Calls::Deny(_), Calls::Allow(_)) => Some("calls".into()),
+        (Calls::Unknown | Calls::Deny(_), _) | (_, Calls::Unknown) => None,
+        (Calls::Allow(sub), Calls::Allow(sup)) => sub
+            .iter()
+            .find(|s| !sup.iter().any(|a| covers(a, s)))
+            .map(show),
+        (Calls::Allow(sub), Calls::Deny(sup)) => sub
+            .iter()
+            .find(|s| sup.iter().any(|d| covers(d, s) || covers(s, d)))
+            .map(show),
+    }
+}
+
+/// Last idents of the (or-)path patterns in `pat`, e.g. `ProxyType::A | ProxyType::B`;
+/// `["_"]` for any other pattern (`_`, a binding), which matches every variant.
+fn variant_names(pat: &syn::Pat) -> Vec<String> {
+    let mut out = Vec::new();
+    if !call_pats(pat, &mut out) {
+        return vec!["_".into()];
+    }
+    out.into_iter().map(|(name, _)| name).collect()
+}
+
+/// `calls` evidently admits `Proxy::add_proxy`.
+fn admits_add_proxy(calls: &Calls) -> bool {
+    let add_proxy = ("Proxy".to_string(), Some("add_proxy".to_string()));
+    match calls {
+        Calls::Allow(allowed) => allowed.iter().any(|a| covers(a, &add_proxy)),
+        Calls::Deny(denied) => !denied.iter().any(|d| d.0 == add_proxy.0),
+        Calls::Unknown => false,
+    }
+}
+
+pub struct ProxyFilterFailsOpen;
+
+impl LintRule for ProxyFilterFailsOpen {
+    fn id(&self) -> &str {
+        "RTC008"
+    }
+    fn name(&self) -> &str {
+        "proxy-filter-fails-open"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        let krate = runtime_scope(ctx, &config.runtime_config)?;
+        let file = production_ast(ctx.ast.as_ref()?);
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+        let mut diagnostics = Vec::new();
+
+        // Proxy filters are top-level impls in every runtime surveyed.
+        for item in &file.items {
+            let Item::Impl(item_impl) = item else {
+                continue;
+            };
+            let trait_name = item_impl
+                .trait_
+                .as_ref()
+                .and_then(|(_, p, _)| path_last_ident(p));
+            if trait_name.as_deref() != Some("InstanceFilter") {
+                continue;
+            }
+            // Arms of the `match` statement in method `name`.
+            let fn_arms = |name: &str| {
+                let stmts = item_impl.items.iter().find_map(|item| match item {
+                    ImplItem::Fn(f) if f.sig.ident == name => Some(&f.block.stmts),
+                    _ => None,
+                });
+                stmts.into_iter().flatten().find_map(|stmt| match stmt {
+                    syn::Stmt::Expr(Expr::Match(m), _) => Some(m.arms.as_slice()),
+                    _ => None,
+                })
+            };
+            // (a) deny-list arms that leave a value-moving pallet reachable.
+            let mut proxies: Vec<(String, Calls)> = Vec::new();
+            for arm in fn_arms("filter").unwrap_or_default() {
+                let calls = filter_calls(&arm.body);
+                if let Calls::Deny(denied) = &calls {
+                    let missing: Vec<String> = krate
+                        .pallets
+                        .iter()
+                        .filter(|(name, _)| !denied.iter().any(|(pallet, _)| pallet == name))
+                        .map(|(name, krate)| format!("{name} ({krate})"))
+                        .collect();
+                    if !missing.is_empty() {
+                        diagnostics.push(diagnostic(
+                            self,
+                            ctx,
+                            severity,
+                            line_of(&arm.pat),
+                            format!(
+                                "proxy filter `{}` is a deny-list that does not deny the \
+                                 value-moving pallets {}",
+                                compact_tokens(&arm.pat),
+                                missing.join(", ")
+                            ),
+                            "A `!matches!` filter allows every pallet it does not name.",
+                            "Deny the listed pallets, or make the filter an allow-list.",
+                        ));
+                    }
+                }
+                for name in variant_names(&arm.pat) {
+                    if name != "_" {
+                        proxies.push((name, filter_calls(&arm.body)));
+                    }
+                }
+            }
+            // (b) `(X, _) => true` where X may add a proxy type Y that admits a call X does
+            // not. Pairs decided by an earlier unguarded arm (`_` matching any side) are skipped.
+            let mut decided: HashSet<(String, String)> = HashSet::new();
+            for arm in fn_arms("is_superset").unwrap_or_default() {
+                let syn::Pat::Tuple(tuple) = &arm.pat else {
+                    continue;
+                };
+                let (Some(sup), Some(sub), None) =
+                    (tuple.elems.first(), tuple.elems.get(1), &arm.guard)
+                else {
+                    continue;
+                };
+                let sups = variant_names(sup);
+                let returns_true = matches!(strip_expr_wrappers(&arm.body), Expr::Lit(lit) if compact_tokens(lit) == "true");
+                let wildcard = match (sups.as_slice(), sub) {
+                    ([x], syn::Pat::Wild(_)) if x != "_" && returns_true => Some(x),
+                    _ => None,
+                };
+                let Some(x) = wildcard else {
+                    for x in &sups {
+                        decided.extend(variant_names(sub).into_iter().map(|y| (x.clone(), y)));
+                    }
+                    continue;
+                };
+                let is_decided = |y: &String| {
+                    [x, "_"].iter().any(|a| {
+                        [y.as_str(), "_"]
+                            .iter()
+                            .any(|b| decided.contains(&(a.to_string(), b.to_string())))
+                    })
+                };
+                let Some((_, sup_calls)) = proxies.iter().find(|(name, _)| name == x) else {
+                    continue;
+                };
+                if !admits_add_proxy(sup_calls) {
+                    continue;
+                }
+                let escapes: Vec<String> = proxies
+                    .iter()
+                    .filter(|(y, _)| y != x && !is_decided(y))
+                    .filter_map(|(y, calls)| {
+                        let call = subset_witness(calls, sup_calls)?;
+                        Some(format!(
+                            "`{x}` can add `{y}` proxies, which admit {call} `{x}` does not"
+                        ))
+                    })
+                    .collect();
+                if !escapes.is_empty() {
+                    diagnostics.push(diagnostic(
+                        self,
+                        ctx,
+                        severity,
+                        line_of(&arm.pat),
+                        format!(
+                            "`is_superset` arm `{} => true` lets `{x}` escalate: {}",
+                            compact_tokens(&arm.pat),
+                            escapes.join("; ")
+                        ),
+                        "A proxy can add or remove any proxy type it is a superset of.",
+                        "List the subsumed proxy types instead of `_`.",
+                    ));
+                }
+            }
+        }
+        non_empty(diagnostics)
     }
 }

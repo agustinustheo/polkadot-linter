@@ -90,6 +90,8 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(runtime_config::ZeroDepositConfig),
         Box::new(runtime_config::InsecureRandomnessInRuntime),
         Box::new(runtime_config::XcmFeesBurned),
+        Box::new(runtime_config::XcmDenyBarrierNotRecursive),
+        Box::new(runtime_config::ProxyFilterFailsOpen),
     ];
 
     // Filter disabled rules
