@@ -7,7 +7,7 @@ Runtime configuration rules inspect the *runtime crate* rather than individual p
 | [`RTC001`](RTC001.md) | Placeholder WeightInfo in a Runtime Config | Warning | source (syn) |
 | [`RTC002`](RTC002.md) | Pallet Missing from define_benchmarks! | Warning | source (syn) |
 | [`RTC003`](RTC003.md) | XCM Fees Waived or Delivery Free | Error | source (syn) |
-| [`RTC004`](RTC004.md) | Zero Existential or Storage Deposit | Warning | source (syn) |
+| [`RTC004`](RTC004.md) | Zero Existential or Storage Deposit | Warning, off by default | source (syn) |
 | [`RTC005`](RTC005.md) | Insecure Collective-Flip Randomness in the Runtime | Warning | source (syn) |
 | [`RTC006`](RTC006.md) | XCM Fees Burned | Warning | source (syn) |
 

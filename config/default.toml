@@ -7,33 +7,55 @@ include = []
 [rules]
 # Override individual rule enablement: rule_id = true/false
 [rules.enabled]
-# Every other rule is enabled. On 10 third-party parachain repositories
-# (moonbeam, astar, acala, hydration, centrifuge, kilt, peaq, the fellows
-# runtimes, the OpenZeppelin templates and the parachain template) these
-# rules produced 0 useful findings in 10 labeled samples each:
-# Parity SDK style conventions that external code does not follow.
+# Every other rule is enabled. Evidence: benchmarks/precision/ (labeled
+# findings on 10 third-party parachain repositories: moonbeam, astar, acala,
+# hydration, centrifuge, kilt, peaq, the fellows runtimes, the OpenZeppelin
+# templates and the parachain template). Counts are TP/sampled.
+#
+# 2026-10, 0/10 each. Parity SDK style conventions:
 SEM002 = false
 SEM003 = false
 SEM004 = false
 SEM012 = false
 TST003 = false
-# False positives: RuntimeDebug is deprecated only from sp-debug-derive 15.0.0
-# (every flagged repository locks 14.0.0); public state and `.inner()`
-# accessors; precompile test-harness assertions counted as mocks.
+# 2026-10, 0/10 each. False positives: RuntimeDebug is deprecated only from
+# sp-debug-derive 15.0.0 (every flagged repository locks 14.0.0); public state
+# and `.inner()` accessors; precompile test-harness assertions counted as mocks.
 SEM007 = false
 TST005 = false
 MOK001 = false
+# 2026-11, rule: off if TP < 30% or FP >= 30%.
+# Mostly false positives: Ethereum ABI decoding read as SCALE (SEC003 0/10);
+# genesis and `qed` code it claims to exclude (SEC008 0/12); validity and XCM
+# errors read as dispatch results (TST001 0/12); SEC009 2/12, SEC001 1/4,
+# VAL001 2/5.
+SEC001 = false
+SEC003 = false
+SEC008 = false
+SEC009 = false
+TST001 = false
+VAL001 = false
+# Correct but not actionable: SEC004 0/4, SEC005 0/8, SEC016 0/9, SEM008 0/12
+# (58% of all output), RTC004 1/12, SEC002 1/12, SEM005 1/12, VAL003 1/12,
+# SEM006 3/12, BEN001 4/12 (misses runtime-hosted benchmarks).
+BEN001 = false
+RTC004 = false
+SEC002 = false
+SEC004 = false
+SEC005 = false
+SEC016 = false
+SEM005 = false
+SEM006 = false
+SEM008 = false
+VAL003 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]
 # TST002 (assert_ok on apply_extrinsic) is error-level because it silently hides failures
 TST002 = "error"
-# SDK sample: SEC005 5/5 and VAL002 3/3 findings were non-actionable.
-# Retain review hints without treating standard wrappers/config constants as warnings.
-SEC005 = "advisory"
+# SDK sample: VAL002 3/3 findings were non-actionable; retain it as a review
+# hint without treating config constants as warnings.
 VAL002 = "advisory"
-# External sample: 4/10 useful at the highest volume of any rule.
-SEM008 = "advisory"
 
 # ---------------------------------------------------------------------------
 # Rule family: Validation order (VAL001)

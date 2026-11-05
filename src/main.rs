@@ -447,10 +447,26 @@ mod tests {
         values.iter().map(|value| (*value).to_string()).collect()
     }
 
+    fn all_rules_config() -> Config {
+        Config::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/all-rules.toml"))
+            .expect("config/all-rules.toml is valid")
+    }
+
     #[test]
-    fn default_compiler_backed_rules_cover_migrated_rules() {
+    fn default_compiler_backed_rules_skip_default_off_rules() {
         assert_eq!(
             selected_compiler_backed_rules(None, &[], &Config::default()),
+            strings(&[
+                "VAL002", "SEM009", "SEM010", "SEM016", "SEC006", "SEC007", "SEC010", "SEC011",
+                "SEC012", "SEC013", "SEC014", "SEC015", "SEC017", "SEC018",
+            ])
+        );
+    }
+
+    #[test]
+    fn all_rules_config_selects_every_compiler_backed_rule() {
+        assert_eq!(
+            selected_compiler_backed_rules(None, &[], &all_rules_config()),
             strings(&[
                 "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002",
                 "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010",
@@ -464,7 +480,7 @@ mod tests {
         let cli_rules = strings(&["SEC"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
             strings(&[
                 "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
                 "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016",
@@ -478,7 +494,7 @@ mod tests {
         let cli_rules = strings(&["SEM"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
             strings(&["SEM006", "SEM009", "SEM010", "SEM016"])
         );
     }
@@ -488,7 +504,7 @@ mod tests {
         let cli_rules = strings(&["SEC003", "SEC014", "VAL", "SEM010"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[], &Config::default()),
+            selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
             strings(&["VAL002", "VAL003", "SEM010", "SEC003", "SEC014"])
         );
     }
@@ -499,7 +515,7 @@ mod tests {
         let compiler_rules = strings(&["SEC009"]);
 
         assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &compiler_rules, &Config::default()),
+            selected_compiler_backed_rules(Some(&cli_rules), &compiler_rules, &all_rules_config()),
             strings(&["SEC009"])
         );
     }

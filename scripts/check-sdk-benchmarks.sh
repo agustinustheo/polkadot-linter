@@ -49,7 +49,7 @@ run_cli_case() {
   rustc_json="$case_dir/rustc.json"
   case_summary="$case_dir/summary.tsv"
 
-  "$LINTER" --config "$ROOT_DIR/config/default.toml" --format json --rules "$rule_id" \
+  "$LINTER" --config "$ROOT_DIR/config/all-rules.toml" --format json --rules "$rule_id" \
     --syntax-only --no-progress "$SDK_DIR/$package_dir" > "$syntax_json"
 
   # The driver rule selection is passed through Cargo's rustc wrapper
@@ -57,7 +57,7 @@ run_cli_case() {
   # the selected package so each manifest row invokes the intended rule.
   cargo +"$TOOLCHAIN" clean --quiet --manifest-path "$SDK_DIR/$package_dir/Cargo.toml" \
     --package "$package" --target-dir "$SDK_TARGET_DIR"
-  "$LINTER" --config "$ROOT_DIR/config/default.toml" --format json --rules "$rule_id" \
+  "$LINTER" --config "$ROOT_DIR/config/all-rules.toml" --format json --rules "$rule_id" \
     --package "$package" --lib --no-default-features \
     --driver-path "$DRIVER" --toolchain "$TOOLCHAIN" --target-dir "$SDK_TARGET_DIR" \
     --source-filter "$source_filter" --no-progress "$SDK_DIR/$package_dir" > "$rustc_json"

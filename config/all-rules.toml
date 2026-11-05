@@ -1,14 +1,30 @@
-# Every rule enabled, for the pinned-SDK corpus baselines and labeled findings
-# (scripts/check-source-rule-corpus.sh, check-source-runtime-corpus.sh and
-# check-labeled-findings.sh), so they keep exercising the rules that
-# config/default.toml turns off. Every other setting is the bundled default.
+# Every rule enabled, for the pinned-SDK corpus baselines, labeled findings and
+# rule-specific driver checks (scripts/check-source-*.sh, check-labeled-findings.sh,
+# check-sdk-benchmarks.sh and the check-rustc-*.sh scripts for default-off
+# rules), so they keep exercising the rules that config/default.toml turns off. Every other setting is the bundled default.
 
 [rules.enabled]
+BEN001 = true
 MOK001 = true
+RTC004 = true
+SEC001 = true
+SEC002 = true
+SEC003 = true
+SEC004 = true
+SEC005 = true
+SEC008 = true
+SEC009 = true
+SEC016 = true
 SEM002 = true
 SEM003 = true
 SEM004 = true
+SEM005 = true
+SEM006 = true
 SEM007 = true
+SEM008 = true
 SEM012 = true
+TST001 = true
 TST003 = true
 TST005 = true
+VAL001 = true
+VAL003 = true

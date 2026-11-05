@@ -51,16 +51,16 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 
 | Code | Family | Name | Severity | What it entails |
 | --- | --- | --- | --- | --- |
-| `VAL001` | Validation | `validation-before-heavy-read` | `warning` | Expensive storage reads happen before cheap precondition checks such as `ensure!` or bounds checks. |
+| `VAL001` | Validation | `validation-before-heavy-read` | `warning` | Expensive storage reads happen before cheap precondition checks such as `ensure!` or bounds checks. Off by default. |
 | `VAL002` | Validation | `division-without-zero-guard` | `warning` | Division uses a config or runtime-derived value without first proving the divisor cannot be zero. |
-| `VAL003` | Validation | `storage-write-before-validation` | `warning` | Storage is mutated before all validations finish, which can leave unnecessary writes or rollback risk. |
+| `VAL003` | Validation | `storage-write-before-validation` | `warning` | Storage is mutated before all validations finish, which can leave unnecessary writes or rollback risk. Off by default. |
 | `SEM002` | Semantic | `prefer-collect-turbofish` | `advisory` | `iter.collect()` uses a separate type annotation instead of `.collect::<Vec<_>>()`. Off by default. |
 | `SEM003` | Semantic | `prefer-ref-iteration` | `advisory` | A `for` loop uses `.iter()` where borrowing the collection directly would be more idiomatic. Off by default. |
 | `SEM004` | Semantic | `no-wildcard-imports` | `warning` | Production code uses wildcard imports such as `use foo::*`. Off by default. |
-| `SEM005` | Semantic | `parameterise-weight-functions` | `warning` | Weight functions multiply a constant weight instead of calling a parameterised `WeightInfo` function. |
-| `SEM006` | Semantic | `dbweight-missing-pov` | `warning` | `DbWeight::get().reads()` is used where proof size accounting should come from a benchmarked weight. |
+| `SEM005` | Semantic | `parameterise-weight-functions` | `warning` | Weight functions multiply a constant weight instead of calling a parameterised `WeightInfo` function. Off by default. |
+| `SEM006` | Semantic | `dbweight-missing-pov` | `warning` | `DbWeight::get().reads()` is used where proof size accounting should come from a benchmarked weight. Off by default. |
 | `SEM007` | Semantic | `runtime-debug-deprecated` | `warning` | Deprecated `RuntimeDebug` or `RuntimeDebugNoBound` derives are used. Off by default. |
-| `SEM008` | Semantic | `sp-std-deprecated` | `advisory` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. |
+| `SEM008` | Semantic | `sp-std-deprecated` | `warning` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
 | `SEM009` | Semantic | `redundant-contains-key-before-remove` | `advisory` | A storage map is checked with `contains_key()` immediately before `remove()` or `take()`. |
 | `SEM010` | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
 | `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute uses `Weight::zero()`, making the call effectively free. |
@@ -69,39 +69,39 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEM014` | Semantic | `submit-transaction-log-target` | `advisory` | Nearby `log::...!` calls around `SubmitTransaction::<...>::submit_transaction(...)` should include `target: LOG_TARGET` for traceable OCW submission failures. |
 | `SEM015` | Semantic | `missing-weight-of-authorize` | `warning` | `#[pallet::authorize]` should be paired with `#[pallet::weight_of_authorize(...)]` so authorize-path validation cost is benchmarked separately. |
 | `SEM016` | Semantic | `missing-authorizecall-in-create-authorized-transaction` | `warning` | `CreateAuthorizedTransaction::create_extension()` should include `AuthorizeCall::new()` so authorized transactions do not bypass authorize-stage routing. |
-| `TST001` | Test smell | `prefer-assert-noop` | `warning` | Tests manually check for failure instead of using `assert_noop!`, which also verifies storage is unchanged. |
+| `TST001` | Test smell | `prefer-assert-noop` | `warning` | Tests manually check for failure instead of using `assert_noop!`, which also verifies storage is unchanged. Off by default. |
 | `TST002` | Test smell | `apply-extrinsic-assert-ok` | `error` | `assert_ok!` is used on `apply_extrinsic`, which can hide the inner `DispatchError`. |
 | `TST003` | Test smell | `imports-inside-closures` | `warning` | `use` imports appear inside functions or closures instead of at module scope. Off by default. |
 | `TST004` | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. |
 | `TST005` | Test smell | `implementation-detail-assertions` | `warning` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. Off by default. |
 | `TST006` | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. |
 | `MOK001` | Mock usage | `excessive-mock-setup` | `warning` | Test setup is dominated by mocks and scaffolding relative to actual assertions. Off by default. |
-| `BEN001` | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. |
+| `BEN001` | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. Off by default. |
 | `BEN002` | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. |
 | `BEN003` | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. |
 | `RTC001` | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
 | `RTC002` | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
 | `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `WaiveDeliveryFees` or `XcmFeeManagerFromComponents<Everything, _>`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
-| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, ...) is configured as zero. |
+| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, ...) is configured as zero. Off by default. |
 | `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip` (or its pre-rename `pallet_randomness_collective_flip`). |
 | `RTC006` | Runtime config | `xcm-fees-burned` | `warning` | The XCM executor `FeeManager` is `()`, which charges delivery and export fees and then burns them instead of routing them (older SDKs waived them). |
 | `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
-| `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. |
-| `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. |
-| `SEC003` | Security | `missing-decode-depth-limit` | `warning` | User-controlled decoding happens without `decode_with_depth_limit`. |
-| `SEC004` | Security | `unsafe-weight-arithmetic` | `warning` | A weight attribute uses non-saturating arithmetic that can overflow or undercount. |
-| `SEC005` | Security | `expensive-weight-calculation` | `warning` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. |
+| `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. Off by default. |
+| `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |
+| `SEC003` | Security | `missing-decode-depth-limit` | `warning` | User-controlled decoding happens without `decode_with_depth_limit`. Off by default. |
+| `SEC004` | Security | `unsafe-weight-arithmetic` | `warning` | A weight attribute uses non-saturating arithmetic that can overflow or undercount. Off by default. |
+| `SEC005` | Security | `expensive-weight-calculation` | `warning` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. Off by default. |
 | `SEC006` | Security | `unchecked-repatriate-reserved` | `warning` | The remaining balance from `repatriate_reserved` is ignored instead of being checked. |
 | `SEC007` | Security | `let-underscore-result` | `warning` | `let _ =` discards a likely `Result`, hiding potential failures. |
-| `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. |
-| `SEC009` | Security | `raw-arithmetic-in-fallible` | `advisory` | Fallible functions use raw arithmetic operators where overflow handling should be explicit. |
+| `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. Off by default. |
+| `SEC009` | Security | `raw-arithmetic-in-fallible` | `advisory` | Fallible functions use raw arithmetic operators where overflow handling should be explicit. Off by default. |
 | `SEC010` | Security | `missing-transactional-in-hook` | `warning` | A hook performs multiple storage writes without a transactional storage layer. |
 | `SEC011` | Security | `storage-iteration-in-dispatchables` | `warning` | Dispatchable or hook code iterates storage in a state-size-dependent way. |
 | `SEC012` | Security | `unbounded-clear-prefix` | `warning` | Trie cleanup uses an effectively unbounded `clear_prefix` or related call. |
 | `SEC013` | Security | `unbounded-storage-collections` | `warning` | Storage types use unbounded collections without explicitly marking them as unbounded. |
 | `SEC014` | Security | `identity-hasher-on-common-keys` | `warning` | `Identity` hashing is used with common key types that should not be stored unhashed. |
 | `SEC015` | Security | `dispatch-bypass-filter-in-production` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
-| `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. |
+| `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. Off by default. |
 | `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
 | `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. |
 
@@ -127,7 +127,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 ### Configuration Notes
 
 - [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
-- `[rules.enabled]` and `[rules.severity]` override the bundled per-rule entries rather than replacing them. Every rule is enabled except those marked "Off by default" above: `SEM007`, `TST005` and `MOK001` were mostly false positives on third-party parachain repositories, and `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` are Parity SDK style conventions. Projects that follow those conventions can turn them back on:
+- `[rules.enabled]` and `[rules.severity]` override the bundled per-rule entries rather than replacing them. Every rule is enabled except those marked "Off by default" above. A blind two-labeler precision audit on 10 third-party parachain repositories turned off every rule whose sampled findings were under 30% actionable or at least 30% false positives; see [`benchmarks/precision/2026-11-external`](benchmarks/precision/2026-11-external/README.md). `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` are Parity SDK style conventions, and `SEM007`, `TST005` and `MOK001` were mostly false positives in an earlier sample. Projects that follow the SDK conventions can turn them back on:
 
   ```toml
   [rules.enabled]
@@ -139,6 +139,8 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
   SEM012 = true
   TST003 = true
   ```
+
+  To run every rule, as the corpus checks do, use [`config/all-rules.toml`](config/all-rules.toml).
 - `[rules.severity]` lets you promote or demote individual rules without changing the implementation. It takes precedence over a family severity. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, `[benchmarking]`, and `[runtime_config]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
 - `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.

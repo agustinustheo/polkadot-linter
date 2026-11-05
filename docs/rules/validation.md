@@ -4,6 +4,6 @@ Validation rules enforce the FRAME principle of *verify first, write last*: chea
 
 | Rule | Title | Default severity | Engine |
 | --- | --- | --- | --- |
-| [`VAL001`](VAL001.md) | Heavy Storage Reads Before Cheap Validation | Warning | source (syn) |
+| [`VAL001`](VAL001.md) | Heavy Storage Reads Before Cheap Validation | Warning, off by default | source (syn) |
 | [`VAL002`](VAL002.md) | Division by Unproven Config, Storage, or Collection Divisors | Warning | compiler-backed |
-| [`VAL003`](VAL003.md) | Storage Writes Before Validation | Warning | compiler-backed |
+| [`VAL003`](VAL003.md) | Storage Writes Before Validation | Warning, off by default | compiler-backed |
