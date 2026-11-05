@@ -106,6 +106,8 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. Off by default. |
 | `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
 | `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. |
+| `SEC019` | Security | `imbalance-escapes-transaction` | `error` | A rollback-capable `with_storage_layer`/`with_transaction`/`ProcessTransaction::process` closure moves a token imbalance into an outer local, so its `Drop` writes issuance after a rollback. Off by default. |
+| `SEC020` | Security | `discarded-verification-result` | `error` | A verifier's `bool`/`Result<bool, _>` verdict is discarded, so an invalid proof is accepted. |
 
 ## Configuration
 

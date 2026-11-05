@@ -60,7 +60,8 @@ run_cli_case() {
   "$LINTER" --config "$ROOT_DIR/config/all-rules.toml" --format json --rules "$rule_id" \
     --package "$package" --lib --no-default-features \
     --driver-path "$DRIVER" --toolchain "$TOOLCHAIN" --target-dir "$SDK_TARGET_DIR" \
-    --source-filter "$source_filter" --no-progress "$SDK_DIR/$package_dir" > "$rustc_json"
+    --source-filter "$source_filter" --no-progress "$SDK_DIR/$package_dir" > "$rustc_json" \
+    || [[ $? -eq 1 ]] # exit 1 means error-severity findings were reported
 
   [[ -s "$syntax_json" ]] || printf '[]\n' > "$syntax_json"
   [[ -s "$rustc_json" ]] || printf '[]\n' > "$rustc_json"

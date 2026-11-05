@@ -38,6 +38,7 @@ SEC016	substrate/frame/bags-list/src/migrations.rs	105	Resolved FRAME runtime up
 SEC016	substrate/frame/treasury/src/migration.rs	44	Resolved FRAME runtime upgrade writes storage without a StorageVersion check
 SEC017	substrate/frame/root-offences/src/lib.rs	116	Event field resolves to an unbounded Vec payload
 SEC018	substrate/frame/contracts/src/lib.rs	944	Weight attribute does not account for resolved unbounded `data` input
+SEC019	polkadot/xcm/xcm-executor/src/lib.rs	952	`withdrawn` is declared outside the transactional closure and receives a token imbalance inside it; it outlives the storage layer, so when the closure rolls back, storage is restored but the imbalance's Drop still writes issuance afterwards. Declare it inside the closure, or resolve it before returning
 SEM006	substrate/frame/nomination-pools/src/lib.rs	2919	Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)
 SEM006	substrate/frame/proxy/src/lib.rs	244	Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)
 SEM006	substrate/frame/proxy/src/lib.rs	546	Resolved RuntimeDbWeight reads/writes only accounts for ref-time, not proof size (PoV)

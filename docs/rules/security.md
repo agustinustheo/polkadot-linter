@@ -22,3 +22,5 @@ Security rules target patterns that put a live chain at risk: weight-exhaustion 
 | [`SEC016`](SEC016.md) | Runtime Upgrade Writes Storage Without a StorageVersion Check | Advisory, off by default | compiler-backed |
 | [`SEC017`](SEC017.md) | Unbounded Vec Fields in Pallet Events | Warning | compiler-backed |
 | [`SEC018`](SEC018.md) | Weight Does Not Account for Unbounded Extrinsic Input | Warning | compiler-backed |
+| [`SEC019`](SEC019.md) | Token Imbalance Escapes a Transactional Storage Layer | Error, off by default | compiler-backed |
+| [`SEC020`](SEC020.md) | Discarded Verification Verdict | Error | compiler-backed |
