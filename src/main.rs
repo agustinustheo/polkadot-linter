@@ -471,6 +471,7 @@ mod tests {
                 "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002",
                 "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010",
                 "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
+                "SEC019", "SEC020",
             ])
         );
     }
@@ -484,7 +485,7 @@ mod tests {
             strings(&[
                 "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
                 "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016",
-                "SEC017", "SEC018",
+                "SEC017", "SEC018", "SEC019", "SEC020",
             ])
         );
     }
