@@ -339,6 +339,20 @@ impl Callbacks for PolkadotCallbacks {
                 .visit_body(body);
             }
 
+            let root = tcx.typeck_root_def_id(def_id.to_def_id());
+            let mut auth = AuthGuardVisitor {
+                tcx,
+                typeck,
+                root: root.expect_local(),
+                sec021: self.rule_enabled("SEC021"),
+                sec022: self.rule_enabled("SEC022") && !is_test_or_bench_code(tcx, def_id),
+                sec023: self.rule_enabled("SEC023") && is_ensure_origin_method(tcx, root),
+                diagnostics: &mut self.diagnostics,
+            };
+            if auth.sec021 || auth.sec022 || auth.sec023 {
+                auth.visit_body(body);
+            }
+
             if !matches!(body_owner_kind, BodyOwnerKind::Fn) {
                 continue;
             }
@@ -1445,24 +1459,12 @@ struct Sec019Sec020Visitor<'a, 'tcx> {
 
 impl<'tcx> Visitor<'tcx> for Sec019Sec020Visitor<'_, 'tcx> {
     fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
-        let (def_id, name_span, args, args_owner) = match expr.kind {
-            ExprKind::Call(callee, args) => (
-                resolved_call_def_id(self.typeck, callee),
-                callee.span,
-                args,
-                callee.hir_id,
-            ),
-            ExprKind::MethodCall(segment, _, args, _) => (
-                self.typeck.type_dependent_def_id(expr.hir_id),
-                segment.ident.span,
-                args,
-                expr.hir_id,
-            ),
-            _ => (None, expr.span, &[][..], expr.hir_id),
+        let (name_span, args, args_owner) = match expr.kind {
+            ExprKind::Call(callee, args) => (callee.span, args, callee.hir_id),
+            ExprKind::MethodCall(segment, _, args, _) => (segment.ident.span, args, expr.hir_id),
+            _ => (expr.span, &[][..], expr.hir_id),
         };
-        if let Some((def_id, name)) =
-            def_id.and_then(|def_id| Some((def_id, self.tcx.opt_item_name(def_id)?)))
-        {
+        if let Some((def_id, name)) = callee_name(self.tcx, self.typeck, expr) {
             if self.sec019
                 && is_transactional_layer_fn(self.tcx, def_id, name.as_str())
                 // `impl ProcessTransaction for ()` runs the closure without a storage layer.
@@ -1478,7 +1480,7 @@ impl<'tcx> Visitor<'tcx> for Sec019Sec020Visitor<'_, 'tcx> {
             if self.sec020
                 && is_verifier_name(name.as_str())
                 && type_carries_bool_verdict(self.tcx, self.typeck.expr_ty(expr))
-                && verdict_is_discarded(self.tcx, expr.hir_id)
+                && result_is_discarded(self.tcx, expr.hir_id, Followed::Verdict)
             {
                 let (file, line, column) = span_location(self.tcx.sess.source_map(), name_span);
                 self.diagnostics.push(RustcDiagnostic {
@@ -1763,40 +1765,347 @@ fn type_carries_bool_verdict<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
             && matches!(ty.kind(), TyKind::Adt(_, args) if args.type_at(0).is_bool()))
 }
 
-/// Follows the verdict through `?` and value-preserving adapters and reports whether it ends in a
-/// statement, a `let _ =`, or an adapter that drops it (`is_ok()`, `map(|_| ..)`).
-fn verdict_is_discarded(tcx: TyCtxt<'_>, call: HirId) -> bool {
+/// The callee of a function or method call and its name.
+fn callee_name(
+    tcx: TyCtxt<'_>,
+    typeck: &rustc_middle::ty::TypeckResults<'_>,
+    call: &Expr<'_>,
+) -> Option<(DefId, Symbol)> {
+    let def_id = match call.kind {
+        ExprKind::Call(callee, _) => resolved_call_def_id(typeck, callee),
+        ExprKind::MethodCall(..) => typeck.type_dependent_def_id(call.hir_id),
+        _ => None,
+    }?;
+    Some((def_id, tcx.opt_item_name(def_id)?))
+}
+
+/// What [`result_is_discarded`] follows from the call.
+#[derive(Clone, Copy, PartialEq)]
+enum Followed {
+    /// A verifier's `bool` verdict, which `?` and `unwrap` pass on and `is_ok()` or
+    /// `map(|_| ..)` drop.
+    Verdict,
+    /// An origin check's `Err`, which `?` propagates and `ok()`/`map`/`is_ok()` keep.
+    OriginError,
+}
+
+/// Follows the call's value through the adapters that keep it and reports whether it ends in a
+/// statement, a `let _ =` (for origin checks also a never-used `let _name =`), or an adapter
+/// that drops it.
+fn result_is_discarded(tcx: TyCtxt<'_>, call: HirId, followed: Followed) -> bool {
+    let verdict = followed == Followed::Verdict;
+    let (keep, drop): (&[&str], &[&str]) = if verdict {
+        (
+            &[
+                "map_err",
+                "inspect_err",
+                "ok",
+                "ok_or",
+                "ok_or_else",
+                "expect",
+                "unwrap",
+                "unwrap_or",
+                "unwrap_or_default",
+            ],
+            &["is_ok", "is_err", "is_some", "is_none"],
+        )
+    } else {
+        (&["ok", "err", "map", "map_err", "is_ok", "is_err"], &[])
+    };
     let mut current = call;
     for (parent_id, node) in tcx.hir_parent_iter(call) {
         match node {
             rustc_hir::Node::Expr(parent) => match parent.kind {
-                ExprKind::DropTemps(_)
-                | ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_)) => {}
+                ExprKind::DropTemps(_) => {}
                 // `?` desugars to `match Try::branch(value) { .. }`.
+                ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_)) if verdict => {}
                 ExprKind::Call(callee, _)
-                    if matches!(callee.kind, ExprKind::Path(QPath::LangItem(..))) => {}
+                    if verdict && matches!(callee.kind, ExprKind::Path(QPath::LangItem(..))) => {}
                 ExprKind::MethodCall(segment, receiver, args, _) if receiver.hir_id == current => {
-                    match segment.ident.as_str() {
-                        "map_err" | "inspect_err" | "ok" | "ok_or" | "ok_or_else" | "expect"
-                        | "unwrap" | "unwrap_or" | "unwrap_or_default" => {}
-                        "is_ok" | "is_err" | "is_some" | "is_none" => return true,
-                        "map" | "and_then" => {
-                            return matches!(args, [arg] if matches!(arg.kind, ExprKind::Closure(closure)
+                    let name = segment.ident.as_str();
+                    if drop.contains(&name) {
+                        return true;
+                    }
+                    if !keep.contains(&name) {
+                        return verdict
+                            && matches!(name, "map" | "and_then")
+                            && matches!(args, [arg] if matches!(arg.kind, ExprKind::Closure(closure)
                                 if tcx.hir_body(closure.body).params.first()
                                     .is_some_and(|param| matches!(param.pat.kind, PatKind::Wild))));
-                        }
-                        _ => return false,
                     }
                 }
                 _ => return false,
             },
             rustc_hir::Node::Stmt(stmt) => return matches!(stmt.kind, StmtKind::Semi(_)),
-            rustc_hir::Node::LetStmt(local) => return matches!(local.pat.kind, PatKind::Wild),
+            rustc_hir::Node::LetStmt(local) => {
+                return match local.pat.kind {
+                    PatKind::Wild => true,
+                    PatKind::Binding(_, binding, ident, None) if !verdict => {
+                        ident.as_str().starts_with('_')
+                            && !root_body_exprs(tcx, local.hir_id.owner.def_id)
+                                .iter()
+                                .any(|expr| {
+                                    matches!(expr.kind, ExprKind::Path(QPath::Resolved(None, path))
+                                    if path.res == Res::Local(binding))
+                                })
+                    }
+                    _ => false,
+                };
+            }
             _ => return false,
         }
         current = parent_id;
     }
     false
+}
+
+/// Every expression in the typeck-root body of `def_id`, closures included.
+fn root_body_exprs<'tcx>(tcx: TyCtxt<'tcx>, def_id: LocalDefId) -> Vec<&'tcx Expr<'tcx>> {
+    struct Collect<'tcx>(TyCtxt<'tcx>, Vec<&'tcx Expr<'tcx>>);
+    impl<'tcx> Visitor<'tcx> for Collect<'tcx> {
+        fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+            self.1.push(expr);
+            if let ExprKind::Closure(closure) = expr.kind {
+                self.visit_body(self.0.hir_body(closure.body));
+            }
+            intravisit::walk_expr(self, expr);
+        }
+    }
+    let root = tcx.typeck_root_def_id(def_id.to_def_id()).expect_local();
+    let mut collect = Collect(tcx, Vec::new());
+    collect.visit_body(tcx.hir_body_owned_by(root));
+    collect.1
+}
+
+/// Code compiled only for tests or benchmarks: under `#[cfg(test)]` or
+/// `#[cfg(feature = "runtime-benchmarks")]`, in a test or benchmarking file, or in a
+/// benchmarking crate.
+fn is_test_or_bench_code(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
+    let hir_id = tcx.local_def_id_to_hir_id(def_id);
+    let file = tcx.sess.source_map().span_to_filename(tcx.def_span(def_id));
+    let path = match file {
+        rustc_span::FileName::Real(name) => name.local_path().map(Path::to_path_buf),
+        _ => None,
+    };
+    tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE)
+        .as_str()
+        .contains("benchmark")
+        || path.is_some_and(|path| {
+            let class_path = polkadot_linter::engine::classification_path(&path, Path::new(""));
+            polkadot_linter::engine::LintEngine::is_test_file(&class_path, "")
+                || polkadot_linter::engine::LintEngine::is_benchmark_file(&class_path)
+        })
+        || std::iter::once(hir_id)
+            .chain(tcx.hir_parent_id_iter(hir_id))
+            .flat_map(|id| tcx.hir_attrs(id))
+            .filter(|attr| attr.has_name(rustc_span::sym::cfg_trace))
+            .filter_map(|attr| tcx.sess.source_map().span_to_snippet(attr.span()).ok())
+            .any(|cfg| {
+                !cfg.contains("not(")
+                    && cfg
+                        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+                        .any(|word| matches!(word, "test" | "runtime-benchmarks"))
+            })
+}
+
+/// SEC021 (`if verify(..) { reject }`), SEC022 (origin-check `Result` discarded) and SEC023
+/// (`Option != Option` rejecting in an `EnsureOrigin*` impl, so `None == None` is accepted).
+struct AuthGuardVisitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    /// The enclosing function (the body itself, or the function a closure is in).
+    root: LocalDefId,
+    sec021: bool,
+    /// Off in test and benchmark code.
+    sec022: bool,
+    /// Only inside an `EnsureOrigin*` method.
+    sec023: bool,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+}
+
+impl<'tcx> Visitor<'tcx> for AuthGuardVisitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        match expr.kind {
+            ExprKind::If(condition, then_branch, else_branch)
+                if self.branch_rejects(then_branch)
+                    && !else_branch.is_some_and(|branch| self.branch_rejects(branch)) =>
+            {
+                // `ensure!(c, e)` expands to `if !c { return Err(e) }`.
+                let (mut condition, mut negated) = (strip_drop_temps(condition), false);
+                while let ExprKind::Unary(rustc_hir::UnOp::Not, inner) = condition.kind {
+                    (condition, negated) = (strip_drop_temps(inner), !negated);
+                }
+                match condition.kind {
+                    ExprKind::Binary(op, left, right)
+                        if self.sec023
+                            && matches!(
+                                (op.node, negated),
+                                (BinOpKind::Ne, false) | (BinOpKind::Eq, true)
+                            )
+                            && [left, right]
+                                .iter()
+                                .all(|side| self.may_be_none(side, condition.span)) =>
+                    {
+                        self.report("SEC023", condition.span, "the comparison is between two `Option`s in an `EnsureOrigin` impl, so when both are `None` they compare equal and the check passes. Unwrap each side (`ok_or(..)?`) before comparing".into());
+                    }
+                    ExprKind::Call(..) | ExprKind::MethodCall(..)
+                        if self.sec021
+                            && !negated
+                            && self.typeck.expr_ty(condition).is_bool()
+                            && callee_name(self.tcx, self.typeck, condition)
+                                .is_some_and(|(_, name)| is_verifier_name(name.as_str())) =>
+                    {
+                        self.report("SEC021", condition.span, "the rejecting branch runs when the verifier returns `true`, so valid proofs or signatures are rejected and invalid ones accepted. Negate the condition".into());
+                    }
+                    _ => {}
+                }
+            }
+            ExprKind::Call(..) | ExprKind::MethodCall(..) if self.sec022 => {
+                if let Some((_, name)) =
+                    callee_name(self.tcx, self.typeck, expr).filter(|&(def_id, name)| {
+                        is_origin_check(self.tcx, def_id, name.as_str())
+                            && result_is_discarded(self.tcx, expr.hir_id, Followed::OriginError)
+                    })
+                {
+                    self.report("SEC022", expr.span, format!("the `Result` of origin check `{name}` is discarded, so this origin requirement is not enforced. Propagate it with `?`"));
+                }
+            }
+            _ => {}
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl<'tcx> AuthGuardVisitor<'_, 'tcx> {
+    fn report(&mut self, rule_id: &'static str, span: Span, message: String) {
+        let rule_name = match rule_id {
+            "SEC021" => "inverted-verification-guard",
+            "SEC022" => "discarded-origin-check",
+            _ => "option-equality-authorization",
+        };
+        let (file, line, column) = span_location(self.tcx.sess.source_map(), span);
+        self.diagnostics.push(RustcDiagnostic {
+            rule_id,
+            rule_name,
+            file,
+            line,
+            column,
+            message,
+        });
+    }
+
+    /// An `Option` operand that may be `None` at the comparison at `at`: not a `Some(..)`/`None`
+    /// literal, not a local bound from `Some(..)`, and not checked earlier in the function with
+    /// `.is_none()`/`.is_some()`/`if let Some`/`let Some(..) = .. else`.
+    fn may_be_none(&self, side: &Expr<'_>, at: Span) -> bool {
+        let mut inner = side;
+        while let ExprKind::AddrOf(_, _, value) = inner.kind {
+            inner = value;
+        }
+        let is_ctor = |expr: &Expr<'_>| {
+            let ctor = match expr.kind {
+                ExprKind::Call(callee, _) => resolved_call_def_id(self.typeck, callee),
+                ExprKind::Path(ref qpath) => self.typeck.qpath_res(qpath, expr.hir_id).opt_def_id(),
+                _ => None,
+            };
+            ctor.is_some_and(|ctor| {
+                matches!(self.tcx.def_kind(ctor), rustc_hir::def::DefKind::Ctor(..))
+            })
+        };
+        let bound_to_ctor = local_binding_id(self.typeck, inner).is_some_and(|binding| {
+            matches!(self.tcx.parent_hir_node(binding),
+                rustc_hir::Node::LetStmt(LetStmt { init: Some(init), .. }) if is_ctor(strip_drop_temps(init)))
+        });
+        if is_ctor(inner)
+            || bound_to_ctor
+            || !matches!(self.typeck.expr_ty(side).peel_refs().kind(),
+                TyKind::Adt(adt, _) if self.tcx.is_diagnostic_item(rustc_span::sym::Option, adt.did()))
+        {
+            return false;
+        }
+        let source_map = self.tcx.sess.source_map();
+        let Ok(operand) = source_map.span_to_snippet(inner.span) else {
+            return false;
+        };
+        let checked_earlier = |checked: &Expr<'_>| {
+            checked.span.lo() < at.lo()
+                && source_map.span_to_snippet(checked.span).as_deref() == Ok(operand.as_str())
+        };
+        !root_body_exprs(self.tcx, self.root).iter().any(|expr| match expr.kind {
+            ExprKind::MethodCall(segment, receiver, ..) => {
+                matches!(segment.ident.as_str(), "is_none" | "is_some") && checked_earlier(receiver)
+            }
+            ExprKind::Let(let_expr) => {
+                matches!(let_expr.pat.kind, PatKind::TupleStruct(..)) && checked_earlier(let_expr.init)
+            }
+            ExprKind::Block(block, _) => block.stmts.iter().any(|stmt| {
+                matches!(stmt.kind, StmtKind::Let(LetStmt { pat, init: Some(init), els: Some(_), .. })
+                    if matches!(pat.kind, PatKind::TupleStruct(..)) && checked_earlier(init))
+            }),
+            _ => false,
+        })
+    }
+
+    /// Whether the `if` block `branch` itself rejects: one of its own statements (or its tail) is
+    /// `return Err(..)`, `return false` or `Err(..)?`, or its tail is `Err(..)`. Nested control
+    /// flow and closures do not count.
+    fn branch_rejects(&self, branch: &Expr<'_>) -> bool {
+        let ExprKind::Block(block, _) = branch.kind else {
+            return false;
+        };
+        let is_err = |expr: &Expr<'_>| {
+            matches!(strip_drop_temps(expr).kind, ExprKind::Call(callee, _)
+                if resolved_call_def_id(self.typeck, callee).is_some_and(|ctor| self.tcx
+                    .is_lang_item(self.tcx.parent(ctor), rustc_hir::LangItem::ResultErr)))
+        };
+        let rejects = |expr: &Expr<'_>| match strip_drop_temps(expr).kind {
+            ExprKind::Ret(Some(value)) => {
+                is_err(value)
+                    || matches!(strip_drop_temps(value).kind,
+                        ExprKind::Lit(lit) if matches!(lit.node, rustc_ast::LitKind::Bool(false)))
+            }
+            // `Err(e)?` desugars to `match Try::branch(Err(e)) { .. }`.
+            ExprKind::Match(scrutinee, _, rustc_hir::MatchSource::TryDesugar(_)) => {
+                matches!(scrutinee.kind, ExprKind::Call(_, [value]) if is_err(value))
+            }
+            _ => false,
+        };
+        block.stmts.iter().any(
+            |stmt| matches!(stmt.kind, StmtKind::Semi(expr) | StmtKind::Expr(expr) if rejects(expr)),
+        ) || block.expr.is_some_and(|tail| rejects(tail) || is_err(tail))
+    }
+}
+
+/// `frame_system::ensure_*` origin checks and `EnsureOrigin*::{ensure,try}_origin`.
+fn is_origin_check(tcx: TyCtxt<'_>, def_id: DefId, name: &str) -> bool {
+    match tcx.crate_name(def_id.krate).as_str() {
+        "frame_system" => matches!(
+            name,
+            "ensure_signed"
+                | "ensure_root"
+                | "ensure_none"
+                | "ensure_signed_or_root"
+                | "ensure_authorized"
+        ),
+        _ => {
+            matches!(
+                name,
+                "ensure_origin" | "try_origin" | "ensure_origin_or_root"
+            ) && is_ensure_origin_method(tcx, def_id)
+        }
+    }
+}
+
+/// A method of (or implementing) frame-support's `EnsureOrigin` / `EnsureOriginWithArg`.
+fn is_ensure_origin_method(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    tcx.def_kind(def_id).is_assoc()
+        && tcx
+            .trait_of_assoc(def_id)
+            .or_else(|| implemented_trait_id(tcx, def_id))
+            .is_some_and(|tr| {
+                tcx.crate_name(tr.krate).as_str() == "frame_support"
+                    && tcx.item_name(tr).as_str().starts_with("EnsureOrigin")
+            })
 }
 
 struct Sec006Visitor<'a, 'tcx> {
