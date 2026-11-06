@@ -1,7 +1,8 @@
 # Every rule enabled, for the pinned-SDK corpus baselines, labeled findings and
 # rule-specific driver checks (scripts/check-source-*.sh, check-labeled-findings.sh,
 # check-sdk-benchmarks.sh and the check-rustc-*.sh scripts for default-off
-# rules), so they keep exercising the rules that config/default.toml turns off. Every other setting is the bundled default.
+# rules), so they keep exercising the rules that config/default.toml turns off.
+# Every other setting is the bundled default.
 
 [rules.enabled]
 BEN001 = true

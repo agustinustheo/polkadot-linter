@@ -19,7 +19,7 @@ This audit decides which rules `config/default.toml` enables.
   finding. They agreed on 186. GPT 6.1 Terra adjudicated the other 105 and left
   4 SEC003 findings `UNSURE`. `labels.tsv` holds both labels, the final label and
   the evidence: the adjudicator's reason where the labelers disagreed, otherwise
-  the Opus evidence. `final.tsv` holds only the final labels.
+  the Opus evidence.
 
 ## Labels
 

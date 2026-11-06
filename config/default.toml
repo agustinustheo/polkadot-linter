@@ -53,6 +53,9 @@ VAL003 = false
 [rules.severity]
 # TST002 (assert_ok on apply_extrinsic) is error-level because it silently hides failures
 TST002 = "error"
+# If re-enabled, keep these as review hints rather than warnings.
+SEC005 = "advisory"
+SEM008 = "advisory"
 # SDK sample: VAL002 3/3 findings were non-actionable; retain it as a review
 # hint without treating config constants as warnings.
 VAL002 = "advisory"

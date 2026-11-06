@@ -15,7 +15,7 @@ directory (`.`) is scanned.
 | `-f`, `--format <FMT>` | `human` | Output format: `human`, `json`, or `sarif`. |
 | `-s`, `--severity <LEVEL>` | `advisory` | Minimum severity to report: `advisory`, `warning`, or `error`. Lower-severity diagnostics are filtered out of the output. |
 | `--fail-on-warning` | off | Exit non-zero if any warning (or error) is reported. |
-| `--rules <IDS>` | all enabled | Comma-separated rule IDs or family prefixes to run (for example `--rules SEC003,VAL001` or `--rules SEC`). |
+| `--rules <IDS>` | all enabled | Comma-separated rule IDs or family prefixes to run (for example `--rules SEC007,SEC011` or `--rules SEC`). Only rules enabled by the config run: naming a rule that is off by default reports nothing unless you also pass `-c config/all-rules.toml` or enable it in your config. |
 | `--include <GLOBS>` | — | Comma-separated glob patterns of files to include. |
 | `--exclude <GLOBS>` | — | Comma-separated glob patterns of files to exclude. |
 | `-v`, `--verbose` | off | Verbose (`debug`-level) logging. |

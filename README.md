@@ -60,7 +60,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEM005` | Semantic | `parameterise-weight-functions` | `warning` | Weight functions multiply a constant weight instead of calling a parameterised `WeightInfo` function. Off by default. |
 | `SEM006` | Semantic | `dbweight-missing-pov` | `warning` | `DbWeight::get().reads()` is used where proof size accounting should come from a benchmarked weight. Off by default. |
 | `SEM007` | Semantic | `runtime-debug-deprecated` | `warning` | Deprecated `RuntimeDebug` or `RuntimeDebugNoBound` derives are used. Off by default. |
-| `SEM008` | Semantic | `sp-std-deprecated` | `warning` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
+| `SEM008` | Semantic | `sp-std-deprecated` | `advisory` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
 | `SEM009` | Semantic | `redundant-contains-key-before-remove` | `advisory` | A storage map is checked with `contains_key()` immediately before `remove()` or `take()`. |
 | `SEM010` | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
 | `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute uses `Weight::zero()`, making the call effectively free. |
@@ -90,7 +90,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |
 | `SEC003` | Security | `missing-decode-depth-limit` | `warning` | User-controlled decoding happens without `decode_with_depth_limit`. Off by default. |
 | `SEC004` | Security | `unsafe-weight-arithmetic` | `warning` | A weight attribute uses non-saturating arithmetic that can overflow or undercount. Off by default. |
-| `SEC005` | Security | `expensive-weight-calculation` | `warning` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. Off by default. |
+| `SEC005` | Security | `expensive-weight-calculation` | `advisory` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. Off by default. |
 | `SEC006` | Security | `unchecked-repatriate-reserved` | `warning` | The remaining balance from `repatriate_reserved` is ignored instead of being checked. |
 | `SEC007` | Security | `let-underscore-result` | `warning` | `let _ =` discards a likely `Result`, hiding potential failures. |
 | `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. Off by default. |
