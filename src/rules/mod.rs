@@ -69,6 +69,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::CustomInvalidityReprU8),
         Box::new(semantic::SubmitTransactionLogTarget),
         Box::new(semantic::MissingWeightOfAuthorize),
+        Box::new(semantic::VerifierDefaultsToTrue),
         // Test smell rules
         Box::new(test_smells::AssertNoop),
         Box::new(test_smells::ApplyExtrinsicAssertOk),

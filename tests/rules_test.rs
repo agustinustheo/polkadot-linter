@@ -9151,6 +9151,15 @@ fn rtc009_lockfile(packages: &[(&str, &str, Option<&str>)]) -> String {
 const CRATES_IO: Option<&str> = Some("registry+https://github.com/rust-lang/crates.io-index");
 
 #[test]
+fn sem019_reports_verifier_trait_defaults_that_accept_everything() {
+    let diags = check_fixture(
+        "substrate/primitives/runtime/src/traits/mod.rs",
+        include_str!("fixtures/bad_sem019.rs"),
+    );
+    assert_eq!(rtc_lines(&diags, "SEM019"), vec![6, 10], "{diags:?}");
+}
+
+#[test]
 fn rtc009_reports_vulnerable_xcm_executor_releases_in_cargo_lock() {
     // fellows runtimes before 2.5.1 (28.0.1) and before the Feb 2026 bump (23.0.0, 21.0.0).
     for (version, expected) in [

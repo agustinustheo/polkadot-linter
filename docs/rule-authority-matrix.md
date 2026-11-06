@@ -44,7 +44,7 @@ not replace a more accurate source implementation merely for uniformity.
 | Rules | Why source remains authoritative | Next enabling work, if any |
 | --- | --- | --- |
 | `VAL001` | Validation ordering is reported over the authored dispatchable body; FRAME expansion can hide the source ordering that the diagnostic explains. | Compiler-to-pre-expansion source mapping with dataflow evidence. |
-| `SEM002`-`SEM005`, `SEM007`, `SEM008`, `SEM011`-`SEM015` | These are authored style, lexical import, or FRAME-attribute conventions. | Only migrate where a compiler implementation demonstrates improved precision. |
+| `SEM002`-`SEM005`, `SEM007`, `SEM008`, `SEM011`-`SEM015`, `SEM019` | These are authored style, lexical import, or FRAME-attribute conventions. | Only migrate where a compiler implementation demonstrates improved precision. |
 | `TST001`-`TST006`, `MOK001` | Test assertion style, test design, and mock/setup ratios are source-level conventions. | Test-target compilation plus source-span/effect analysis for a specific rule. |
 | `BEN001`-`BEN003` | Benchmark identity and `verify` blocks must be associated with their authored macro bodies. | Compiler-to-authored FRAME benchmark mapping with macro provenance. |
 | `RTC001`-`RTC008`, `RTC010` | Runtime configuration is authored type bindings, `parameter_types!` bodies, and `construct_runtime!`/`define_benchmarks!` macro input; the evidence is the authored binding, and macro expansion erases `define_benchmarks!` membership. Precision is pinned by `scripts/check-source-runtime-corpus.sh` and `benchmarks/labels/RTC.tsv`. | Type resolution of aliased fee managers, waived locations, delivery prices and origins across files (same-file `type` aliases are resolved). |

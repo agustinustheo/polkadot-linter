@@ -4274,6 +4274,122 @@ impl LintRule for CustomInvalidityReprU8 {
 }
 
 // ---------------------------------------------------------------------------
+// SEM019: verifier trait method whose default body accepts everything
+// ---------------------------------------------------------------------------
+
+pub struct VerifierDefaultsToTrue;
+
+impl LintRule for VerifierDefaultsToTrue {
+    fn id(&self) -> &str {
+        "SEM019"
+    }
+    fn name(&self) -> &str {
+        "verifier-defaults-to-true"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if should_skip_production_rule(ctx) {
+            return None;
+        }
+
+        /// `fn ownership_proof_is_valid(&self, _proof: &[u8]) -> bool { true }`:
+        /// a verifier-named default that takes something to check and
+        /// returns `true` without reading it (polkadot-sdk #1739).
+        fn defaults_to_true(item: &TraitItemFn) -> bool {
+            let name = item.sig.ident.to_string();
+            let words = name.split('_').collect::<Vec<_>>();
+            let has = |word| words.contains(&word);
+            let verifier = ["verify", "verified", "valid", "authorized", "authorised"]
+                .into_iter()
+                .any(has)
+                || (has("ownership") && has("proof"));
+            // Negated or inverted names (`proof_is_invalid`, `needs_proof`)
+            // return `true` to reject, not to accept.
+            let inverted = [
+                "invalid",
+                "unauthorized",
+                "unauthorised",
+                "validator",
+                "not",
+                "no",
+            ]
+            .into_iter()
+            .any(has)
+                || words.iter().any(|word| {
+                    ["deny", "reject", "needs", "requires"]
+                        .iter()
+                        .any(|prefix| word.starts_with(prefix))
+                });
+            let returns_bool = matches!(&item.sig.output, syn::ReturnType::Type(_, ty)
+                if matches!(&**ty, Type::Path(path) if path.path.is_ident("bool")));
+            let takes_input = item
+                .sig
+                .inputs
+                .iter()
+                .any(|input| matches!(input, syn::FnArg::Typed(_)));
+            let accepts_all = item.default.as_ref().is_some_and(|body| {
+                matches!(body.stmts.as_slice(), [Stmt::Expr(Expr::Lit(lit), None)]
+                    if matches!(lit.lit, Lit::Bool(ref value) if value.value))
+            });
+            verifier && !inverted && returns_bool && takes_input && accepts_all
+        }
+
+        struct Visitor<'a> {
+            mask: &'a [bool],
+            lines: Vec<(usize, String)>,
+        }
+        impl<'ast> Visit<'ast> for Visitor<'_> {
+            fn visit_trait_item_fn(&mut self, item: &'ast TraitItemFn) {
+                if !is_masked_span(self.mask, item.span()) && defaults_to_true(item) {
+                    self.lines
+                        .push((span_line(item.sig.ident.span()), item.sig.ident.to_string()));
+                }
+            }
+        }
+
+        let test_mask = cfg_test_module_mask(ctx.content);
+        let mut visitor = Visitor {
+            mask: &test_mask,
+            lines: Vec::new(),
+        };
+        visitor.visit_file(ast_file(ctx)?);
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+        let diagnostics = visitor
+            .lines
+            .into_iter()
+            .map(|(line, name)| Diagnostic {
+                rule_id: self.id().to_string(),
+                rule_name: self.name().to_string(),
+                category: RuleCategory::Semantic,
+                severity,
+                file: ctx.path.clone(),
+                line,
+                column: None,
+                end_line: None,
+                message: format!(
+                    "trait method `{name}` defaults to `true` without inspecting its arguments"
+                ),
+                explanation: "A verification hook whose default body is `true` accepts every \
+                    input for each implementer that does not override it. `OpaqueKeys::\
+                    ownership_proof_is_valid` defaulted to `true`, so session keys were set \
+                    without a proof of ownership until polkadot-sdk #1739 made the method \
+                    required."
+                    .to_string(),
+                suggestion: Some(
+                    "Remove the default so every implementer must decide, or default to \
+                     `false` (fail closed)."
+                        .to_string(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        (!diagnostics.is_empty()).then_some(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SEM014: SubmitTransaction logs should use target: LOG_TARGET
 // ---------------------------------------------------------------------------
 

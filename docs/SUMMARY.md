@@ -55,6 +55,7 @@
   - [SEM014 - Missing Log Target in SubmitTransaction Logging](rules/SEM014.md)
   - [SEM015 - Missing `#[pallet::weight_of_authorize]` on Authorized Calls](rules/SEM015.md)
   - [SEM016 - Missing `AuthorizeCall` in `CreateAuthorizedTransaction` Extension](rules/SEM016.md)
+  - [SEM019 - Verifier Trait Method Defaults to `true`](rules/SEM019.md)
 - [Benchmarking Rules (BEN)](rules/benchmarking.md)
   - [BEN001 - Weight Function Without a Corresponding Benchmark](rules/BEN001.md)
   - [BEN002 - Benchmark Without Verification Block](rules/BEN002.md)
