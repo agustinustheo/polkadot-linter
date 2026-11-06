@@ -94,6 +94,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(runtime_config::XcmDenyBarrierNotRecursive),
         Box::new(runtime_config::ProxyFilterFailsOpen),
         Box::new(runtime_config::KnownVulnerableCrateVersion),
+        Box::new(runtime_config::StorageReadingUnpaidAliaser),
     ];
 
     // Filter disabled rules

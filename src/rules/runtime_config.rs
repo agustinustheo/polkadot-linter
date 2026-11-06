@@ -1,4 +1,4 @@
-//! Runtime configuration rules (RTC001-RTC009).
+//! Runtime configuration rules (RTC001-RTC010).
 //!
 //! These rules inspect the *runtime* crate rather than individual pallets:
 //! `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` /
@@ -1078,28 +1078,21 @@ fn is_xcm_executor_impl(item_impl: &ItemImpl) -> bool {
             .is_some_and(|ident| ident == "XcmConfig")
 }
 
-/// Same-file `type Name = ...;` aliases, used to resolve generic arguments
-/// such as `XcmFeeManagerFromComponents<WaivedLocations, ..>`. A name defined
-/// more than once with different right-hand sides (in different modules) is
-/// ambiguous: `None`.
-type Aliases = HashMap<String, Option<Type>>;
+/// Same-file `type Name = ...;` aliases: every distinct right-hand side of a
+/// name. More than one (in different modules or under different cfgs) is
+/// ambiguous.
+type Aliases = HashMap<String, Vec<Type>>;
 
 fn type_aliases(file: &SynFile) -> Aliases {
     struct Collector(Aliases);
     impl<'ast> Visit<'ast> for Collector {
         fn visit_item_type(&mut self, item: &'ast ItemType) {
             if item.generics.params.is_empty() {
-                let ty = (*item.ty).clone();
-                self.0
-                    .entry(item.ident.to_string())
-                    .and_modify(|known| {
-                        if known.as_ref().is_some_and(|known| {
-                            known.to_token_stream().to_string() != ty.to_token_stream().to_string()
-                        }) {
-                            *known = None;
-                        }
-                    })
-                    .or_insert(Some(ty));
+                let text = |ty: &Type| ty.to_token_stream().to_string();
+                let known = self.0.entry(item.ident.to_string()).or_default();
+                if known.iter().all(|ty| text(ty) != text(&item.ty)) {
+                    known.push((*item.ty).clone());
+                }
             }
         }
     }
@@ -1108,29 +1101,45 @@ fn type_aliases(file: &SynFile) -> Aliases {
     aliases.0
 }
 
-/// The type (after resolving same-file aliases) admits every location:
-/// `Everything`, or a tuple containing it (tuples of `Contains` are a union).
-/// An ambiguous alias may be `Everything`.
-fn contains_everything(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
+/// The single same-file definition of alias `ident`; `None` if it is unknown
+/// or ambiguous.
+fn unique_alias<'a>(aliases: &'a Aliases, ident: &str) -> Option<&'a Type> {
+    match aliases.get(ident)?.as_slice() {
+        [ty] => Some(ty),
+        _ => None,
+    }
+}
+
+/// The type (after resolving same-file aliases) is a filter named `name`, or a
+/// tuple containing one (tuples of `Contains` are a union). An ambiguous alias
+/// may be the filter, unless `every_definition` asks that each of its
+/// definitions contains it.
+fn contains_filter(
+    ty: &Type,
+    name: &str,
+    aliases: &Aliases,
+    every_definition: bool,
+    depth: usize,
+) -> bool {
     if depth > 8 {
         return false;
     }
+    let recurse = |ty: &Type| contains_filter(ty, name, aliases, every_definition, depth + 1);
     match ty {
-        Type::Paren(inner) => contains_everything(&inner.elem, aliases, depth + 1),
-        Type::Tuple(tuple) => tuple
-            .elems
-            .iter()
-            .any(|elem| contains_everything(elem, aliases, depth + 1)),
+        Type::Paren(inner) => recurse(&inner.elem),
+        Type::Tuple(tuple) => tuple.elems.iter().any(recurse),
         _ => {
             let Some(ident) = type_path(ty).and_then(path_last_ident) else {
                 return false;
             };
-            ident == "Everything"
+            ident == name
                 || (type_path(ty).is_some_and(|path| path.segments.len() == 1)
-                    && aliases.get(&ident).is_some_and(|alias| {
-                        alias
-                            .as_ref()
-                            .is_none_or(|alias| contains_everything(alias, aliases, depth + 1))
+                    && aliases.get(&ident).is_some_and(|definitions| {
+                        if every_definition {
+                            definitions.iter().all(recurse)
+                        } else {
+                            definitions.len() > 1 || definitions.iter().any(recurse)
+                        }
                     }))
         }
     }
@@ -1188,7 +1197,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                 || type_path(ty)
                     .filter(|path| path.segments.len() == 1)
                     .and_then(path_last_ident)
-                    .and_then(|ident| self.aliases.get(&ident)?.as_ref())
+                    .and_then(|ident| unique_alias(self.aliases, &ident))
                     .is_some_and(is_free_delivery_price);
             if free {
                 self.prices.0 = true;
@@ -1228,9 +1237,9 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
             };
             let ident = segment.ident.to_string();
             let waived_everywhere = ident == "XcmFeeManagerFromComponents"
-                && generic_type_args(segment)
-                    .first()
-                    .is_some_and(|waived| contains_everything(waived, self.aliases, 0));
+                && generic_type_args(segment).first().is_some_and(|waived| {
+                    contains_filter(waived, "Everything", self.aliases, false, 0)
+                });
             if ident == "WaiveDeliveryFees" || waived_everywhere {
                 self.push(
                     XcmFeeFinding::Waived,
@@ -1517,9 +1526,7 @@ fn origin_is_privileged(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
         args.get(*index)
             .is_some_and(|arg| origin_is_privileged(arg, aliases, depth + 1))
     } else if path.segments.len() == 1 && segment.arguments.is_empty() {
-        aliases
-            .get(&ident)
-            .and_then(Option::as_ref)
+        unique_alias(aliases, &ident)
             .is_some_and(|alias| origin_is_privileged(alias, aliases, depth + 1))
     } else {
         false
@@ -1937,9 +1944,8 @@ impl LintRule for XcmDenyBarrierNotRecursive {
                 if INSTRUCTION_DENIES.contains(&ident.as_str()) {
                     self.hits.push((line_of(ty), type_text(ty)));
                 } else if path.segments.len() == 1 {
-                    if let Some(Some(alias)) = self.aliases.get(&ident) {
-                        let alias = alias.clone();
-                        self.check_deny(&alias, depth + 1);
+                    if let Some(alias) = unique_alias(self.aliases, &ident) {
+                        self.check_deny(alias, depth + 1);
                     }
                 }
             }
@@ -2422,5 +2428,79 @@ impl LintRule for KnownVulnerableCrateVersion {
             }
         }
         non_empty(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC010: storage-reading aliaser on the unpaid-execution barrier
+// ---------------------------------------------------------------------------
+
+pub struct StorageReadingUnpaidAliaser;
+
+impl LintRule for StorageReadingUnpaidAliaser {
+    fn id(&self) -> &str {
+        "RTC010"
+    }
+    fn name(&self) -> &str {
+        "storage-reading-unpaid-aliaser"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        struct Barriers<'a> {
+            aliases: &'a Aliases,
+            lines: Vec<usize>,
+        }
+        impl<'ast> Visit<'ast> for Barriers<'_> {
+            fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+                if segment.ident == "AllowExplicitUnpaidExecutionFrom" {
+                    if let Some(aliasers) = generic_type_args(segment).get(1) {
+                        if contains_filter(aliasers, "AuthorizedAliasers", self.aliases, true, 0) {
+                            self.lines.push(line_of(segment));
+                        }
+                    }
+                }
+                visit::visit_path_segment(self, segment);
+            }
+        }
+
+        runtime_scope(ctx, &config.runtime_config)?;
+        let file = production_ast(ctx.ast.as_ref()?);
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+        let aliases = type_aliases(&file);
+        let mut barriers = Barriers {
+            aliases: &aliases,
+            lines: Vec::new(),
+        };
+        barriers.visit_file(&file);
+        non_empty(
+            barriers
+                .lines
+                .into_iter()
+                .map(|line| {
+                    diagnostic(
+                        self,
+                        ctx,
+                        severity,
+                        line,
+                        "`AllowExplicitUnpaidExecutionFrom` is given `pallet_xcm::AuthorizedAliasers` \
+                         as its aliaser filter"
+                            .to_string(),
+                        "Barriers run before any fee is taken. `AllowExplicitUnpaidExecutionFrom<T, \
+                         Aliasers>` calls `Aliasers::contains` for every `AliasOrigin` ahead of \
+                         `UnpaidExecution` (up to 5 per message), and `AuthorizedAliasers` reads \
+                         storage on keys the message chooses. Any incoming message can trigger \
+                         those reads for free and then be rejected (polkadot-sdk #12831, \
+                         polkadot-fellows/runtimes #1237).",
+                        "Pass only computation-only aliasers to the barrier, e.g. \
+                         `type CheapTrustedAliasers = (AliasChildLocation,);`, and keep \
+                         `(CheapTrustedAliasers, AuthorizedAliasers<Runtime>)` for \
+                         `xcm_executor::Config::Aliasers`.",
+                    )
+                })
+                .collect(),
+        )
     }
 }

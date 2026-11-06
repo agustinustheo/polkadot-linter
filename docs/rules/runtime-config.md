@@ -13,6 +13,7 @@ Runtime configuration rules inspect the *runtime crate* rather than individual p
 | [`RTC007`](RTC007.md) | XCM Deny Barrier Not Applied to Nested Programs | Warning | source (syn) |
 | [`RTC008`](RTC008.md) | Proxy Filter Fails Open | Warning | source (syn) |
 | [`RTC009`](RTC009.md) | Known-Vulnerable Polkadot Crate Version in Cargo.lock | Error | lockfile |
+| [`RTC010`](RTC010.md) | Storage-Reading Aliaser on the Unpaid-Execution Barrier | Warning | source (syn) |
 
 ## Which code is inspected
 

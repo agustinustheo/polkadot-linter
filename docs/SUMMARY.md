@@ -80,6 +80,7 @@
   - [RTC007 - XCM Deny Barrier Not Applied to Nested Programs](rules/RTC007.md)
   - [RTC008 - Proxy Filter Fails Open](rules/RTC008.md)
   - [RTC009 - Known-Vulnerable Polkadot Crate Version in Cargo.lock](rules/RTC009.md)
+  - [RTC010 - Storage-Reading Aliaser on the Unpaid-Execution Barrier](rules/RTC010.md)
 
 # Polkadot SDK Best Practices
 

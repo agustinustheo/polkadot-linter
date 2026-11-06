@@ -9281,6 +9281,40 @@ fn rtc008_detects_fail_open_proxy_filters() {
 }
 
 #[test]
+fn rtc010_reports_authorized_aliasers_on_the_unpaid_barrier() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/bad_rtc010.rs"),
+    );
+    assert_eq!(rtc_lines(&diags, "RTC010"), vec![22, 26, 27], "{diags:?}");
+    // Outside a runtime crate the same barrier is not reported.
+    let diags = check_fixture(
+        "pallets/xcm-mock/src/lib.rs",
+        &include_str!("fixtures/bad_rtc010.rs").replace("construct_runtime!", "not_a_runtime!"),
+    );
+    assert!(rtc_lines(&diags, "RTC010").is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc010_reports_an_ambiguous_alias_only_if_every_definition_reads_storage() {
+    let xcm = |second: &str| {
+        format!(
+            "construct_runtime!(pub enum Runtime {{ PolkadotXcm: pallet_xcm = 31 }});\n\
+mod kusama {{\n    pub type Aliasers = (AliasChildLocation, AuthorizedAliasers<Runtime>);\n}}\n\
+mod polkadot {{\n    pub type Aliasers = {second};\n}}\n\
+pub type Barrier = AllowExplicitUnpaidExecutionFrom<Equals<Parent>, Aliasers>;\n"
+        )
+    };
+    let diags = check_fixture("runtime/src/xcm_config.rs", &xcm("(AliasChildLocation,)"));
+    assert!(rtc_lines(&diags, "RTC010").is_empty(), "{diags:?}");
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        &xcm("AuthorizedAliasers<Runtime>"),
+    );
+    assert_eq!(rtc_lines(&diags, "RTC010"), vec![8], "{diags:?}");
+}
+
+#[test]
 fn rtc003_stays_error_with_a_minimal_user_config() {
     let config: polkadot_linter::config::Config =
         toml::from_str("[rules]\n").expect("minimal user configuration must deserialize");
