@@ -27,6 +27,9 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
   to `true` to enable it, or use the repository's `config/all-rules.toml` to
   run every rule.
 - `[rules.severity]` promotes or demotes individual rules without code changes.
+  It does not enable a rule: a severity set for a default-off rule (for example
+  `SEC008 = "error"` from an older config) has no effect until the rule is also
+  set to `true` under `[rules.enabled]`.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]`
   tune the heuristics behind those families.
 - `[runtime_config]` sets which runtimes the `RTC` rules inspect

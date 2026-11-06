@@ -176,7 +176,8 @@ fn has_rule(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -
 
 #[test]
 fn syntax_engine_does_not_register_compiler_backed_rules() {
-    let config = polkadot_linter::config::Config::default();
+    // Every rule enabled, so a default-off rule registered by mistake is still caught.
+    let config = all_rules_config();
     let registered = polkadot_linter::rules::all_rules(&config)
         .into_iter()
         .map(|rule| rule.id().to_string())
