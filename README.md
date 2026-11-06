@@ -87,6 +87,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `RTC006` | Runtime config | `xcm-fees-burned` | `warning` | The XCM executor `FeeManager` is `()`, which charges delivery and export fees and then burns them instead of routing them (older SDKs waived them). |
 | `RTC007` | Runtime config | `xcm-deny-barrier-not-recursive` | `warning` | `DenyThenTry` uses an instruction-inspecting deny (`DenyReserveTransferToRelayChain`, ...) not wrapped in `DenyRecursively`, so nested `SetAppendix`/`SetErrorHandler`/`ExecuteWithOrigin` programs bypass it. |
 | `RTC008` | Runtime config | `proxy-filter-fails-open` | `warning` | A proxy `filter` deny-list (`!matches!`) misses a value-moving pallet of the runtime, or `is_superset` has `(X, _) => true` while X can add proxies and another proxy type admits calls X does not. |
+| `RTC009` | Runtime config | `known-vulnerable-crate-version` | `error` | `Cargo.lock` pins a Polkadot crate release with a known security bug fixed in a quiet patch release (no RustSec/GHSA entry), e.g. the dotUSD `staging-xcm-executor` 28.0.1. |
 | `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
 | `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. Off by default. |
 | `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |

@@ -1,0 +1,22 @@
+# RTC009: Polkadot crate releases with a security fix that shipped as a quiet
+# patch release (no RustSec/GHSA entry when the row was added, so cargo-audit
+# may not report it).
+# Generic crates belong to cargo-audit/cargo-deny; do not list them here.
+#
+# One row per affected major line: versions `>= first_vulnerable` on the same
+# major are affected, up to (excluding) `first_fixed`; `-` means that line
+# never got a fix. Every boundary was checked against the published crate
+# source (static.crates.io), not only the changelog.
+#
+# crate	first_vulnerable	first_fixed	advisory	url
+staging-xcm-executor	18.0.1	-	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	19.1.0	19.1.4	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	20.0.0	20.0.2	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	21.0.0	-	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	22.0.0	22.0.1	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	23.0.0	23.0.1	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	24.0.0	24.0.1	XCM InitiateTransfer origin leak	https://forum.polkadot.network/t/postmortem-xcm-initiatetransfer-origin-leak/17357
+staging-xcm-executor	25.0.0	25.2.0	XCM WithdrawAsset imbalance escapes rollback (dotUSD)	https://github.com/paritytech/polkadot-sdk/pull/12476
+staging-xcm-executor	26.0.0	-	XCM WithdrawAsset imbalance escapes rollback (dotUSD)	https://github.com/paritytech/polkadot-sdk/pull/11910
+staging-xcm-executor	27.0.0	27.1.0	XCM WithdrawAsset imbalance escapes rollback (dotUSD)	https://github.com/paritytech/polkadot-sdk/pull/13535
+staging-xcm-executor	28.0.0	28.1.0	XCM WithdrawAsset imbalance escapes rollback (dotUSD)	https://github.com/paritytech/polkadot-sdk/pull/13531

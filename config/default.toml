@@ -1,7 +1,7 @@
 # polkadot-linter — Polkadot SDK-specific linter configuration
 
 [general]
-exclude = ["*.lock", ".git/**", "target/**"]
+exclude = [".git/**", "target/**"]
 include = []
 
 [rules]
@@ -147,7 +147,7 @@ verification_patterns = [
 ]
 
 # ---------------------------------------------------------------------------
-# Rule family: Runtime configuration (RTC001-RTC008)
+# Rule family: Runtime configuration (RTC001-RTC009)
 # ---------------------------------------------------------------------------
 # These rules only inspect runtime crates: the Cargo package whose library
 # target (`[lib] path`, default src/lib.rs) or a module reachable from it

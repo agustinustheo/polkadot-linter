@@ -48,6 +48,7 @@ not replace a more accurate source implementation merely for uniformity.
 | `TST001`-`TST006`, `MOK001` | Test assertion style, test design, and mock/setup ratios are source-level conventions. | Test-target compilation plus source-span/effect analysis for a specific rule. |
 | `BEN001`-`BEN003` | Benchmark identity and `verify` blocks must be associated with their authored macro bodies. | Compiler-to-authored FRAME benchmark mapping with macro provenance. |
 | `RTC001`-`RTC008` | Runtime configuration is authored type bindings, `parameter_types!` bodies, and `construct_runtime!`/`define_benchmarks!` macro input; the evidence is the authored binding, and macro expansion erases `define_benchmarks!` membership. Precision is pinned by `scripts/check-source-runtime-corpus.sh` and `benchmarks/labels/RTC.tsv`. | Type resolution of aliased fee managers, waived locations, delivery prices and origins across files (same-file `type` aliases are resolved). |
+| `RTC009` | The evidence is the resolved version in `Cargo.lock`, checked against a table of published releases; no source or compiler analysis is involved. | None. |
 | `TRM001` | The rule intentionally evaluates spelling and terminology in comments, strings, and identifiers. | None; a compiler port would lose the primary evidence. |
 
 ## Scope boundaries

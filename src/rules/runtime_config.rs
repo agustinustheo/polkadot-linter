@@ -1,4 +1,4 @@
-//! Runtime configuration rules (RTC001-RTC008).
+//! Runtime configuration rules (RTC001-RTC009).
 //!
 //! These rules inspect the *runtime* crate rather than individual pallets:
 //! `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` /
@@ -2268,6 +2268,157 @@ impl LintRule for ProxyFilterFailsOpen {
                         "List the subsumed proxy types instead of `_`.",
                     ));
                 }
+            }
+        }
+        non_empty(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC009: known-vulnerable Polkadot crate version in Cargo.lock
+// ---------------------------------------------------------------------------
+
+/// `(crate, first vulnerable, first fixed on that major line, advisory, url)`.
+type VulnerableRelease = (
+    &'static str,
+    Version,
+    Option<Version>,
+    &'static str,
+    &'static str,
+);
+type Version = (u64, u64, u64);
+
+fn parse_version(version: &str) -> Option<Version> {
+    let mut parts = version.split('.').map(|part| part.parse().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+fn vulnerable_releases() -> Vec<VulnerableRelease> {
+    include_str!("vulnerable_crates.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| {
+            let row = line.split('\t').collect::<Vec<_>>();
+            let version = |field: &str| parse_version(field).expect("valid version in TSV");
+            let fixed = (row[2] != "-").then(|| version(row[2]));
+            (row[0], version(row[1]), fixed, row[3], row[4])
+        })
+        .collect()
+}
+
+const CRATES_IO_SOURCES: [&str; 2] = [
+    "registry+https://github.com/rust-lang/crates.io-index",
+    "sparse+https://index.crates.io/",
+];
+
+/// Line of the `name = "<name>"` key of the `[[package]]` block that also has
+/// `version = "<version>"`, in any key order; 1 if not found.
+fn package_line(lock: &str, name: &str, version: &str) -> usize {
+    let (name, version) = (
+        format!("name = \"{name}\""),
+        format!("version = \"{version}\""),
+    );
+    let (mut name_line, mut version_seen) = (None, false);
+    for (index, line) in lock.lines().map(str::trim).enumerate() {
+        if line == "[[package]]" {
+            (name_line, version_seen) = (None, false);
+        }
+        if line == name {
+            name_line = Some(index + 1);
+        }
+        version_seen |= line == version;
+        if let (Some(line), true) = (name_line, version_seen) {
+            return line;
+        }
+    }
+    1
+}
+
+fn version_string((major, minor, patch): Version) -> String {
+    format!("{major}.{minor}.{patch}")
+}
+
+pub struct KnownVulnerableCrateVersion;
+
+impl LintRule for KnownVulnerableCrateVersion {
+    fn id(&self) -> &str {
+        "RTC009"
+    }
+    fn name(&self) -> &str {
+        "known-vulnerable-crate-version"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if ctx.path.file_name()? != "Cargo.lock" {
+            return None;
+        }
+        let lock = ctx.content.parse::<toml::Table>().ok()?;
+        let severity = config.rule_severity(self.id(), Severity::Error);
+        let advisories = vulnerable_releases();
+        let mut diagnostics = Vec::new();
+        for package in lock.get("package")?.as_array()? {
+            let field = |key| package.get(key).and_then(toml::Value::as_str);
+            // Path and git packages are the workspace's own code, not a release.
+            let (Some(name), Some(version), Some(source)) =
+                (field("name"), field("version"), field("source"))
+            else {
+                continue;
+            };
+            let Some(installed) = parse_version(version) else {
+                continue;
+            };
+            // A private registry may serve a patched fork under the same name
+            // and version.
+            if !CRATES_IO_SOURCES.contains(&source) {
+                continue;
+            }
+            for (_, first_vulnerable, fixed, advisory, url) in
+                advisories
+                    .iter()
+                    .filter(|(krate, first_vulnerable, fixed, ..)| {
+                        *krate == name
+                            && installed.0 == first_vulnerable.0
+                            && installed >= *first_vulnerable
+                            && fixed.is_none_or(|fixed| installed < fixed)
+                    })
+            {
+                let line = package_line(ctx.content, name, version);
+                let fix = match fixed {
+                    Some(fixed) => format!("upgrade to {} or later", version_string(*fixed)),
+                    None => {
+                        // The nearest later line that got a fix for the same advisory.
+                        let nearest = advisories
+                            .iter()
+                            .filter(|row| row.0 == name && row.3 == *advisory)
+                            .filter_map(|row| row.2)
+                            .filter(|fixed| fixed.0 > installed.0)
+                            .min()
+                            .map_or(String::new(), |fixed| {
+                                format!("; the nearest fixed release is {}", version_string(fixed))
+                            });
+                        format!(
+                            "the {}.x line has no fixed release{nearest}",
+                            first_vulnerable.0
+                        )
+                    }
+                };
+                diagnostics.push(diagnostic(
+                    self,
+                    ctx,
+                    severity,
+                    line,
+                    format!("{name} {version} is affected by \"{advisory}\" ({url}): {fix}"),
+                    "This Polkadot crate release has a known security bug whose fix shipped as a \
+                     patch release without a RustSec/GHSA advisory, so cargo-audit may not \
+                     report it. A runtime built from this lockfile still contains the bug.",
+                    "Bump the crate to the first fixed release on its line (for example with \
+                     `cargo update -p <crate> --precise <version>` or psvm), rebuild the runtime \
+                     and ship it in a runtime upgrade.",
+                ));
             }
         }
         non_empty(diagnostics)

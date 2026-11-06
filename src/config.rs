@@ -382,7 +382,7 @@ mod tests {
             config.rules.severity.get("TST002"),
             Some(&"error".to_string())
         );
-        assert_eq!(config.general.exclude.first(), Some(&"*.lock".to_string()));
+        assert_eq!(config.general.exclude.first(), Some(&".git/**".to_string()));
         assert!(!config.rule_enabled("SEM002"));
         assert!(!config.rule_enabled("SEM008"));
         assert!(config.rule_enabled("RTC001"));

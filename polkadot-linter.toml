@@ -1,7 +1,7 @@
 # Project-level configuration for polkadot-linter.
 
 [general]
-exclude = ["*.lock", ".git/**", "target/**"]
+exclude = [".git/**", "target/**"]
 include = []
 
 # Parity SDK style conventions, off by default because code outside the SDK
