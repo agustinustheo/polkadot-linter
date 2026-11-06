@@ -75,6 +75,8 @@
   - [RTC004 - Zero Existential or Storage Deposit](rules/RTC004.md)
   - [RTC005 - Insecure Collective-Flip Randomness in the Runtime](rules/RTC005.md)
   - [RTC006 - XCM Fees Burned](rules/RTC006.md)
+  - [RTC007 - XCM Deny Barrier Not Applied to Nested Programs](rules/RTC007.md)
+  - [RTC008 - Proxy Filter Fails Open](rules/RTC008.md)
 
 # Polkadot SDK Best Practices
 

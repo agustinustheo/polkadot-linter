@@ -63,7 +63,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEM008` | Semantic | `sp-std-deprecated` | `advisory` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
 | `SEM009` | Semantic | `redundant-contains-key-before-remove` | `advisory` | A storage map is checked with `contains_key()` immediately before `remove()` or `take()`. |
 | `SEM010` | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
-| `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute uses `Weight::zero()`, making the call effectively free. |
+| `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute is zero (`Weight::zero()`, `0`, `Weight::from_parts(0, 0)`), making the call effectively free. |
 | `SEM012` | Semantic | `allow-dead-code-in-pallet` | `warning` | Production pallet code suppresses dead-code warnings instead of removing unused items. Off by default. |
 | `SEM013` | Semantic | `custom-invalidity-repr-u8` | `warning` | Custom invalidity enums that feed `InvalidTransaction::Custom(u8)` should declare `#[repr(u8)]` so discriminants stay explicit. |
 | `SEM014` | Semantic | `submit-transaction-log-target` | `advisory` | Nearby `log::...!` calls around `SubmitTransaction::<...>::submit_transaction(...)` should include `target: LOG_TARGET` for traceable OCW submission failures. |
@@ -82,9 +82,11 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `RTC001` | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
 | `RTC002` | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
 | `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `WaiveDeliveryFees` or `XcmFeeManagerFromComponents<Everything, _>`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
-| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, ...) is configured as zero. Off by default. |
+| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, session keys, ...) is configured as zero, including `type XDeposit = ();`. Off by default. |
 | `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip` (or its pre-rename `pallet_randomness_collective_flip`). |
 | `RTC006` | Runtime config | `xcm-fees-burned` | `warning` | The XCM executor `FeeManager` is `()`, which charges delivery and export fees and then burns them instead of routing them (older SDKs waived them). |
+| `RTC007` | Runtime config | `xcm-deny-barrier-not-recursive` | `warning` | `DenyThenTry` uses an instruction-inspecting deny (`DenyReserveTransferToRelayChain`, ...) not wrapped in `DenyRecursively`, so nested `SetAppendix`/`SetErrorHandler`/`ExecuteWithOrigin` programs bypass it. |
+| `RTC008` | Runtime config | `proxy-filter-fails-open` | `warning` | A proxy `filter` deny-list (`!matches!`) misses a value-moving pallet of the runtime, or `is_superset` has `(X, _) => true` while X can add proxies and another proxy type admits calls X does not. |
 | `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
 | `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. Off by default. |
 | `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |

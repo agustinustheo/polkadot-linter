@@ -34,3 +34,4 @@ SEM004	substrate/frame/revive/src/lib.rs	68	TP	manual	top-level non-pub `use env
 SEM004	substrate/frame/revive/src/vm/evm/instructions/mod.rs	21	TP	manual	top-level non-pub `use revm::bytecode::opcode::*;`: foreign-module glob in production code
 SEM004	substrate/frame/fast-unstake/src/lib.rs	150	TP	oracle:SEM004-doc-exemption	`use crate::types::*;` is a crate-submodule glob; the doc exempts only `use super::*;`, `use crate::*;` and preludes
 SEM004	substrate/frame/nfts/src/impl_nonfungibles.rs	21	TP	oracle:SEM004-doc-exemption	grouped import with nested `traits::{tokens::nonfungibles_v2::*, Get}`; the doc lists globs nested in grouped imports as detected
+SEM011	substrate/frame/root-testing/src/lib.rs	65	TP	manual	`#[pallet::weight(0)]` on trigger_defensive declares zero weight (ref-time 0, proof 0); low impact: Root-only call in a pallet documented as testing-only (lib.rs:21-22)

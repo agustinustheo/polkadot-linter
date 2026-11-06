@@ -45,3 +45,30 @@ construct_runtime!(
 		Balances: pallet_balances = 10,
 	}
 );
+
+// `()` for a deposit that is not an amount, a governance-only deposit, and a
+// `KeyDeposit` whose `set_keys` call is filtered out (relay chains after AHM).
+impl pallet_revive::Config for Runtime {
+	type Deposit = ();
+}
+
+impl pallet_election_provider_multi_block::signed::Config for Runtime {
+	type InvulnerableDeposit = ();
+}
+
+impl pallet_session::Config for Runtime {
+	type KeyDeposit = ();
+}
+
+pub struct BaseFilter;
+impl Contains<RuntimeCall> for BaseFilter {
+	fn contains(call: &RuntimeCall) -> bool {
+		match call {
+			RuntimeCall::Session(
+				pallet_session::Call::<Runtime>::set_keys { .. } |
+				pallet_session::Call::<Runtime>::purge_keys { .. },
+			) => false,
+			_ => true,
+		}
+	}
+}

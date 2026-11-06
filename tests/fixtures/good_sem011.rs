@@ -10,3 +10,21 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 }
+
+// Non-zero literal and partially-zero weights are not placeholders.
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(1)]
+    #[pallet::weight(10_000)]
+    pub fn a(origin: OriginFor<T>) -> DispatchResult {
+        ensure_signed(origin)?;
+        Ok(())
+    }
+
+    #[pallet::call_index(2)]
+    #[pallet::weight(Weight::from_parts(0, 1024))]
+    pub fn b(origin: OriginFor<T>) -> DispatchResult {
+        ensure_signed(origin)?;
+        Ok(())
+    }
+}

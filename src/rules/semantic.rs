@@ -3988,13 +3988,18 @@ impl LintRule for WeightZeroPlaceholder {
                     else {
                         continue;
                     };
-                    let Expr::Call(expr_call) = expr else {
-                        continue;
-                    };
-                    let Some(path) = expr_call_path(&expr_call) else {
-                        continue;
-                    };
-                    if path_has_segment(path, "Weight") && path_has_exact_ident(path, "zero") {
+                    let is_zero_lit = |expr: &Expr| matches!(expr, Expr::Lit(lit) if matches!(&lit.lit, Lit::Int(int) if !integer_literal_is_nonzero(int)));
+                    // `0` (a `u64` ref-time weight) or `Weight::from_parts(0, 0)`.
+                    let zero = is_zero_lit(&expr)
+                        || matches!(&expr, Expr::Call(expr_call) if expr_call_path(expr_call).is_some_and(|path| {
+                            path_has_segment(path, "Weight")
+                                && (path_has_exact_ident(path, "zero")
+                                    || (["from_parts", "from_all", "from_ref_time"]
+                                        .iter()
+                                        .any(|ctor| path_has_exact_ident(path, ctor))
+                                        && expr_call.args.iter().all(is_zero_lit)))
+                        }));
+                    if zero {
                         self.diagnostics.push(Diagnostic {
 							rule_id: self.rule_id.to_string(),
 							rule_name: self.rule_name.to_string(),
@@ -4004,8 +4009,9 @@ impl LintRule for WeightZeroPlaceholder {
 							line: span_line(attr.span()),
 							column: Some(span_column(attr.span())),
 							end_line: None,
-							message: "`Weight::zero()` placeholder in weight attribute".to_string(),
-							explanation: "`Weight::zero()` means the extrinsic is free, which is \
+							message: format!("zero weight `{}` in weight attribute", compact_tokens(&expr)),
+							explanation: "A zero weight (`Weight::zero()`, `0`, \
+                                `Weight::from_parts(0, 0)`) means the extrinsic is free, which is \
                                 almost certainly wrong. Replace with an actual benchmarked weight function."
 								.to_string(),
 							suggestion: Some(

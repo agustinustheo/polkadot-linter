@@ -11,3 +11,22 @@ impl<T: Config> Pallet<T> {
         Ok(())
     }
 }
+
+// Literal zero weights: a `u64` ref-time `0` (BEEFY bridge `submit_commitment`
+// on polkadot-sdk master) and an all-zero `Weight::from_parts`.
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(1)]
+    #[pallet::weight(0)]
+    pub fn submit_commitment(origin: OriginFor<T>) -> DispatchResult {
+        ensure_signed(origin)?;
+        Ok(())
+    }
+
+    #[pallet::call_index(2)]
+    #[pallet::weight(Weight::from_parts(0, 0))]
+    pub fn submit_more(origin: OriginFor<T>) -> DispatchResult {
+        ensure_signed(origin)?;
+        Ok(())
+    }
+}
