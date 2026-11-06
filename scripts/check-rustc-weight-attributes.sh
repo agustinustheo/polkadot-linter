@@ -12,7 +12,7 @@ cargo +nightly-2025-09-01 build --manifest-path "$ROOT_DIR/Cargo.toml" --feature
 
 run_linter() {
   cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-    --config "$ROOT_DIR/config/default.toml" --format json --rules SEC004,SEC005 \
+    --config "$ROOT_DIR/config/all-rules.toml" --format json --rules SEC004,SEC005 \
     --manifest-path "$FIXTURE_DIR/Cargo.toml" \
     --package rustc-weight-attribute-fixture --lib \
     --driver-path "$DRIVER" --toolchain nightly-2025-09-01 \

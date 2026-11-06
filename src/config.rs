@@ -384,8 +384,10 @@ mod tests {
         );
         assert_eq!(config.general.exclude.first(), Some(&"*.lock".to_string()));
         assert!(!config.rule_enabled("SEM002"));
+        assert!(!config.rule_enabled("SEM008"));
+        assert!(config.rule_enabled("RTC001"));
         assert_eq!(
-            config.rule_severity("SEM008", Severity::Warning),
+            config.rule_severity("VAL002", Severity::Warning),
             Severity::Advisory
         );
     }

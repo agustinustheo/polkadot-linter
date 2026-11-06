@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Enforced (subset).** [SEM012](../../rules/SEM012.md) flags production `#[allow(dead_code)]` suppressions in pallet code, catching a common way unused items are hidden from the compiler. Actually locating and removing dead functions, variables, and commented-out code remains manual.
+> **Linter coverage — Partial (opt-in).** [SEM012](../../rules/SEM012.md) (off by default) flags production `#[allow(dead_code)]` suppressions in pallet code, catching a common way unused items are hidden from the compiler. Actually locating and removing dead functions, variables, and commented-out code remains manual.
 
 ## Description
 

@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:red;">Critical</span>
 
-> **Linter coverage — Enforced.** The linter reports panic-inducing paths in production code — `unwrap`, `expect`, `panic!`, and `todo!` — as well as reachable `debug_assert!` calls that panic when compiled with debug assertions. See [SEC008](../../rules/SEC008.md) and [SEC002](../../rules/SEC002.md).
+> **Linter coverage — Partial (opt-in).** Both rules are off by default: on real parachain code most findings were genesis/preset code, documented infallible `expect`s, or debug-only assertions. With `config/all-rules.toml` the linter reports panic-inducing paths in production code — `unwrap`, `expect`, `panic!`, and `todo!` — as well as reachable `debug_assert!` calls that panic when compiled with debug assertions. See [SEC008](../../rules/SEC008.md) and [SEC002](../../rules/SEC002.md).
 
 ## Description
 

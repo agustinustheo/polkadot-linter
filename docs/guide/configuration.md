@@ -19,11 +19,17 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 "optimisation" = "optimization"
 ```
 
-- `[rules.enabled]` is optional and overrides the bundled entries. Every rule is
-  enabled except `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` (Parity SDK
-  style conventions) and `SEM007`, `TST005` and `MOK001` (mostly false positives
-  outside the SDK); set them to `true` to enable them.
+- `[rules.enabled]` is optional and overrides the bundled entries. Rules whose
+  sampled findings on third-party parachain repositories were under 30%
+  actionable or at least 30% false positives are off by default, as are the
+  Parity SDK style conventions `SEM002`, `SEM003`, `SEM004`, `SEM012` and
+  `TST003`; each rule page and family table says "off by default". Set a rule
+  to `true` to enable it, or use the repository's `config/all-rules.toml` to
+  run every rule.
 - `[rules.severity]` promotes or demotes individual rules without code changes.
+  It does not enable a rule: a severity set for a default-off rule (for example
+  `SEC008 = "error"` from an older config) has no effect until the rule is also
+  set to `true` under `[rules.enabled]`.
 - `[validation_order]`, `[test_smells]`, `[mock_usage]`, and `[benchmarking]`
   tune the heuristics behind those families.
 - `[runtime_config]` sets which runtimes the `RTC` rules inspect

@@ -176,7 +176,8 @@ fn has_rule(diags: &[polkadot_linter::diagnostics::Diagnostic], rule_id: &str) -
 
 #[test]
 fn syntax_engine_does_not_register_compiler_backed_rules() {
-    let config = polkadot_linter::config::Config::default();
+    // Every rule enabled, so a default-off rule registered by mistake is still caught.
+    let config = all_rules_config();
     let registered = polkadot_linter::rules::all_rules(&config)
         .into_iter()
         .map(|rule| rule.id().to_string())
@@ -8414,7 +8415,7 @@ fn ben003_resolves_dispatched_call_bindings_without_counting_setup_calls() {
 // Round 2: exercise actual Cargo module trees and scan lifetimes.
 #[test]
 fn ben_scan_under_tests_directory_and_example_library_crates() {
-    use polkadot_linter::{config::Config, engine::LintEngine};
+    use polkadot_linter::engine::LintEngine;
     let dir = tempfile::tempdir().unwrap();
     for folder in ["tests/ws", "substrate/frame/examples/demo"] {
         let root = dir.path().join(folder);
@@ -8430,7 +8431,7 @@ fn ben_scan_under_tests_directory_and_example_library_crates() {
             "trait WeightInfo { fn missing(); }",
         )
         .unwrap();
-        let mut engine = LintEngine::new(Config::default());
+        let mut engine = LintEngine::new(all_rules_config());
         engine.filter_rules(&["BEN".into()]);
         let findings = engine.scan(&root);
         for rule in ["BEN001", "BEN002", "BEN003"] {
@@ -8457,7 +8458,7 @@ fn ben_scan_under_tests_directory_and_example_library_crates() {
 
 #[test]
 fn ben_module_ancestry_and_cache_refresh() {
-    use polkadot_linter::{config::Config, engine::LintEngine};
+    use polkadot_linter::engine::LintEngine;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     std::fs::create_dir(root.join("src")).unwrap();
@@ -8493,7 +8494,7 @@ fn ben_module_ancestry_and_cache_refresh() {
         )
         .unwrap();
     }
-    let mut engine = LintEngine::new(Config::default());
+    let mut engine = LintEngine::new(all_rules_config());
     engine.filter_rules(&["BEN".into()]);
     let findings = engine.scan(root);
     for rule in ["BEN001", "BEN003"] {
@@ -8663,7 +8664,7 @@ fn ben003_construct_and_dispatch_inside_measured_block() {
 
 #[test]
 fn ben001_follows_custom_lib_root_sibling_modules() {
-    use polkadot_linter::{config::Config, engine::LintEngine};
+    use polkadot_linter::engine::LintEngine;
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
     std::fs::create_dir(&src).unwrap();
@@ -8679,7 +8680,7 @@ fn ben001_follows_custom_lib_root_sibling_modules() {
     )
     .unwrap();
     std::fs::write(src.join("benchmarking.rs"), "").unwrap();
-    let mut engine = LintEngine::new(Config::default());
+    let mut engine = LintEngine::new(all_rules_config());
     engine.filter_rules(&["BEN001".into()]);
     let findings = engine.scan(dir.path());
     assert_eq!(findings.len(), 1, "{findings:?}");

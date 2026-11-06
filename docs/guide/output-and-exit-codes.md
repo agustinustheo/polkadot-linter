@@ -44,7 +44,7 @@ Rules are grouped into families by prefix. Pass whole families or specific IDs t
 cargo run -- ../pallets --rules SEC
 
 # Run two specific rules
-cargo run -- ../pallets --rules VAL001,SEC008
+cargo run -- ../pallets --rules SEC007,SEC011
 ```
 
 Each rule has a dedicated page in the **Polkadot Linter Rules Reference**
