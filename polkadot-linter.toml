@@ -89,6 +89,7 @@ dev_runtime_packages = [
 	"rococo-parachain-runtime",
 	"yet-another-parachain-runtime",
 ]
+dev_runtime_tokens = ["dev", "development"]
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]
 unit_weight_info_allowlist = [
 	"pallet_babe",

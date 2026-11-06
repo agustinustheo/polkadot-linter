@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use regex::Regex;
 use syn::{
     punctuated::Punctuated,
@@ -12,8 +14,8 @@ use crate::{
     engine::FileContext,
     rules::LintRule,
     syn_util::{
-        ast_file, compact_tokens, expr_call_name, has_exact_attr, macro_name, path_last_ident,
-        span_column, span_line,
+        ast_file, compact_tokens, expr_call_name, expr_call_path, has_exact_attr, macro_name,
+        path_last_ident, span_column, span_line, strip_expr_wrappers, test_only,
     },
 };
 
@@ -635,12 +637,27 @@ impl LintRule for ExtrinsicWithoutEvent {
 
         let ast = ast_file(ctx)?;
 
+        #[derive(Default)]
         struct BodyVisitor {
             has_event: bool,
             has_mutation: bool,
+            /// Skip closures and nested items (a helper must emit directly).
+            direct_only: bool,
         }
 
         impl<'ast> Visit<'ast> for BodyVisitor {
+            fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+                if !self.direct_only {
+                    visit::visit_expr_closure(self, node);
+                }
+            }
+
+            fn visit_item(&mut self, node: &'ast syn::Item) {
+                if !self.direct_only {
+                    visit::visit_item(self, node);
+                }
+            }
+
             fn visit_expr_call(&mut self, node: &'ast ExprCall) {
                 if let Expr::Path(expr_path) = &*node.func {
                     if path_last_ident(&expr_path.path).as_deref() == Some("deposit_event") {
@@ -689,7 +706,68 @@ impl LintRule for ExtrinsicWithoutEvent {
             }
         }
 
+        // Non-test functions of this file's inherent `impl Pallet<T>` blocks
+        // that emit an event directly. An extrinsic that always calls one (a
+        // top-level statement or tail, one level deep) emits it.
+        fn emitting_fns(items: &[syn::Item], emitting: &mut HashSet<String>) {
+            for item in items {
+                match item {
+                    syn::Item::Mod(module) if !test_only(&module.attrs) => {
+                        if let Some((_, items)) = &module.content {
+                            emitting_fns(items, emitting);
+                        }
+                    }
+                    syn::Item::Impl(block)
+                        if block.trait_.is_none()
+                            && !test_only(&block.attrs)
+                            && matches!(&*block.self_ty, syn::Type::Path(ty)
+                                if ty.qself.is_none()
+                                    && path_last_ident(&ty.path).as_deref() == Some("Pallet")) =>
+                    {
+                        for item in &block.items {
+                            let ImplItem::Fn(function) = item else {
+                                continue;
+                            };
+                            let mut body = BodyVisitor {
+                                direct_only: true,
+                                ..BodyVisitor::default()
+                            };
+                            body.visit_block(&function.block);
+                            if body.has_event && !test_only(&function.attrs) {
+                                emitting.insert(function.sig.ident.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // `Self::f(..)` / `Pallet::<T>::f(..)`, possibly behind `?` or a
+        // method chain, as a whole statement or `let` initializer.
+        fn top_level_helper(stmt: &syn::Stmt) -> Option<String> {
+            let mut expr = match stmt {
+                syn::Stmt::Expr(expr, _) => expr,
+                syn::Stmt::Local(local) => &local.init.as_ref()?.expr,
+                _ => return None,
+            };
+            while let Expr::MethodCall(call) = strip_expr_wrappers(expr) {
+                expr = &call.receiver;
+            }
+            let Expr::Call(call) = strip_expr_wrappers(expr) else {
+                return None;
+            };
+            match &expr_call_path(call)?.segments.iter().collect::<Vec<_>>()[..] {
+                [owner, name] if owner.ident == "Self" || owner.ident == "Pallet" => {
+                    Some(name.ident.to_string())
+                }
+                _ => None,
+            }
+        }
+        let mut emitting = HashSet::new();
+        emitting_fns(&ast.items, &mut emitting);
+
         struct ExtrinsicEventVisitor<'a> {
+            emitting: &'a HashSet<String>,
             diagnostics: Vec<Diagnostic>,
             file: &'a std::path::Path,
             severity: Severity,
@@ -710,12 +788,15 @@ impl LintRule for ExtrinsicWithoutEvent {
                     if !has_exact_attr(&method.attrs, &["pallet", "call_index"]) {
                         continue;
                     }
-                    let mut body_visitor = BodyVisitor {
-                        has_event: false,
-                        has_mutation: false,
-                    };
+                    let mut body_visitor = BodyVisitor::default();
                     body_visitor.visit_block(&method.block);
-                    if body_visitor.has_mutation && !body_visitor.has_event {
+                    let helper_event = method
+                        .block
+                        .stmts
+                        .iter()
+                        .filter_map(top_level_helper)
+                        .any(|helper| self.emitting.contains(&helper));
+                    if body_visitor.has_mutation && !body_visitor.has_event && !helper_event {
                         self.diagnostics.push(Diagnostic {
 							rule_id: self.rule_id.to_string(),
 							rule_name: self.rule_name.to_string(),
@@ -745,6 +826,7 @@ impl LintRule for ExtrinsicWithoutEvent {
         }
 
         let mut visitor = ExtrinsicEventVisitor {
+            emitting: &emitting,
             diagnostics: Vec::new(),
             file: &ctx.path,
             severity: config.rule_severity(self.id(), Severity::Advisory),

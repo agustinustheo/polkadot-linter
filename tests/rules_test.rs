@@ -1331,7 +1331,8 @@ fn rename_sub() -> Result<(), BenchmarkError> {
 }
 
 #[test]
-fn ben002_does_not_treat_assertions_inside_block_as_verification() {
+fn ben002_counts_assertions_inside_measured_block_as_verification() {
+    // pov-style benchmarks assert inside the measured block.
     let code = r#"
 #[benchmark]
 fn authorize_only() -> Result<(), BenchmarkError> {
@@ -1342,12 +1343,119 @@ fn authorize_only() -> Result<(), BenchmarkError> {
 
     Ok(())
 }
+#[benchmark]
+fn unchecked() -> Result<(), BenchmarkError> {
+    #[block]
+    {
+        Pallet::<T>::authorize_call()?;
+    }
+    Ok(())
+}
+#[benchmark]
+fn checked_after() -> Result<(), BenchmarkError> {
+    #[block]
+    {
+        let _ = Pallet::<T>::authorize_call();
+        assert_eq!(Value::<T>::get(), 1);
+    }
+    Ok(())
+}
+#[benchmark]
+fn looped(i: Linear<0, 10>) {
+    #[block]
+    {
+        for _ in 0..i {
+            assert!(super::Pallet::<T>::recover(i).is_some());
+        }
+    }
+}
+// pov reads: every statement asserts what it measures.
+#[benchmark]
+fn read_only(n: Linear<0, 100>) {
+    #[block]
+    {
+        (0..n).for_each(|_| assert_eq!(Map::<T>::get(0), Some(0)));
+    }
+}
+#[benchmark]
+fn read_then_other() {
+    #[block]
+    {
+        assert!(Value::<T>::get().is_none());
+        T::Currency::burn(1);
+    }
+}
+// A loop counts as assertion-only only if its own body is.
+#[benchmark]
+fn loop_hides_other(n: Linear<0, 100>) {
+    #[block]
+    {
+        for _ in 0..n {
+            assert!(Value::<T>::get().is_none());
+            T::Currency::burn(1);
+        }
+    }
+}
+// An assertion before the measured call is a precondition.
+#[benchmark]
+fn precondition_only() -> Result<(), BenchmarkError> {
+    #[block]
+    {
+        assert_eq!(Value::<T>::get(), 0);
+        let _ = Pallet::<T>::missing();
+    }
+    Ok(())
+}
 "#;
     let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
-    assert!(
-        has_rule(&diags, "BEN002"),
-        "BEN002 should still require a postcondition outside #[block]"
+    let mut names = diags
+        .iter()
+        .filter(|d| d.rule_id == "BEN002")
+        .map(|d| d.message.split('`').nth(1).unwrap().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "loop_hides_other",
+            "precondition_only",
+            "read_then_other",
+            "unchecked"
+        ],
+        "{diags:?}"
     );
+}
+
+#[test]
+fn ben002_skips_empty_block_override_stubs() {
+    let code = r#"
+#[benchmark]
+fn receive_teleported_asset() -> Result<(), BenchmarkError> {
+    #[block]
+    {}
+    Err(BenchmarkError::Override(BenchmarkResult::from_weight(Weight::MAX)))
+}
+#[benchmark]
+fn empty_ok() -> Result<(), BenchmarkError> {
+    #[block]
+    {}
+    Ok(())
+}
+#[benchmark]
+fn measured_then_override() -> Result<(), BenchmarkError> {
+    #[block]
+    { Pallet::<T>::work(); }
+    Err(BenchmarkError::Override(BenchmarkResult::from_weight(Weight::MAX)))
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    let mut names = diags
+        .iter()
+        .filter(|d| d.rule_id == "BEN002")
+        .map(|d| d.message.split('`').nth(1).unwrap().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(names, vec!["empty_ok", "measured_then_override"]);
 }
 
 #[test]
@@ -2028,6 +2136,136 @@ fn tst006_detects_extrinsic_without_event() {
     assert!(
         has_rule(&diags, "TST006"),
         "TST006 should fire on extrinsic that mutates storage without emitting event"
+    );
+}
+
+#[test]
+fn tst006_follows_always_called_pallet_helpers_one_level() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn via_self(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(1);
+        Self::transition(1)
+    }
+    #[pallet::call_index(1)]
+    pub fn via_pallet(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(2);
+        Pallet::<T>::transition(2)
+    }
+    #[pallet::call_index(2)]
+    pub fn via_path(origin: OriginFor<T>, xs: Vec<u32>) -> DispatchResult {
+        Value::<T>::put(3);
+        xs.into_iter().try_for_each(Self::transition)
+    }
+    #[pallet::call_index(3)]
+    pub fn silent_helper(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(4);
+        Self::store(4)
+    }
+    #[pallet::call_index(4)]
+    pub fn two_levels(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(5);
+        Self::indirect(5)
+    }
+    #[pallet::call_index(5)]
+    pub fn via_let(origin: OriginFor<T>) -> DispatchResultWithPostInfo {
+        Value::<T>::put(6);
+        let _ = Self::transition(6)?;
+        Ok(Self::transition(6)?.into())
+    }
+    // `add_trusted_validation_code`: only one branch emits.
+    #[pallet::call_index(6)]
+    pub fn one_branch(origin: OriginFor<T>, fresh: bool) -> DispatchResult {
+        Value::<T>::put(7);
+        if !fresh {
+            Self::transition(7)?;
+        }
+        Ok(())
+    }
+    #[pallet::call_index(7)]
+    pub fn function_value(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(8);
+        let _f = Self::transition;
+        Ok(())
+    }
+    #[pallet::call_index(8)]
+    pub fn trait_helper(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(9);
+        Self::notify(9)
+    }
+    #[pallet::call_index(9)]
+    pub fn test_helper(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(10);
+        Self::test_only(10)
+    }
+    // The helper only builds a closure that emits.
+    #[pallet::call_index(10)]
+    pub fn closure_helper(origin: OriginFor<T>) -> DispatchResult {
+        Value::<T>::put(11);
+        Self::deferred(11)
+    }
+}
+impl<T: Config> Hooks<T> for Pallet<T> {
+    fn notify(x: u32) -> DispatchResult {
+        Self::deposit_event(Event::Changed { x });
+        Ok(())
+    }
+}
+#[cfg(test)]
+impl<T: Config> Pallet<T> {
+    fn test_only(x: u32) -> DispatchResult {
+        Self::deposit_event(Event::Changed { x });
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    impl<T: Config> Pallet<T> {
+        fn store(x: u32) -> DispatchResult {
+            Self::deposit_event(Event::Changed { x });
+            Ok(())
+        }
+    }
+}
+impl<T: Config> Pallet<T> {
+    fn transition(x: u32) -> DispatchResult {
+        Self::deposit_event(Event::Changed { x });
+        Ok(())
+    }
+    fn store(x: u32) -> DispatchResult {
+        Value::<T>::put(x);
+        Ok(())
+    }
+    fn indirect(x: u32) -> DispatchResult {
+        Self::transition(x)
+    }
+    fn deferred(x: u32) -> impl Fn() {
+        move || Self::deposit_event(Event::Changed { x })
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let mut names = diags
+        .iter()
+        .filter(|d| d.rule_id == "TST006")
+        .map(|d| d.message.split('`').nth(1).unwrap().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "closure_helper",
+            "function_value",
+            "one_branch",
+            "silent_helper",
+            "test_helper",
+            "trait_helper",
+            "two_levels",
+            "via_path"
+        ],
+        "{diags:?}"
     );
 }
 
@@ -8232,7 +8470,7 @@ fn ben_discovery_v1_v2_calls_and_missing_benchmarks() {
             fn unverified() {
                 assert!(setup());
                 #[block]
-                { assert_ok!(Pallet::<T>::unverified(RawOrigin::Root)); }
+                { let _ = Pallet::<T>::unverified(RawOrigin::Root); }
             }
         }"#,
         ),
@@ -8382,6 +8620,138 @@ mod benchmarks { #[benchmark] fn real_bench() {} }
         "BEN001"
     ));
 }
+
+#[test]
+fn ben003_recognizes_qualified_self_pallet_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("benchmarking.rs"),
+        r#"use crate::Pallet as CollatorSelection;
+        benchmarks! {
+            set_desired_candidates { }: {
+                <CollatorSelection<T>>::set_desired_candidates(RawOrigin::Root.into(), 1)?;
+                <T as Config>::set_invulnerables(RawOrigin::Root.into())?;
+            } verify { assert!(true); }
+        }"#,
+    )
+    .unwrap();
+    let code = "#[pallet::call] impl Pallet { pub fn set_desired_candidates() {} pub fn set_invulnerables() {} }";
+    let path = dir.path().join("lib.rs");
+    std::fs::write(&path, code).unwrap();
+    let ben003 = check_fixture(path.to_str().unwrap(), code)
+        .into_iter()
+        .filter(|d| d.rule_id == "BEN003")
+        .collect::<Vec<_>>();
+    assert_eq!(ben003.len(), 1, "{ben003:?}");
+    assert!(ben003[0].message.contains("set_invulnerables"));
+}
+
+/// A workspace with `pallet-demo` at `pallet_dir` and a runtime crate that
+/// depends on it and hosts orml `runtime_benchmarks!` blocks.
+fn ben_workspace(pallet_dir: &str, runtime_benchmarks: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        format!("[workspace]\nmembers = [\"{pallet_dir}\", \"runtime/*\"]\n[workspace.dependencies]\npallet-demo = {{ path = \"{pallet_dir}\" }}\n"),
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join(pallet_dir).join("src")).unwrap();
+    std::fs::write(
+        root.join(pallet_dir).join("Cargo.toml"),
+        "[package]\nname = \"pallet-demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+    let runtime = root.join("runtime/demo");
+    std::fs::create_dir_all(runtime.join("src/benchmarking")).unwrap();
+    std::fs::write(
+        runtime.join("Cargo.toml"),
+        "[package]\nname = \"demo-runtime\"\nversion = \"0.1.0\"\n[dependencies]\npallet-demo = { workspace = true }\n",
+    )
+    .unwrap();
+    std::fs::write(runtime.join("src/lib.rs"), "mod benchmarking;").unwrap();
+    std::fs::write(runtime.join("src/benchmarking/mod.rs"), "mod demo;").unwrap();
+    std::fs::write(runtime.join("src/benchmarking/demo.rs"), runtime_benchmarks).unwrap();
+    dir
+}
+
+#[test]
+fn ben_discovers_benchmarks_hosted_in_a_dependent_runtime() {
+    let dir = ben_workspace(
+        "pallets/demo",
+        r#"use orml_benchmarking::runtime_benchmarks;
+        runtime_benchmarks! {
+            { Runtime, pallet_demo }
+            hosted { let x = 1; }: _(RawOrigin::Root, x)
+            verify { assert_eq!(x, 1); }
+        }
+        runtime_benchmarks! {
+            { Runtime, pallet_other }
+            missing { }: _(RawOrigin::Root)
+        }
+        runtime_benchmarks! {
+            { Runtime, pallet_demo }
+            renamed { }: hosted(RawOrigin::Root)
+            by_name { }: { Demo::named(RawOrigin::Root.into())? }
+            by_alias { }: { DemoPallet::<Runtime>::aliased(RawOrigin::Root.into())? }
+            by_other { }: { Other::unmeasured(RawOrigin::Root.into())? }
+        }
+        type DemoPallet<T> = pallet_demo::Pallet<T>;
+        use crate::{Demo, Other};"#,
+    );
+    // Orphan files and test-only modules host nothing.
+    let runtime = dir.path().join("runtime/demo/src");
+    let unmeasured = |name: &str| {
+        format!(
+            "runtime_benchmarks! {{ {{ Runtime, pallet_demo }} {name} {{ }}: _(RawOrigin::Root) }}"
+        )
+    };
+    std::fs::write(
+        runtime.join("benchmarking/orphan.rs"),
+        unmeasured("orphaned"),
+    )
+    .unwrap();
+    std::fs::write(runtime.join("benchmarking/gated.rs"), unmeasured("gated")).unwrap();
+    std::fs::write(
+        runtime.join("benchmarking/mod.rs"),
+        "mod demo; #[cfg(test)] mod gated;",
+    )
+    .unwrap();
+    std::fs::write(
+        runtime.join("lib.rs"),
+        "mod benchmarking; construct_runtime!(pub enum Runtime { Demo: pallet_demo = 1, Other: pallet_other = 2 });",
+    )
+    .unwrap();
+    let src = dir.path().join("pallets/demo/src");
+    let calls = "#[pallet::call] impl<T: Config> Pallet<T> { pub fn hosted() {} pub fn missing() {} pub fn renamed() {} pub fn orphaned() {} pub fn gated() {} pub fn named() {} pub fn aliased() {} pub fn unmeasured() {} }";
+    std::fs::write(src.join("lib.rs"), calls).unwrap();
+    let ben003 = check_fixture(src.join("lib.rs").to_str().unwrap(), calls)
+        .into_iter()
+        .filter(|d| d.rule_id == "BEN003")
+        .collect::<Vec<_>>();
+    // `renamed` measures `hosted`, so it does not cover `renamed`.
+    let mut names = ben003
+        .iter()
+        .map(|d| d.message.split('`').nth(1).unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        ["gated", "missing", "orphaned", "renamed", "unmeasured"],
+        "{ben003:?}"
+    );
+
+    let weights = "pub trait WeightInfo { fn hosted() -> Weight; fn missing() -> Weight; fn renamed() -> Weight; }";
+    std::fs::write(src.join("lib.rs"), "pub mod weights;").unwrap();
+    std::fs::write(src.join("weights.rs"), weights).unwrap();
+    let ben001 = check_fixture(src.join("weights.rs").to_str().unwrap(), weights)
+        .into_iter()
+        .filter(|d| d.rule_id == "BEN001")
+        .collect::<Vec<_>>();
+    assert_eq!(ben001.len(), 1, "{ben001:?}");
+    assert!(ben001[0].message.contains("`missing`"));
+}
+
 // === End BEN discovery and recall guard ===
 
 // === BEN measured-call binding regression ===
@@ -8975,6 +9345,32 @@ fn rtc_rules_skip_dev_runtimes_unless_opted_in() {
         vec!["RTC001:3".to_string()],
         "{diags:?}"
     );
+}
+
+#[test]
+fn rtc_rules_skip_dev_runtimes_by_whole_name_token() {
+    for package in ["peaq-dev", "development-runtime"] {
+        let krate = rtc_runtime_crate(package, &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+        let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+        assert!(rtc_findings(&diags).is_empty(), "{package}: {diags:?}");
+        let mut config = polkadot_linter::config::Config::default();
+        config.runtime_config.include_dev_runtimes = true;
+        let diags = rtc_scan(krate.path(), config);
+        assert_eq!(
+            rtc_findings(&diags),
+            vec!["RTC001:3".to_string()],
+            "{package}"
+        );
+    }
+    for package in ["devops-x-runtime", "devnet-runtime"] {
+        let krate = rtc_runtime_crate(package, &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+        let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+        assert_eq!(
+            rtc_findings(&diags),
+            vec!["RTC001:3".to_string()],
+            "{package}"
+        );
+    }
 }
 
 #[test]

@@ -172,6 +172,11 @@ dev_runtime_packages = [
 	"rococo-parachain-runtime",
 	"yet-another-parachain-runtime",
 ]
+# A runtime whose package or crate-directory name has one of these whole name
+# tokens is also a dev runtime: `peaq-dev`, `development-runtime`, but not
+# `devops-runtime`. Add project-specific dev or testnet runtimes (e.g.
+# `mandala-runtime`, `moonbase-runtime`) to dev_runtime_packages.
+dev_runtime_tokens = ["dev", "development"]
 
 # Test runtimes are always skipped. A package or crate directory is a test
 # runtime when one of its name tokens (split on `-` and `_`) is listed here,
