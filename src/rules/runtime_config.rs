@@ -1,4 +1,4 @@
-//! Runtime configuration rules (RTC001-RTC008).
+//! Runtime configuration rules (RTC001-RTC010).
 //!
 //! These rules inspect the *runtime* crate rather than individual pallets:
 //! `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` /
@@ -1078,28 +1078,21 @@ fn is_xcm_executor_impl(item_impl: &ItemImpl) -> bool {
             .is_some_and(|ident| ident == "XcmConfig")
 }
 
-/// Same-file `type Name = ...;` aliases, used to resolve generic arguments
-/// such as `XcmFeeManagerFromComponents<WaivedLocations, ..>`. A name defined
-/// more than once with different right-hand sides (in different modules) is
-/// ambiguous: `None`.
-type Aliases = HashMap<String, Option<Type>>;
+/// Same-file `type Name = ...;` aliases: every distinct right-hand side of a
+/// name. More than one (in different modules or under different cfgs) is
+/// ambiguous.
+type Aliases = HashMap<String, Vec<Type>>;
 
 fn type_aliases(file: &SynFile) -> Aliases {
     struct Collector(Aliases);
     impl<'ast> Visit<'ast> for Collector {
         fn visit_item_type(&mut self, item: &'ast ItemType) {
             if item.generics.params.is_empty() {
-                let ty = (*item.ty).clone();
-                self.0
-                    .entry(item.ident.to_string())
-                    .and_modify(|known| {
-                        if known.as_ref().is_some_and(|known| {
-                            known.to_token_stream().to_string() != ty.to_token_stream().to_string()
-                        }) {
-                            *known = None;
-                        }
-                    })
-                    .or_insert(Some(ty));
+                let text = |ty: &Type| ty.to_token_stream().to_string();
+                let known = self.0.entry(item.ident.to_string()).or_default();
+                if known.iter().all(|ty| text(ty) != text(&item.ty)) {
+                    known.push((*item.ty).clone());
+                }
             }
         }
     }
@@ -1108,29 +1101,45 @@ fn type_aliases(file: &SynFile) -> Aliases {
     aliases.0
 }
 
-/// The type (after resolving same-file aliases) admits every location:
-/// `Everything`, or a tuple containing it (tuples of `Contains` are a union).
-/// An ambiguous alias may be `Everything`.
-fn contains_everything(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
+/// The single same-file definition of alias `ident`; `None` if it is unknown
+/// or ambiguous.
+fn unique_alias<'a>(aliases: &'a Aliases, ident: &str) -> Option<&'a Type> {
+    match aliases.get(ident)?.as_slice() {
+        [ty] => Some(ty),
+        _ => None,
+    }
+}
+
+/// The type (after resolving same-file aliases) is a filter named `name`, or a
+/// tuple containing one (tuples of `Contains` are a union). An ambiguous alias
+/// may be the filter, unless `every_definition` asks that each of its
+/// definitions contains it.
+fn contains_filter(
+    ty: &Type,
+    name: &str,
+    aliases: &Aliases,
+    every_definition: bool,
+    depth: usize,
+) -> bool {
     if depth > 8 {
         return false;
     }
+    let recurse = |ty: &Type| contains_filter(ty, name, aliases, every_definition, depth + 1);
     match ty {
-        Type::Paren(inner) => contains_everything(&inner.elem, aliases, depth + 1),
-        Type::Tuple(tuple) => tuple
-            .elems
-            .iter()
-            .any(|elem| contains_everything(elem, aliases, depth + 1)),
+        Type::Paren(inner) => recurse(&inner.elem),
+        Type::Tuple(tuple) => tuple.elems.iter().any(recurse),
         _ => {
             let Some(ident) = type_path(ty).and_then(path_last_ident) else {
                 return false;
             };
-            ident == "Everything"
+            ident == name
                 || (type_path(ty).is_some_and(|path| path.segments.len() == 1)
-                    && aliases.get(&ident).is_some_and(|alias| {
-                        alias
-                            .as_ref()
-                            .is_none_or(|alias| contains_everything(alias, aliases, depth + 1))
+                    && aliases.get(&ident).is_some_and(|definitions| {
+                        if every_definition {
+                            definitions.iter().all(recurse)
+                        } else {
+                            definitions.len() > 1 || definitions.iter().any(recurse)
+                        }
                     }))
         }
     }
@@ -1188,7 +1197,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                 || type_path(ty)
                     .filter(|path| path.segments.len() == 1)
                     .and_then(path_last_ident)
-                    .and_then(|ident| self.aliases.get(&ident)?.as_ref())
+                    .and_then(|ident| unique_alias(self.aliases, &ident))
                     .is_some_and(is_free_delivery_price);
             if free {
                 self.prices.0 = true;
@@ -1228,9 +1237,9 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
             };
             let ident = segment.ident.to_string();
             let waived_everywhere = ident == "XcmFeeManagerFromComponents"
-                && generic_type_args(segment)
-                    .first()
-                    .is_some_and(|waived| contains_everything(waived, self.aliases, 0));
+                && generic_type_args(segment).first().is_some_and(|waived| {
+                    contains_filter(waived, "Everything", self.aliases, false, 0)
+                });
             if ident == "WaiveDeliveryFees" || waived_everywhere {
                 self.push(
                     XcmFeeFinding::Waived,
@@ -1517,9 +1526,7 @@ fn origin_is_privileged(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
         args.get(*index)
             .is_some_and(|arg| origin_is_privileged(arg, aliases, depth + 1))
     } else if path.segments.len() == 1 && segment.arguments.is_empty() {
-        aliases
-            .get(&ident)
-            .and_then(Option::as_ref)
+        unique_alias(aliases, &ident)
             .is_some_and(|alias| origin_is_privileged(alias, aliases, depth + 1))
     } else {
         false
@@ -1937,9 +1944,8 @@ impl LintRule for XcmDenyBarrierNotRecursive {
                 if INSTRUCTION_DENIES.contains(&ident.as_str()) {
                     self.hits.push((line_of(ty), type_text(ty)));
                 } else if path.segments.len() == 1 {
-                    if let Some(Some(alias)) = self.aliases.get(&ident) {
-                        let alias = alias.clone();
-                        self.check_deny(&alias, depth + 1);
+                    if let Some(alias) = unique_alias(self.aliases, &ident) {
+                        self.check_deny(alias, depth + 1);
                     }
                 }
             }
@@ -2271,5 +2277,230 @@ impl LintRule for ProxyFilterFailsOpen {
             }
         }
         non_empty(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC009: known-vulnerable Polkadot crate version in Cargo.lock
+// ---------------------------------------------------------------------------
+
+/// `(crate, first vulnerable, first fixed on that major line, advisory, url)`.
+type VulnerableRelease = (
+    &'static str,
+    Version,
+    Option<Version>,
+    &'static str,
+    &'static str,
+);
+type Version = (u64, u64, u64);
+
+fn parse_version(version: &str) -> Option<Version> {
+    let mut parts = version.split('.').map(|part| part.parse().ok());
+    let version = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(version)
+}
+
+fn vulnerable_releases() -> Vec<VulnerableRelease> {
+    include_str!("vulnerable_crates.tsv")
+        .lines()
+        .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
+        .map(|line| {
+            let row = line.split('\t').collect::<Vec<_>>();
+            let version = |field: &str| parse_version(field).expect("valid version in TSV");
+            let fixed = (row[2] != "-").then(|| version(row[2]));
+            (row[0], version(row[1]), fixed, row[3], row[4])
+        })
+        .collect()
+}
+
+const CRATES_IO_SOURCES: [&str; 2] = [
+    "registry+https://github.com/rust-lang/crates.io-index",
+    "sparse+https://index.crates.io/",
+];
+
+/// Line of the `name = "<name>"` key of the `[[package]]` block that also has
+/// `version = "<version>"`, in any key order; 1 if not found.
+fn package_line(lock: &str, name: &str, version: &str) -> usize {
+    let (name, version) = (
+        format!("name = \"{name}\""),
+        format!("version = \"{version}\""),
+    );
+    let (mut name_line, mut version_seen) = (None, false);
+    for (index, line) in lock.lines().map(str::trim).enumerate() {
+        if line == "[[package]]" {
+            (name_line, version_seen) = (None, false);
+        }
+        if line == name {
+            name_line = Some(index + 1);
+        }
+        version_seen |= line == version;
+        if let (Some(line), true) = (name_line, version_seen) {
+            return line;
+        }
+    }
+    1
+}
+
+fn version_string((major, minor, patch): Version) -> String {
+    format!("{major}.{minor}.{patch}")
+}
+
+pub struct KnownVulnerableCrateVersion;
+
+impl LintRule for KnownVulnerableCrateVersion {
+    fn id(&self) -> &str {
+        "RTC009"
+    }
+    fn name(&self) -> &str {
+        "known-vulnerable-crate-version"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        if ctx.path.file_name()? != "Cargo.lock" {
+            return None;
+        }
+        let lock = ctx.content.parse::<toml::Table>().ok()?;
+        let severity = config.rule_severity(self.id(), Severity::Error);
+        let advisories = vulnerable_releases();
+        let mut diagnostics = Vec::new();
+        for package in lock.get("package")?.as_array()? {
+            let field = |key| package.get(key).and_then(toml::Value::as_str);
+            // Path and git packages are the workspace's own code, not a release.
+            let (Some(name), Some(version), Some(source)) =
+                (field("name"), field("version"), field("source"))
+            else {
+                continue;
+            };
+            let Some(installed) = parse_version(version) else {
+                continue;
+            };
+            // A private registry may serve a patched fork under the same name
+            // and version.
+            if !CRATES_IO_SOURCES.contains(&source) {
+                continue;
+            }
+            for (_, first_vulnerable, fixed, advisory, url) in
+                advisories
+                    .iter()
+                    .filter(|(krate, first_vulnerable, fixed, ..)| {
+                        *krate == name
+                            && installed.0 == first_vulnerable.0
+                            && installed >= *first_vulnerable
+                            && fixed.is_none_or(|fixed| installed < fixed)
+                    })
+            {
+                let line = package_line(ctx.content, name, version);
+                let fix = match fixed {
+                    Some(fixed) => format!("upgrade to {} or later", version_string(*fixed)),
+                    None => {
+                        // The nearest later line that got a fix for the same advisory.
+                        let nearest = advisories
+                            .iter()
+                            .filter(|row| row.0 == name && row.3 == *advisory)
+                            .filter_map(|row| row.2)
+                            .filter(|fixed| fixed.0 > installed.0)
+                            .min()
+                            .map_or(String::new(), |fixed| {
+                                format!("; the nearest fixed release is {}", version_string(fixed))
+                            });
+                        format!(
+                            "the {}.x line has no fixed release{nearest}",
+                            first_vulnerable.0
+                        )
+                    }
+                };
+                diagnostics.push(diagnostic(
+                    self,
+                    ctx,
+                    severity,
+                    line,
+                    format!("{name} {version} is affected by \"{advisory}\" ({url}): {fix}"),
+                    "This Polkadot crate release has a known security bug whose fix shipped as a \
+                     patch release without a RustSec/GHSA advisory, so cargo-audit may not \
+                     report it. A runtime built from this lockfile still contains the bug.",
+                    "Bump the crate to the first fixed release on its line (for example with \
+                     `cargo update -p <crate> --precise <version>` or psvm), rebuild the runtime \
+                     and ship it in a runtime upgrade.",
+                ));
+            }
+        }
+        non_empty(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC010: storage-reading aliaser on the unpaid-execution barrier
+// ---------------------------------------------------------------------------
+
+pub struct StorageReadingUnpaidAliaser;
+
+impl LintRule for StorageReadingUnpaidAliaser {
+    fn id(&self) -> &str {
+        "RTC010"
+    }
+    fn name(&self) -> &str {
+        "storage-reading-unpaid-aliaser"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        struct Barriers<'a> {
+            aliases: &'a Aliases,
+            lines: Vec<usize>,
+        }
+        impl<'ast> Visit<'ast> for Barriers<'_> {
+            fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+                if segment.ident == "AllowExplicitUnpaidExecutionFrom" {
+                    if let Some(aliasers) = generic_type_args(segment).get(1) {
+                        if contains_filter(aliasers, "AuthorizedAliasers", self.aliases, true, 0) {
+                            self.lines.push(line_of(segment));
+                        }
+                    }
+                }
+                visit::visit_path_segment(self, segment);
+            }
+        }
+
+        runtime_scope(ctx, &config.runtime_config)?;
+        let file = production_ast(ctx.ast.as_ref()?);
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+        let aliases = type_aliases(&file);
+        let mut barriers = Barriers {
+            aliases: &aliases,
+            lines: Vec::new(),
+        };
+        barriers.visit_file(&file);
+        non_empty(
+            barriers
+                .lines
+                .into_iter()
+                .map(|line| {
+                    diagnostic(
+                        self,
+                        ctx,
+                        severity,
+                        line,
+                        "`AllowExplicitUnpaidExecutionFrom` is given `pallet_xcm::AuthorizedAliasers` \
+                         as its aliaser filter"
+                            .to_string(),
+                        "Barriers run before any fee is taken. `AllowExplicitUnpaidExecutionFrom<T, \
+                         Aliasers>` calls `Aliasers::contains` for every `AliasOrigin` ahead of \
+                         `UnpaidExecution` (up to 5 per message), and `AuthorizedAliasers` reads \
+                         storage on keys the message chooses. Any incoming message can trigger \
+                         those reads for free and then be rejected (polkadot-sdk #12831, \
+                         polkadot-fellows/runtimes #1237).",
+                        "Pass only computation-only aliasers to the barrier, e.g. \
+                         `type CheapTrustedAliasers = (AliasChildLocation,);`, and keep \
+                         `(CheapTrustedAliasers, AuthorizedAliasers<Runtime>)` for \
+                         `xcm_executor::Config::Aliasers`.",
+                    )
+                })
+                .collect(),
+        )
     }
 }

@@ -69,6 +69,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::CustomInvalidityReprU8),
         Box::new(semantic::SubmitTransactionLogTarget),
         Box::new(semantic::MissingWeightOfAuthorize),
+        Box::new(semantic::VerifierDefaultsToTrue),
         // Test smell rules
         Box::new(test_smells::AssertNoop),
         Box::new(test_smells::ApplyExtrinsicAssertOk),
@@ -93,6 +94,8 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(runtime_config::XcmFeesBurned),
         Box::new(runtime_config::XcmDenyBarrierNotRecursive),
         Box::new(runtime_config::ProxyFilterFailsOpen),
+        Box::new(runtime_config::KnownVulnerableCrateVersion),
+        Box::new(runtime_config::StorageReadingUnpaidAliaser),
     ];
 
     // Filter disabled rules

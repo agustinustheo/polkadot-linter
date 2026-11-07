@@ -9137,6 +9137,117 @@ fn rtc006_ignores_unit_fee_managers_when_every_delivery_price_is_free() {
     assert_eq!(rtc_lines(&diags, "RTC003"), vec![6, 18], "{diags:?}");
 }
 
+fn rtc009_lockfile(packages: &[(&str, &str, Option<&str>)]) -> String {
+    let mut lock = "version = 4\n".to_string();
+    for (name, version, source) in packages {
+        lock += &format!("\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n");
+        if let Some(source) = source {
+            lock += &format!("source = \"{source}\"\n");
+        }
+    }
+    lock
+}
+
+const CRATES_IO: Option<&str> = Some("registry+https://github.com/rust-lang/crates.io-index");
+
+#[test]
+fn sem019_reports_verifier_trait_defaults_that_accept_everything() {
+    let diags = check_fixture(
+        "substrate/primitives/runtime/src/traits/mod.rs",
+        include_str!("fixtures/bad_sem019.rs"),
+    );
+    assert_eq!(rtc_lines(&diags, "SEM019"), vec![6, 10], "{diags:?}");
+}
+
+#[test]
+fn rtc009_reports_vulnerable_xcm_executor_releases_in_cargo_lock() {
+    // fellows runtimes before 2.5.1 (28.0.1) and before the Feb 2026 bump (23.0.0, 21.0.0).
+    for (version, expected) in [
+        ("28.0.1", "upgrade to 28.1.0 or later"),
+        ("25.0.0", "upgrade to 25.2.0 or later"),
+        ("23.0.0", "upgrade to 23.0.1 or later"),
+        ("19.1.3", "upgrade to 19.1.4 or later"),
+        (
+            "21.0.0",
+            "the 21.x line has no fixed release; the nearest fixed release is 22.0.1",
+        ),
+        (
+            "26.0.0",
+            "the 26.x line has no fixed release; the nearest fixed release is 27.1.0",
+        ),
+        (
+            "18.0.1",
+            "the 18.x line has no fixed release; the nearest fixed release is 19.1.4",
+        ),
+    ] {
+        let lock = rtc009_lockfile(&[
+            ("serde", "1.0.0", CRATES_IO),
+            ("staging-xcm-executor", version, CRATES_IO),
+        ]);
+        let diags = check_fixture("Cargo.lock", &lock);
+        assert_eq!(rtc_lines(&diags, "RTC009"), vec![9], "{version}: {diags:?}");
+        let message = &diags
+            .iter()
+            .find(|d| d.rule_id == "RTC009")
+            .unwrap()
+            .message;
+        assert!(
+            message.contains(&format!("staging-xcm-executor {version} ")),
+            "{message}"
+        );
+        assert!(message.contains(expected), "{message}");
+        assert!(message.contains("https://"), "{message}");
+    }
+}
+
+#[test]
+fn rtc009_ignores_fixed_unaffected_and_local_xcm_executor_versions() {
+    for (version, source) in [
+        ("28.1.0", CRATES_IO), // first fixed (runtimes 2.5.1)
+        ("24.0.1", CRATES_IO), // InitiateTransfer fix
+        ("29.0.0", CRATES_IO), // released with the dotUSD fix
+        ("18.0.0", CRATES_IO), // before the InitiateTransfer regression
+        ("19.0.0", CRATES_IO), // yanked, without the regression
+        ("25.0.0", None),      // workspace path package (polkadot-sdk itself)
+        (
+            "25.0.0",
+            Some("git+https://github.com/paritytech/polkadot-sdk?branch=master#0"),
+        ),
+        ("28.0.1-rc1", CRATES_IO),
+        // A private registry may serve a patched fork with the same version.
+        ("28.0.1", Some("registry+https://crates.example.com/index")),
+        ("28.0.1", Some("sparse+https://crates.example.com/index/")),
+    ] {
+        let lock = rtc009_lockfile(&[("staging-xcm-executor", version, source)]);
+        let diags = check_fixture("Cargo.lock", &lock);
+        assert!(
+            rtc_lines(&diags, "RTC009").is_empty(),
+            "{version}: {diags:?}"
+        );
+    }
+    // Only `Cargo.lock` files are lockfiles.
+    let lock = rtc009_lockfile(&[("staging-xcm-executor", "28.0.1", CRATES_IO)]);
+    assert!(rtc_lines(&check_fixture("deps.toml", &lock), "RTC009").is_empty());
+}
+
+#[test]
+fn rtc009_reports_the_name_line_of_the_matching_package_block() {
+    let lock = "version = 4\n\n[[package]]\nname = \"staging-xcm-executor\"\nversion = \"29.0.0\"\n\
+source = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n[[package]]\n\
+version = \"28.0.1\"\nsource = \"sparse+https://index.crates.io/\"\nname = \"staging-xcm-executor\"\n";
+    let diags = check_fixture("Cargo.lock", lock);
+    assert_eq!(rtc_lines(&diags, "RTC009"), vec![11], "{diags:?}");
+}
+
+#[test]
+fn rtc009_runs_on_cargo_lock_in_a_directory_scan() {
+    let dir = tempfile::tempdir().expect("temporary workspace should be created");
+    let lock = rtc009_lockfile(&[("staging-xcm-executor", "28.0.1", CRATES_IO)]);
+    std::fs::write(dir.path().join("Cargo.lock"), lock).expect("lockfile should be written");
+    let diags = rtc_scan(dir.path(), polkadot_linter::config::Config::default());
+    assert_eq!(rtc_lines(&diags, "RTC009"), vec![4], "{diags:?}");
+}
+
 #[test]
 fn rtc007_detects_non_recursive_instruction_denies() {
     let diags = check_fixture(
@@ -9176,6 +9287,40 @@ fn rtc008_detects_fail_open_proxy_filters() {
         include_str!("fixtures/good_rtc008.rs"),
     );
     assert!(rtc_findings(&good).is_empty(), "{good:?}");
+}
+
+#[test]
+fn rtc010_reports_authorized_aliasers_on_the_unpaid_barrier() {
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        include_str!("fixtures/bad_rtc010.rs"),
+    );
+    assert_eq!(rtc_lines(&diags, "RTC010"), vec![22, 26, 27], "{diags:?}");
+    // Outside a runtime crate the same barrier is not reported.
+    let diags = check_fixture(
+        "pallets/xcm-mock/src/lib.rs",
+        &include_str!("fixtures/bad_rtc010.rs").replace("construct_runtime!", "not_a_runtime!"),
+    );
+    assert!(rtc_lines(&diags, "RTC010").is_empty(), "{diags:?}");
+}
+
+#[test]
+fn rtc010_reports_an_ambiguous_alias_only_if_every_definition_reads_storage() {
+    let xcm = |second: &str| {
+        format!(
+            "construct_runtime!(pub enum Runtime {{ PolkadotXcm: pallet_xcm = 31 }});\n\
+mod kusama {{\n    pub type Aliasers = (AliasChildLocation, AuthorizedAliasers<Runtime>);\n}}\n\
+mod polkadot {{\n    pub type Aliasers = {second};\n}}\n\
+pub type Barrier = AllowExplicitUnpaidExecutionFrom<Equals<Parent>, Aliasers>;\n"
+        )
+    };
+    let diags = check_fixture("runtime/src/xcm_config.rs", &xcm("(AliasChildLocation,)"));
+    assert!(rtc_lines(&diags, "RTC010").is_empty(), "{diags:?}");
+    let diags = check_fixture(
+        "runtime/src/xcm_config.rs",
+        &xcm("AuthorizedAliasers<Runtime>"),
+    );
+    assert_eq!(rtc_lines(&diags, "RTC010"), vec![8], "{diags:?}");
 }
 
 #[test]

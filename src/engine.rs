@@ -97,8 +97,10 @@ impl LintEngine {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let is_rust = ext == "rs";
             let is_text = matches!(ext, "md" | "txt" | "toml" | "yaml" | "yml");
+            // Lockfile rules (RTC009) match on the file name; text rules skip it.
+            let is_lockfile = entry.file_name() == "Cargo.lock";
 
-            if !is_rust && !is_text {
+            if !is_rust && !is_text && !is_lockfile {
                 continue;
             }
 
