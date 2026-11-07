@@ -7,7 +7,7 @@ use std::{
 
 use polkadot_linter::{
     config::Config, diagnostics, engine::LintEngine, rules::COMPILER_BACKED_RULE_IDS,
-    rustc_pipeline,
+    rustc_pipeline, suppress,
 };
 
 #[derive(Parser, Debug)]
@@ -107,6 +107,14 @@ struct Cli {
     /// File substring filters for compiler-backed diagnostics
     #[arg(long = "source-filter", value_delimiter = ',')]
     source_filters: Vec<String>,
+
+    /// Hide findings recorded in this baseline file; only new findings are reported
+    #[arg(long, value_name = "PATH")]
+    baseline: Option<PathBuf>,
+
+    /// Write the current findings to this baseline file and exit
+    #[arg(long = "write-baseline", value_name = "PATH")]
+    write_baseline: Option<PathBuf>,
 }
 
 fn main() {
@@ -241,6 +249,60 @@ fn main() {
     }
 
     normalize_diagnostics(&mut results);
+
+    // Allow comments and the baseline apply to both engines' findings alike.
+    let resolver = suppress::FileResolver::new(manifest_path.as_deref());
+    let mut active_rules = BTreeSet::new();
+    let mut allow_files = Vec::new();
+    if !cli.no_syntax {
+        active_rules.extend(engine.rule_ids().map(str::to_string));
+        allow_files.extend(cli.paths.iter().flat_map(|path| engine.rust_files(path)));
+    }
+    if !cli.syntax_only && compiler_driver_available && manifest_path.is_some() {
+        active_rules.extend(compiler_backed_rules.iter().cloned());
+    }
+    let known_rules = polkadot_linter::rules::all_rule_ids().into_iter().collect();
+    let mut allow_findings = suppress::apply_allow_comments(
+        &mut results,
+        &allow_files,
+        &resolver,
+        &known_rules,
+        &active_rules,
+    );
+    if config.rule_enabled(suppress::ALLOW_RULE_ID) {
+        for diagnostic in &mut allow_findings {
+            diagnostic.severity = config.rule_severity(&diagnostic.rule_id, diagnostic.severity);
+        }
+        results.append(&mut allow_findings);
+        normalize_diagnostics(&mut results);
+    }
+
+    if let Some(path) = &cli.write_baseline {
+        match suppress::write_baseline(path, &results, &resolver) {
+            Ok(count) => {
+                eprintln!(
+                    "polkadot-linter: wrote {count} finding(s) to {}",
+                    path.display()
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!("Error writing baseline {}: {error}", path.display());
+                process::exit(2);
+            }
+        }
+    }
+    if let Some(path) = &cli.baseline {
+        let baseline = suppress::read_baseline(path).unwrap_or_else(|error| {
+            eprintln!("Error reading baseline {}: {error}", path.display());
+            process::exit(2);
+        });
+        let hidden = suppress::apply_baseline(&mut results, &baseline, &resolver);
+        eprintln!(
+            "polkadot-linter: baseline {} hid {hidden} known finding(s)",
+            path.display()
+        );
+    }
 
     let filtered = results
         .into_iter()

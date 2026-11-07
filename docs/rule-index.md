@@ -17,6 +17,7 @@ run with `config/all-rules.toml`.
 | `TRM` | Terminology and text conventions |
 | `SEC` | Security-focused rules |
 | `RTC` | Runtime configuration (`impl Config for Runtime`, XCM, deposits, benchmarks) |
+| `LNT` | The linter's own allow comments |
 
 | Code | Family | Name | Severity | What it entails |
 | --- | --- | --- | --- | --- |
@@ -59,6 +60,7 @@ run with `config/all-rules.toml`.
 | [`RTC008`](rules/RTC008.md) | Runtime config | `proxy-filter-fails-open` | `warning` | A proxy `filter` deny-list (`!matches!`) misses a value-moving pallet of the runtime, or `is_superset` has `(X, _) => true` while X can add proxies and another proxy type admits calls X does not. |
 | [`RTC009`](rules/RTC009.md) | Runtime config | `known-vulnerable-crate-version` | `error` | `Cargo.lock` pins a Polkadot crate release with a known security bug fixed in a quiet patch release (no RustSec/GHSA entry), e.g. the dotUSD `staging-xcm-executor` 28.0.1. |
 | [`RTC010`](rules/RTC010.md) | Runtime config | `storage-reading-unpaid-aliaser` | `warning` | `AllowExplicitUnpaidExecutionFrom` gets `pallet_xcm::AuthorizedAliasers` as its aliaser filter, so any message triggers unmetered storage reads before fees are taken. |
+| [`LNT001`](guide/suppressing-findings.md) | Semantic | `allow-comment` | `warning` | A `// polkadot-linter: allow(...)` comment has no reason or names an unknown rule (warning), or suppresses nothing (advisory). |
 | [`TRM001`](rules/TRM001.md) | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
 | [`SEC001`](rules/SEC001.md) | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. Off by default. |
 | [`SEC002`](rules/SEC002.md) | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |

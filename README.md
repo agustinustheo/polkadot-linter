@@ -160,6 +160,13 @@ A severity alone does not enable a rule. Other sections tune the heuristics of
 each family; see
 [Configuration](http://agustinustheo.github.io/polkadot-linter/guide/configuration.html).
 
+To keep a reviewed, intentional finding quiet, add
+`// polkadot-linter: allow(RTC004, reason = "dev chain")` on or above the line.
+When adopting the linter on an existing codebase, record today's findings with
+`--write-baseline baseline.json` and run with `--baseline baseline.json` so only
+new findings are reported. See
+[Suppressing findings](http://agustinustheo.github.io/polkadot-linter/guide/suppressing-findings.html).
+
 ## Output and CI
 
 - `-f human` (default): coloured, with locations and suggested fixes.

@@ -19,6 +19,12 @@ directory (`.`) is scanned.
 | `--include <GLOBS>` | — | Comma-separated glob patterns of files to include. |
 | `--exclude <GLOBS>` | — | Comma-separated glob patterns of files to exclude. |
 | `-v`, `--verbose` | off | Verbose (`debug`-level) logging. |
+| `--write-baseline <PATH>` | — | Write every current finding to a baseline file and exit 0. |
+| `--baseline <PATH>` | — | Hide findings recorded in the baseline; only new findings are reported and affect the exit code. Prints the number hidden on stderr. |
+
+Individual findings can also be suppressed with
+`// polkadot-linter: allow(RULE, reason = "...")` comments. See
+[Suppressing Findings](suppressing-findings.md).
 
 ## Engine selection
 

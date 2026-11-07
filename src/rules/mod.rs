@@ -104,3 +104,15 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
 
     rules
 }
+
+/// Every rule ID the linter can emit, whether or not it is enabled.
+pub fn all_rule_ids() -> Vec<String> {
+    let mut config = Config::default();
+    config.rules.enabled.clear();
+    all_rules(&config)
+        .iter()
+        .map(|rule| rule.id().to_string())
+        .chain(COMPILER_BACKED_RULE_IDS.iter().map(|id| id.to_string()))
+        .chain([crate::suppress::ALLOW_RULE_ID.to_string()])
+        .collect()
+}

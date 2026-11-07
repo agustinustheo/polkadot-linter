@@ -60,6 +60,41 @@ impl LintEngine {
         Ok(())
     }
 
+    /// IDs of the syntax rules this engine runs.
+    pub fn rule_ids(&self) -> impl Iterator<Item = &str> {
+        self.rules.iter().map(|rule| rule.id())
+    }
+
+    /// Rust files under `root` that a scan reads, after include/exclude globs.
+    pub fn rust_files(&self, root: &Path) -> Vec<PathBuf> {
+        self.walk(root)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rs"))
+            .map(walkdir::DirEntry::into_path)
+            .collect()
+    }
+
+    /// Scannable files under `root`, filtered by extension and include/exclude globs.
+    fn walk<'a>(&'a self, root: &'a Path) -> impl Iterator<Item = walkdir::DirEntry> + 'a {
+        WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(move |entry| {
+                let path = entry.path();
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                // Lockfile rules (RTC009) match on the file name; text rules skip it.
+                let scannable = matches!(ext, "rs" | "md" | "txt" | "toml" | "yaml" | "yml")
+                    || entry.file_name() == "Cargo.lock";
+                if !entry.file_type().is_file() || !scannable {
+                    return false;
+                }
+                let rel_str = path.strip_prefix(root).unwrap_or(path).to_string_lossy();
+                !self.exclude_patterns.iter().any(|p| p.matches(&rel_str))
+                    && (self.include_patterns.is_empty()
+                        || self.include_patterns.iter().any(|p| p.matches(&rel_str)))
+            })
+    }
+
     pub fn scan(&self, root: &Path) -> Vec<Diagnostic> {
         self.scan_with_cargo_features(root, false, &[])
     }
@@ -82,42 +117,12 @@ impl LintEngine {
             );
         }
 
-        for entry in WalkDir::new(root)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
+        for entry in self.walk(root) {
             let path = entry.path();
-
-            if !entry.file_type().is_file() {
-                continue;
-            }
-
-            // Check file extension
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let is_rust = ext == "rs";
             let is_text = matches!(ext, "md" | "txt" | "toml" | "yaml" | "yml");
-            // Lockfile rules (RTC009) match on the file name; text rules skip it.
-            let is_lockfile = entry.file_name() == "Cargo.lock";
-
-            if !is_rust && !is_text && !is_lockfile {
-                continue;
-            }
-
             let rel_path = path.strip_prefix(root).unwrap_or(path);
-            let rel_str = rel_path.to_string_lossy();
-
-            // Apply exclude patterns
-            if self.exclude_patterns.iter().any(|p| p.matches(&rel_str)) {
-                continue;
-            }
-
-            // Apply include patterns (if any specified)
-            if !self.include_patterns.is_empty()
-                && !self.include_patterns.iter().any(|p| p.matches(&rel_str))
-            {
-                continue;
-            }
 
             let content = match std::fs::read_to_string(path) {
                 Ok(c) => c,
