@@ -1,217 +1,197 @@
-# Polkadot Linter
+<p align="center">
+  <img src="assets/logo.svg" alt="polkadot-linter: a magnifying glass over a grid of dots, one flagged" width="820">
+</p>
 
-Polkadot Linter is an external Rust linter for Polkadot SDK codebases. It focuses on repeatable FRAME and runtime checks that sit above general-purpose tooling like `cargo fmt` and `cargo clippy`.
+<p align="center">
+  <b>A precision-first linter for Polkadot SDK runtimes and pallets. A rule is on by default only when it was measured accurate on real code.</b>
+</p>
 
-## Quick Start
+<p align="center">
+  <a href="https://github.com/agustinustheo/polkadot-linter/actions/workflows/ci.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/agustinustheo/polkadot-linter/ci.yml?branch=main&label=build&logo=githubactions&logoColor=white"></a>
+  <a href="https://github.com/agustinustheo/polkadot-linter/actions/workflows/docs.yml"><img alt="Docs build" src="https://img.shields.io/github/actions/workflow/status/agustinustheo/polkadot-linter/docs.yml?branch=main&label=docs&logo=mdbook"></a>
+  <a href="https://github.com/agustinustheo/polkadot-linter/tags"><img alt="Release" src="https://img.shields.io/github/v/tag/agustinustheo/polkadot-linter?label=release&logo=github&color=E6007A"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2EC4CC"></a>
+  <br>
+  <a href="https://crates.io/crates/polkadot-linter"><img alt="crates.io" src="https://img.shields.io/crates/v/polkadot-linter?logo=rust&color=E6007A"></a>
+  <a href="https://crates.io/crates/polkadot-linter"><img alt="Downloads" src="https://img.shields.io/crates/d/polkadot-linter?color=555"></a>
+  <a href="http://agustinustheo.github.io/polkadot-linter"><img alt="Docs site" src="https://img.shields.io/badge/docs-mdBook-552BBF?logo=mdbook&logoColor=white"></a>
+  <img alt="Rust 1.91+" src="https://img.shields.io/badge/rust-1.91%2B-F74C00?logo=rust&logoColor=white">
+  <img alt="Driver: nightly-2025-09-01" src="https://img.shields.io/badge/driver-nightly--2025--09--01-555?logo=rust&logoColor=white">
+</p>
+
+---
+
+`polkadot-linter` finds bugs specific to Polkadot SDK code: XCM barriers that
+nested programs bypass, proxy filters that fail open, discarded proof
+verdicts, vulnerable crate versions in `Cargo.lock`, free XCM delivery, missing
+benchmarks. It runs after `cargo fmt` and `cargo clippy`, and covers what they
+cannot know about FRAME.
+
+Most rules come from a real incident. Each one is measured on third-party
+parachain code before it is turned on. Rules that were too noisy stay
+available, but are off unless you ask for them.
+
+## Highlights
+
+- **Precision first.** 29 of 63 rules are on by default. The rest were
+  measured, found noisy, and turned off. The numbers are in
+  [`benchmarks/precision/`](benchmarks/precision).
+- **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
+  #12771, #1739, fellows runtimes #1237 and #1341, GHSA-wwx5, and the dotUSD backports.
+- **Two engines.** Fast `syn` rules for source and runtime config, and
+  compiler-backed rules that see resolved types through a rustc driver.
+- **CI-ready.** `human`, `json` and SARIF 2.1.0 output. Exit code `1` on errors,
+  or on warnings with `--fail-on-warning`.
+- **Configurable.** One TOML file. Turn rules on or off, change severities, tune
+  heuristics. `config/all-rules.toml` runs everything.
+
+## Install
 
 ```bash
-cargo build --release
-
-# Scan one or more directories
-cargo run -- ../pallets
-cargo run -- ../pallets ../runtimes ../support
-
-# Use a project-level configuration
-cargo run -- -c ../polkadot-linter.toml ../pallets
-
-# Emit machine-readable output
-cargo run -- ../pallets -f json
-cargo run -- ../pallets -f sarif > polkadot-linter.sarif
-
-# Tighten CI behaviour
-cargo run -- ../pallets -s warning --fail-on-warning
-
-# Route migrated SEC rules through the rustc-backed pipeline for a Cargo package.
-# The manifest is discovered from the scan path.
-cargo run -- \
-  --rules SEC003 \
-  --package pallet-xcm \
-  --lib \
-  ../polkadot-sdk/polkadot/xcm/pallet-xcm
+cargo install polkadot-linter
+polkadot-linter --version
 ```
 
-## Rule Families
+That gives you every syntax and lockfile rule. Compiler-backed rules also need
+the driver, which builds on a pinned nightly:
 
-Polkadot Linter groups checks by family so teams can enable, disable, or filter them more easily:
+```bash
+rustup toolchain install nightly-2025-09-01 --component rustc-dev --component llvm-tools-preview
+cargo +nightly-2025-09-01 install polkadot-linter --features rustc-driver
+```
 
-| Prefix | Family |
-| --- | --- |
-| `VAL` | Validation order and guard rails |
-| `SEM` | Semantic and style checks |
-| `TST` | Test quality checks |
-| `MOK` | Mock usage heuristics |
-| `BEN` | Benchmark coverage and verification |
-| `TRM` | Terminology and text conventions |
-| `SEC` | Security-focused rules |
-| `RTC` | Runtime configuration (`impl Config for Runtime`, XCM, deposits, benchmarks) |
+This installs both `polkadot-linter` and `polkadot-linter-driver`. Pass the
+driver with `--driver-path ~/.cargo/bin/polkadot-linter-driver` (the default is
+`target/debug/polkadot-linter-driver`, for source checkouts). Releases are
+published to [crates.io](https://crates.io/crates/polkadot-linter) only; there
+are no prebuilt binaries.
 
-## Rule Matrix
+## Tour
 
-This matrix maps each diagnostic code to the rule it represents and the kind of issue it flags.
+```bash
+polkadot-linter ./pallets ./runtime                       # scan; compiler rules run if the driver is found
+polkadot-linter --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime
+polkadot-linter --syntax-only .                           # syntax and lockfile rules only, no build
+polkadot-linter --rules RTC,SEC020 ./runtime              # pick families or rule IDs
+polkadot-linter -s warning --fail-on-warning ./pallets    # CI gate
+polkadot-linter -f sarif ./pallets > polkadot-linter.sarif
+polkadot-linter -c config/all-rules.toml ./pallets        # every rule, noisy ones included
+polkadot-linter --package pallet-xcm --lib ./xcm/pallet-xcm   # compiler rules for one package
+```
 
-| Code | Family | Name | Severity | What it entails |
-| --- | --- | --- | --- | --- |
-| `VAL001` | Validation | `validation-before-heavy-read` | `warning` | Expensive storage reads happen before cheap precondition checks such as `ensure!` or bounds checks. Off by default. |
-| `VAL002` | Validation | `division-without-zero-guard` | `advisory` | Division uses a config or runtime-derived value without first proving the divisor cannot be zero. Off by default. |
-| `VAL003` | Validation | `storage-write-before-validation` | `warning` | Storage is mutated before all validations finish, which can leave unnecessary writes or rollback risk. Off by default. |
-| `SEM002` | Semantic | `prefer-collect-turbofish` | `advisory` | `iter.collect()` uses a separate type annotation instead of `.collect::<Vec<_>>()`. Off by default. |
-| `SEM003` | Semantic | `prefer-ref-iteration` | `advisory` | A `for` loop uses `.iter()` where borrowing the collection directly would be more idiomatic. Off by default. |
-| `SEM004` | Semantic | `no-wildcard-imports` | `warning` | Production code uses wildcard imports such as `use foo::*`. Off by default. |
-| `SEM005` | Semantic | `parameterise-weight-functions` | `warning` | Weight functions multiply a constant weight instead of calling a parameterised `WeightInfo` function. Off by default. |
-| `SEM006` | Semantic | `dbweight-missing-pov` | `warning` | `DbWeight::get().reads()` is used where proof size accounting should come from a benchmarked weight. Off by default. |
-| `SEM007` | Semantic | `runtime-debug-deprecated` | `warning` | Deprecated `RuntimeDebug` or `RuntimeDebugNoBound` derives are used. Off by default. |
-| `SEM008` | Semantic | `sp-std-deprecated` | `advisory` | Code still depends on deprecated `sp_std` instead of `alloc`-based `no_std` imports. Off by default. |
-| `SEM009` | Semantic | `redundant-contains-key-before-remove` | `advisory` | A storage map is checked with `contains_key()` immediately before `remove()` or `take()`. |
-| `SEM010` | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
-| `SEM011` | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute is zero (`Weight::zero()`, `0`, `Weight::from_parts(0, 0)`), making the call effectively free. |
-| `SEM012` | Semantic | `allow-dead-code-in-pallet` | `warning` | Production pallet code suppresses dead-code warnings instead of removing unused items. Off by default. |
-| `SEM013` | Semantic | `custom-invalidity-repr-u8` | `warning` | Custom invalidity enums that feed `InvalidTransaction::Custom(u8)` should declare `#[repr(u8)]` so discriminants stay explicit. |
-| `SEM014` | Semantic | `submit-transaction-log-target` | `advisory` | Nearby `log::...!` calls around `SubmitTransaction::<...>::submit_transaction(...)` should include `target: LOG_TARGET` for traceable OCW submission failures. |
-| `SEM015` | Semantic | `missing-weight-of-authorize` | `warning` | `#[pallet::authorize]` should be paired with `#[pallet::weight_of_authorize(...)]` so authorize-path validation cost is benchmarked separately. |
-| `SEM016` | Semantic | `missing-authorizecall-in-create-authorized-transaction` | `warning` | `CreateAuthorizedTransaction::create_extension()` should include `AuthorizeCall::new()` so authorized transactions do not bypass authorize-stage routing. |
-| `SEM019` | Semantic | `verifier-defaults-to-true` | `warning` | A verifier-named trait method (`verify`, `valid`, `ownership_proof`, ...) takes input but its default body is `true`, so implementers that do not override it accept everything (polkadot-sdk #1739). |
-| `TST001` | Test smell | `prefer-assert-noop` | `warning` | Tests manually check for failure instead of using `assert_noop!`, which also verifies storage is unchanged. Off by default. |
-| `TST002` | Test smell | `apply-extrinsic-assert-ok` | `error` | `assert_ok!` is used on `apply_extrinsic`, which can hide the inner `DispatchError`. |
-| `TST003` | Test smell | `imports-inside-closures` | `warning` | `use` imports appear inside functions or closures instead of at module scope. Off by default. |
-| `TST004` | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. Off by default. |
-| `TST005` | Test smell | `implementation-detail-assertions` | `warning` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. Off by default. |
-| `TST006` | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. |
-| `MOK001` | Mock usage | `excessive-mock-setup` | `warning` | Test setup is dominated by mocks and scaffolding relative to actual assertions. Off by default. |
-| `BEN001` | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. Off by default. |
-| `BEN002` | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. |
-| `BEN003` | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. |
-| `RTC001` | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
-| `RTC002` | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
-| `RTC003` | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `WaiveDeliveryFees` or `XcmFeeManagerFromComponents<Everything, _>`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |
-| `RTC004` | Runtime config | `zero-deposit-config` | `warning` | `ExistentialDeposit` or a permissionless storage deposit (approvals, asset accounts, metadata, session keys, ...) is configured as zero, including `type XDeposit = ();`. Off by default. |
-| `RTC005` | Runtime config | `insecure-randomness-in-runtime` | `warning` | The runtime declares or consumes `pallet_insecure_randomness_collective_flip` (or its pre-rename `pallet_randomness_collective_flip`). |
-| `RTC006` | Runtime config | `xcm-fees-burned` | `warning` | The XCM executor `FeeManager` is `()`, which charges delivery and export fees and then burns them instead of routing them (older SDKs waived them). |
-| `RTC007` | Runtime config | `xcm-deny-barrier-not-recursive` | `warning` | `DenyThenTry` uses an instruction-inspecting deny (`DenyReserveTransferToRelayChain`, ...) not wrapped in `DenyRecursively`, so nested `SetAppendix`/`SetErrorHandler`/`ExecuteWithOrigin` programs bypass it. |
-| `RTC008` | Runtime config | `proxy-filter-fails-open` | `warning` | A proxy `filter` deny-list (`!matches!`) misses a value-moving pallet of the runtime, or `is_superset` has `(X, _) => true` while X can add proxies and another proxy type admits calls X does not. |
-| `RTC009` | Runtime config | `known-vulnerable-crate-version` | `error` | `Cargo.lock` pins a Polkadot crate release with a known security bug fixed in a quiet patch release (no RustSec/GHSA entry), e.g. the dotUSD `staging-xcm-executor` 28.0.1. |
-| `RTC010` | Runtime config | `storage-reading-unpaid-aliaser` | `warning` | `AllowExplicitUnpaidExecutionFrom` gets `pallet_xcm::AuthorizedAliasers` as its aliaser filter, so any message triggers unmetered storage reads before fees are taken. |
-| `TRM001` | Terminology | `spelling-conventions` | `advisory` | Comments, docs, strings, or configured identifiers violate the project’s spelling dictionary. |
-| `SEC001` | Security | `unbounded-vec-in-extrinsic` | `warning` | An extrinsic accepts an unbounded `Vec<T>` parameter that can grow without limit. Off by default. |
-| `SEC002` | Security | `debug-assert-in-production` | `warning` | Production runtime code relies on `debug_assert!`-style checks. Off by default. |
-| `SEC003` | Security | `missing-decode-depth-limit` | `warning` | User-controlled decoding happens without `decode_with_depth_limit`. Off by default. |
-| `SEC004` | Security | `unsafe-weight-arithmetic` | `warning` | A weight attribute uses non-saturating arithmetic that can overflow or undercount. Off by default. |
-| `SEC005` | Security | `expensive-weight-calculation` | `advisory` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. Off by default. |
-| `SEC006` | Security | `unchecked-repatriate-reserved` | `warning` | The remaining balance from `repatriate_reserved` is ignored instead of being checked. |
-| `SEC007` | Security | `let-underscore-result` | `warning` | `let _ =` discards a likely `Result`, hiding potential failures. Off by default. |
-| `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. Off by default. |
-| `SEC009` | Security | `raw-arithmetic-in-fallible` | `advisory` | Fallible functions use raw arithmetic operators where overflow handling should be explicit. Off by default. |
-| `SEC010` | Security | `missing-transactional-in-hook` | `warning` | A hook performs multiple storage writes without a transactional storage layer. |
-| `SEC011` | Security | `storage-iteration-in-dispatchables` | `warning` | Dispatchable or hook code iterates storage in a state-size-dependent way. |
-| `SEC012` | Security | `unbounded-clear-prefix` | `warning` | Trie cleanup uses an effectively unbounded `clear_prefix` or related call. |
-| `SEC013` | Security | `unbounded-storage-collections` | `warning` | Storage types use unbounded collections without explicitly marking them as unbounded. Off by default. |
-| `SEC014` | Security | `identity-hasher-on-common-keys` | `warning` | `Identity` hashing is used with common key types that should not be stored unhashed. Off by default. |
-| `SEC015` | Security | `dispatch-bypass-filter-in-production` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
-| `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. Off by default. |
-| `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. Off by default. |
-| `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. Off by default. |
-| `SEC019` | Security | `imbalance-escapes-transaction` | `error` | A rollback-capable `with_storage_layer`/`with_transaction`/`ProcessTransaction::process` closure moves a token imbalance into an outer local, so its `Drop` writes issuance after a rollback. Off by default. |
-| `SEC020` | Security | `discarded-verification-result` | `error` | A verifier's `bool`/`Result<bool, _>` verdict is discarded, so an invalid proof is accepted. |
-| `SEC021` | Security | `inverted-verification-guard` | `error` | `if verify(..) { reject }`: the rejecting branch runs when the verifier returns `true`. |
-| `SEC022` | Security | `discarded-origin-check` | `error` | The `Result` of `ensure_signed`/`ensure_root`/`EnsureOrigin::ensure_origin` is discarded, so any origin passes. Off by default. |
-| `SEC023` | Security | `option-equality-authorization` | `error` | An `EnsureOrigin` impl compares two `Option`s, so `None == None` authorizes. Off by default. |
+`polkadot-linter --help` lists every flag. The
+[CLI reference](http://agustinustheo.github.io/polkadot-linter/guide/cli-reference.html)
+explains them.
+
+## Two engines
+
+| | Syntax engine | Compiler-backed engine |
+|---|---|---|
+| Sees | source text, attributes, `Cargo.lock` | resolved types, trait impls, macro-expanded code |
+| Rules | `RTC`, `BEN`, `TST`, `TRM`, `MOK`, most `SEM`, `VAL001` | all `SEC`, `SEM006`, `SEM009`, `SEM010`, `SEM016`, `VAL002`, `VAL003` |
+| Runs | always | when the scan paths share one nearest `Cargo.toml` (or `--manifest-path`) and the driver exists |
+| Toolchain | stable, Rust 1.91+ | `nightly-2025-09-01` with `rustc-dev` |
+
+The compiler engine runs `cargo check` with the driver as a workspace wrapper.
+If the driver is missing, the CLI says so and emits syntax findings only.
+`--syntax-only` skips the compiler engine; `--no-syntax` skips the syntax one.
+`--features` and `--no-default-features` apply to both.
+
+## What it catches by default
+
+| Rule | Severity | Catches | From |
+|---|---|---|---|
+| [RTC003](http://agustinustheo.github.io/polkadot-linter/rules/RTC003.html) | error | XCM delivery is free (`WaiveDeliveryFees`, `()` price) | |
+| [RTC006](http://agustinustheo.github.io/polkadot-linter/rules/RTC006.html) | warning | XCM `FeeManager = ()` burns delivery fees | |
+| [RTC007](http://agustinustheo.github.io/polkadot-linter/rules/RTC007.html) | warning | `DenyThenTry` deny not wrapped in `DenyRecursively`; nested programs bypass it | polkadot-sdk #7148, #7200 |
+| [RTC008](http://agustinustheo.github.io/polkadot-linter/rules/RTC008.html) | warning | Proxy filter deny-list or `is_superset` wildcard fails open | polkadot-sdk #12771, fellows runtimes #1341 |
+| [RTC009](http://agustinustheo.github.io/polkadot-linter/rules/RTC009.html) | error | `Cargo.lock` pins a crate with a quietly patched security bug | dotUSD fix backports, InitiateTransfer origin leak |
+| [RTC010](http://agustinustheo.github.io/polkadot-linter/rules/RTC010.html) | warning | `AuthorizedAliasers` on the unpaid-execution barrier: unmetered storage reads | fellows runtimes #1237 |
+| [RTC001](http://agustinustheo.github.io/polkadot-linter/rules/RTC001.html), [RTC002](http://agustinustheo.github.io/polkadot-linter/rules/RTC002.html) | warning | Placeholder `WeightInfo` in a runtime; pallet missing from `define_benchmarks!` | |
+| [RTC005](http://agustinustheo.github.io/polkadot-linter/rules/RTC005.html) | warning | Runtime uses collective-flip randomness | |
+| [SEC020](http://agustinustheo.github.io/polkadot-linter/rules/SEC020.html) | error | A verifier's `bool` verdict is discarded, so bad proofs pass | polkadot-sdk #11738 |
+| [SEC021](http://agustinustheo.github.io/polkadot-linter/rules/SEC021.html) | error | Inverted verify guard: `if verify(..) { reject }` rejects valid proofs and accepts bad ones | GHSA-wwx5 (grandpa-verifier-primitives) |
+| [SEM019](http://agustinustheo.github.io/polkadot-linter/rules/SEM019.html) | warning | Verifier trait method defaults to `true` | polkadot-sdk #1739 |
+| [SEC006](http://agustinustheo.github.io/polkadot-linter/rules/SEC006.html), [SEC010](http://agustinustheo.github.io/polkadot-linter/rules/SEC010.html), [SEC011](http://agustinustheo.github.io/polkadot-linter/rules/SEC011.html), [SEC012](http://agustinustheo.github.io/polkadot-linter/rules/SEC012.html), [SEC015](http://agustinustheo.github.io/polkadot-linter/rules/SEC015.html) | warning | Ignored `repatriate_reserved` remainder, non-transactional hooks, storage iteration in dispatchables, unbounded `clear_prefix`, `dispatch_bypass_filter` | |
+| [SEM010](http://agustinustheo.github.io/polkadot-linter/rules/SEM010.html) | error | `^` used as exponentiation (it is XOR) | |
+| [SEM011](http://agustinustheo.github.io/polkadot-linter/rules/SEM011.html), [SEM015](http://agustinustheo.github.io/polkadot-linter/rules/SEM015.html), [SEM016](http://agustinustheo.github.io/polkadot-linter/rules/SEM016.html) | warning | Zero weights; `authorize` without `weight_of_authorize`; missing `AuthorizeCall` | |
+| [BEN002](http://agustinustheo.github.io/polkadot-linter/rules/BEN002.html), [BEN003](http://agustinustheo.github.io/polkadot-linter/rules/BEN003.html) | warning | Benchmark without verification; extrinsic without benchmark | |
+| [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html), [TST006](http://agustinustheo.github.io/polkadot-linter/rules/TST006.html) | error, warning | `assert_ok!` on `apply_extrinsic`; storage-mutating extrinsic without an event | |
+| SEM009, SEM013, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, `#[repr(u8)]` invalidity enums, OCW log targets, spelling | |
+
+Every rule, including the 34 that are off by default, is in the
+[rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
+
+## How rules are measured
+
+Defaults come from two labeled audits:
+
+- **[2026-11-external](benchmarks/precision/2026-11-external/README.md).** 10
+  third-party parachain repositories (Moonbeam, Astar, Acala, Hydration, ...).
+  291 sampled findings, two blind labelers plus an adjudicator. A rule is off if
+  under 30% of its findings are worth acting on, or 30% or more are false.
+  Default findings went from 2,680 to 750; the estimated useful share from
+  18.5% to 58.3%.
+- **[2026-11-run-audit](benchmarks/precision/2026-11-run-audit/README.md).**
+  polkadot-sdk plus the same repositories, compiler rules on 8 runtimes. It
+  turned off 7 more rules, which had produced 313 default findings with 4 true
+  positives in 91 labeled samples. Default findings went from 1,534 to 1,221.
+
+Rules are also run against auditor-reported bugs at the exact commits that were
+audited. Labels are judgments, not an oracle, and samples are small (12 to 15
+per rule). Each README lists its caveats.
 
 ## Configuration
 
-The bundled default configuration is [`config/default.toml`](config/default.toml). When no `--config` is supplied, `polkadot-linter.toml` in the working directory is loaded when present; otherwise the bundled defaults are used. An explicit `--config` path must exist and be valid.
+Put a `polkadot-linter.toml` in the working directory, or pass `-c FILE`. It
+overrides the bundled [`config/default.toml`](config/default.toml) entry by
+entry.
 
 ```toml
 [rules.enabled]
+SEC019 = true          # opt in to a default-off rule
 BEN002 = false
 
 [rules.severity]
 TST002 = "error"
-
-[validation_order]
-heavy_operations = ["::get(", "::iter(", "::contains_key("]
-cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
-
-[terminology.british_english]
-"optimisation" = "optimization"
 ```
 
-### Configuration Notes
+A severity alone does not enable a rule. Other sections tune the heuristics of
+each family; see
+[Configuration](http://agustinustheo.github.io/polkadot-linter/guide/configuration.html).
 
-- [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
-- `[rules.enabled]` and `[rules.severity]` override the bundled per-rule entries rather than replacing them. Every rule is enabled except those marked "Off by default" above. A blind two-labeler precision audit on 10 third-party parachain repositories turned off every rule whose sampled findings were under 30% actionable or at least 30% false positives; see [`benchmarks/precision/2026-11-external`](benchmarks/precision/2026-11-external/README.md). A second, run-based audit on polkadot-sdk and the same repositories turned off `TST004`, `SEC007`, `SEC013`, `SEC014`, `SEC017`, `SEC018` and `VAL002` (0-13% actionable, and none caught any bug in an audited-commit benchmark); see [`benchmarks/precision/2026-11-run-audit`](benchmarks/precision/2026-11-run-audit/README.md). `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` are Parity SDK style conventions, and `SEM007`, `TST005` and `MOK001` were mostly false positives in an earlier sample. Projects that follow the SDK conventions can turn them back on:
+## Output and CI
 
-  ```toml
-  [rules.enabled]
-  # Parity SDK style conventions
-  SEM002 = true
-  SEM003 = true
-  SEM004 = true
-  SEM007 = true  # only if you depend on sp-debug-derive >= 15
-  SEM012 = true
-  TST003 = true
-  ```
+- `-f human` (default): coloured, with locations and suggested fixes.
+- `-f json`: an array of diagnostics.
+- `-f sarif`: SARIF 2.1.0 for GitHub code scanning.
 
-  To run every rule, as the corpus checks do, use [`config/all-rules.toml`](config/all-rules.toml).
-- `[rules.severity]` lets you promote or demote individual rules without changing the implementation. It takes precedence over a family severity. The sample config keeps `TST002` at `error` because it can hide a real dispatch failure in tests.
-- `[validation_order]`, `[test_smells]`, `[mock_usage]`, `[benchmarking]`, and `[runtime_config]` tune the heuristics behind rule families. Most teams will only need to touch these when their local conventions differ from the defaults.
-- `[terminology.british_english]` and `[terminology.forbidden_terms]` are meant to be customized per project. Keep only the spellings and term replacements that your team actually wants enforced.
+Exit codes: `0` nothing blocking · `1` an error, or a warning with
+`--fail-on-warning` · `2` bad config or usage. `-s warning` hides advisories.
+A typical pipeline is `cargo fmt` → `cargo clippy` → `polkadot-linter`.
 
-The full schema and defaults remain in [`config/default.toml`](config/default.toml).
+## Project layout
 
-## Security Roadmap
+| Path | What |
+|---|---|
+| `src/main.rs` | CLI, engine selection, exit codes |
+| `src/engine.rs` | syntax engine: file walk, rule dispatch |
+| `src/rules/` | syntax rules by family, plus `vulnerable_crates.tsv` for RTC009 |
+| `src/bin/polkadot-linter-driver.rs` | rustc driver with the compiler-backed rules |
+| `src/rustc_pipeline.rs` | runs `cargo check` with the driver |
+| `src/frame_model.rs`, `src/project_model.rs` | FRAME and Cargo project models |
+| `config/default.toml`, `config/all-rules.toml` | bundled defaults, every rule on |
+| `benchmarks/precision/` | precision audits behind the defaults |
+| `benchmarks/labels/`, `benchmarks/*.tsv` | labeled findings and pinned-SDK baselines |
+| `scripts/` | corpus and driver checks run in CI |
+| `docs/` | the [mdBook site](http://agustinustheo.github.io/polkadot-linter) and per-rule pages |
 
-Compiler-backed rules route through the rustc pipeline by default when the
-scan path is inside a single Cargo project; the CLI discovers the nearest
-`Cargo.toml` and the syntax engine does not register those rule IDs.
-`--syntax-only` skips compiler-backed rules and is appropriate only when
-running the remaining syntax/text rule families.
-
-Use `--no-default-features` and `--features feature_a,feature_b` to select the
-Cargo feature configuration for both source and compiler-backed analysis.
-
-For repeatable SEC-rule corpus runs against the pinned SDK checkout, run the
-data-driven `scripts/check-sdk-benchmarks.sh` baseline used by CI. The runtime
-configuration rules have their own pinned-SDK baseline and labeled findings,
-checked by `scripts/check-source-runtime-corpus.sh`.
-
-## Output Formats
-
-- `human`: coloured terminal output with file locations and suggestions
-- `json`: machine-readable diagnostics
-- `sarif`: SARIF 2.1.0 output for CI and code scanning
-
-## Project Layout
-
-```text
-src/
-  lib.rs
-  main.rs
-  config.rs
-  diagnostics.rs
-  engine.rs
-  rules/
-tests/
-  rules_test.rs
-  fixtures/
-config/
-  default.toml
-polkadot-linter.toml
-```
-
-## Adding a Rule
-
-1. Implement source rules under `src/rules/`, or compiler-backed rules in `src/bin/polkadot-linter-driver.rs`.
-2. Register source rules in `src/rules/mod.rs`; add compiler-backed rule IDs there when applicable.
-3. Add focused parser fixtures or compiler integration coverage.
-4. Extend the SDK benchmark manifest when the rule needs pinned SDK coverage.
-
-## Tooling Relationship
-
-Polkadot Linter is intended to complement standard Rust tooling, not replace it. A typical run order in CI is:
-
-```text
-cargo fmt -> cargo clippy -> polkadot-linter
-```
+To add a rule: implement it in `src/rules/` (syntax) or the driver
+(compiler-backed), register its ID in `src/rules/mod.rs`, add fixtures or
+driver coverage, and extend the SDK benchmark manifest if it needs pinned-SDK
+coverage. The [rule authority matrix](http://agustinustheo.github.io/polkadot-linter/rule-authority-matrix.html)
+says which engine owns each rule.
 
 ## License
 
-This project is licensed under the [Apache License, Version 2.0](LICENSE).
+[Apache License, Version 2.0](LICENSE). See also [NOTICE](NOTICE).

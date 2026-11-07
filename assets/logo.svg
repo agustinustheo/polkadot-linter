@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320" role="img" aria-label="polkadot-linter: a magnifying glass over a grid of dots, one flagged">
+  <title>polkadot-linter</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1c1626"/>
+      <stop offset="1" stop-color="#110d17"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.2" cy="0.5" r="0.4">
+      <stop offset="0" stop-color="#E6007A" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#E6007A" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="lens"><circle cx="230" cy="150" r="86"/></clipPath>
+  </defs>
+  <rect width="1280" height="320" rx="32" fill="url(#bg)"/>
+  <rect width="1280" height="320" rx="32" fill="url(#glow)"/>
+
+  <!-- dot grid: the code being scanned -->
+  <g fill="#ffffff" opacity="0.18">
+    <circle cx="130" cy="70" r="9"/><circle cx="180" cy="70" r="9"/><circle cx="230" cy="70" r="9"/><circle cx="280" cy="70" r="9"/><circle cx="330" cy="70" r="9"/>
+    <circle cx="130" cy="120" r="9"/><circle cx="180" cy="120" r="9"/><circle cx="230" cy="120" r="9"/><circle cx="280" cy="120" r="9"/><circle cx="330" cy="120" r="9"/>
+    <circle cx="130" cy="170" r="9"/><circle cx="180" cy="170" r="9"/><circle cx="230" cy="170" r="9"/><circle cx="280" cy="170" r="9"/><circle cx="330" cy="170" r="9"/>
+    <circle cx="130" cy="220" r="9"/><circle cx="180" cy="220" r="9"/><circle cx="230" cy="220" r="9"/><circle cx="280" cy="220" r="9"/><circle cx="330" cy="220" r="9"/>
+    <circle cx="130" cy="270" r="9"/><circle cx="180" cy="270" r="9"/><circle cx="230" cy="270" r="9"/>
+  </g>
+
+  <!-- under the lens: dots magnified, one flagged -->
+  <circle cx="230" cy="150" r="86" fill="#1c1626"/>
+  <g clip-path="url(#lens)">
+    <g fill="#ffffff" opacity="0.75">
+      <circle cx="170" cy="105" r="15"/><circle cx="230" cy="105" r="15"/><circle cx="290" cy="105" r="15"/>
+      <circle cx="170" cy="165" r="15"/><circle cx="290" cy="165" r="15"/>
+      <circle cx="170" cy="225" r="15"/><circle cx="230" cy="225" r="15"/><circle cx="290" cy="225" r="15"/>
+    </g>
+    <circle cx="230" cy="165" r="19" fill="#E6007A"/>
+    <circle cx="230" cy="165" r="30" fill="none" stroke="#E6007A" stroke-width="5" opacity="0.6"/>
+  </g>
+  <circle cx="230" cy="150" r="86" fill="none" stroke="#f2eef7" stroke-width="12"/>
+  <path d="M292 212 L352 272" stroke="#f2eef7" stroke-width="22" stroke-linecap="round"/>
+
+  <!-- wordmark -->
+  <text x="430" y="168" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="84" font-weight="700" fill="#f2eef7">polkadot<tspan fill="#E6007A">-</tspan>linter</text>
+  <text x="434" y="228" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="28" fill="#b9aec8">precision-first lints for Polkadot SDK &amp; FRAME</text>
+  <path d="M434 252 L452 264 L434 276" fill="none" stroke="#E6007A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="464" y="268" width="30" height="7" rx="3.5" fill="#b9aec8"/>
+</svg>

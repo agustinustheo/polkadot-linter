@@ -23,9 +23,22 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
   sampled findings on polkadot-sdk or third-party parachain repositories were under 30%
   actionable or at least 30% false positives are off by default, as are the
   Parity SDK style conventions `SEM002`, `SEM003`, `SEM004`, `SEM012` and
-  `TST003`; each rule page and family table says "off by default". Set a rule
-  to `true` to enable it, or use the repository's `config/all-rules.toml` to
-  run every rule.
+  `TST003`; `SEM007`, `TST005` and `MOK001` were mostly false positives in an
+  earlier sample. Each rule page and family table says "off by default", and
+  [All Rules](../rule-index.md) lists them on one page. The evidence is in the
+  repository's `benchmarks/precision/` audits. Set a rule to `true` to enable
+  it, or use the repository's `config/all-rules.toml` to run every rule.
+  Projects that follow the SDK conventions can turn them back on:
+
+  ```toml
+  [rules.enabled]
+  SEM002 = true
+  SEM003 = true
+  SEM004 = true
+  SEM007 = true  # only if you depend on sp-debug-derive >= 15
+  SEM012 = true
+  TST003 = true
+  ```
 - `[rules.severity]` promotes or demotes individual rules without code changes.
   It does not enable a rule: a severity set for a default-off rule (for example
   `SEC008 = "error"` from an older config) has no effect until the rule is also
