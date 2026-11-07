@@ -62,3 +62,5 @@ cli	SEM006	pallet-proxy	substrate/frame/proxy	substrate/frame/proxy/src/lib.rs	0
 cli	SEM009	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/pallet/impls.rs	0	0
 cli	VAL003	pallet-multisig	substrate/frame/multisig	substrate/frame/multisig/src/lib.rs	0	0
 cli	VAL003	pallet-staking	substrate/frame/staking	substrate/frame/staking/src/ledger.rs	0	0
+cli	SEC019	staging-xcm-executor	polkadot/xcm/xcm-executor	polkadot/xcm/xcm-executor/src/lib.rs	0	1
+cli	SEC020	pallet-mmr	substrate/frame/merkle-mountain-range	substrate/frame/merkle-mountain-range/src/mmr/mmr.rs	0	0

@@ -28,7 +28,7 @@ use rustc_hir::{
     PatExprKind, PatKind, QPath, StmtKind,
 };
 use rustc_interface::interface::Compiler;
-use rustc_middle::ty::{AliasTyKind, GenericArgKind, Ty, TyCtxt, TyKind};
+use rustc_middle::ty::{AliasTyKind, BorrowKind, GenericArgKind, Ty, TyCtxt, TyKind, UpvarCapture};
 use rustc_span::{hygiene::ExpnKind, source_map::SourceMap, Span, Symbol};
 use serde::Serialize;
 use syn::{
@@ -326,6 +326,17 @@ impl Callbacks for PolkadotCallbacks {
                     &self.parsed_weight_attributes,
                     &mut self.diagnostics,
                 );
+            }
+
+            if self.rule_enabled("SEC019") || self.rule_enabled("SEC020") {
+                Sec019Sec020Visitor {
+                    tcx,
+                    typeck,
+                    sec019: self.rule_enabled("SEC019"),
+                    sec020: self.rule_enabled("SEC020"),
+                    diagnostics: &mut self.diagnostics,
+                }
+                .visit_body(body);
             }
 
             if !matches!(body_owner_kind, BodyOwnerKind::Fn) {
@@ -1420,6 +1431,372 @@ fn report_discarded_results<'tcx>(
         };
         visitor.visit_body(body);
     }
+}
+
+/// SEC019 (imbalance captured into a storage-layer closure) and SEC020
+/// (verifier `bool` verdict discarded) both inspect calls in one body.
+struct Sec019Sec020Visitor<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    sec019: bool,
+    sec020: bool,
+    diagnostics: &'a mut Vec<RustcDiagnostic>,
+}
+
+impl<'tcx> Visitor<'tcx> for Sec019Sec020Visitor<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        let (def_id, name_span, args, args_owner) = match expr.kind {
+            ExprKind::Call(callee, args) => (
+                resolved_call_def_id(self.typeck, callee),
+                callee.span,
+                args,
+                callee.hir_id,
+            ),
+            ExprKind::MethodCall(segment, _, args, _) => (
+                self.typeck.type_dependent_def_id(expr.hir_id),
+                segment.ident.span,
+                args,
+                expr.hir_id,
+            ),
+            _ => (None, expr.span, &[][..], expr.hir_id),
+        };
+        if let Some((def_id, name)) =
+            def_id.and_then(|def_id| Some((def_id, self.tcx.opt_item_name(def_id)?)))
+        {
+            if self.sec019
+                && is_transactional_layer_fn(self.tcx, def_id, name.as_str())
+                // `impl ProcessTransaction for ()` runs the closure without a storage layer.
+                && !(self.tcx.trait_of_assoc(def_id).is_some()
+                    && self.typeck.node_args(args_owner).type_at(0).is_unit())
+            {
+                for arg in args {
+                    if let ExprKind::Closure(closure) = arg.kind {
+                        self.report_escaping_imbalances(arg, closure);
+                    }
+                }
+            }
+            if self.sec020
+                && is_verifier_name(name.as_str())
+                && type_carries_bool_verdict(self.tcx, self.typeck.expr_ty(expr))
+                && verdict_is_discarded(self.tcx, expr.hir_id)
+            {
+                let (file, line, column) = span_location(self.tcx.sess.source_map(), name_span);
+                self.diagnostics.push(RustcDiagnostic {
+                    rule_id: "SEC020",
+                    rule_name: "discarded-verification-result",
+                    file,
+                    line,
+                    column,
+                    message: format!(
+                        "`{}` returns a bool verdict that is never inspected; `Ok(false)`/`false` (an invalid proof or signature) is treated as success. Bind the verdict and reject when it is false",
+                        name
+                    ),
+                });
+            }
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl<'tcx> Sec019Sec020Visitor<'_, 'tcx> {
+    fn report_escaping_imbalances(
+        &mut self,
+        closure_expr: &'tcx Expr<'tcx>,
+        closure: &'tcx rustc_hir::Closure<'tcx>,
+    ) {
+        let captured = self
+            .typeck
+            .closure_min_captures_flattened(closure.def_id)
+            .filter(|capture| {
+                matches!(
+                    capture.info.capture_kind,
+                    UpvarCapture::ByRef(BorrowKind::Mutable)
+                ) && capture.place.projections.is_empty()
+                    && type_holds_imbalance(self.tcx, capture.place.ty())
+            })
+            .map(|capture| capture.get_root_variable())
+            .collect::<HashSet<_>>();
+        if captured.is_empty() {
+            return;
+        }
+        let TyKind::Closure(_, closure_args) = self.typeck.node_type(closure_expr.hir_id).kind()
+        else {
+            return;
+        };
+        let output = closure_args.as_closure().sig().output().skip_binder();
+        let body_value = self.tcx.hir_body(closure.body).value;
+        let mut body = EscapeScan {
+            tcx: self.tcx,
+            typeck: self.typeck,
+            captured: &captured,
+            body_value: body_value.hir_id,
+            returns_outcome: output
+                .ty_adt_def()
+                .is_some_and(|adt| self.tcx.item_name(adt.did()).as_str() == "TransactionOutcome"),
+            outer_loop: None,
+            last_exit: None,
+            moves: Vec::new(),
+        };
+        body.visit_expr(body_value);
+        let mut reported = HashSet::new();
+        for (variable, _) in body
+            .moves
+            .into_iter()
+            .filter(|&(local, at)| body.last_exit >= Some(at) && reported.insert(local))
+        {
+            let (file, line, column) =
+                span_location(self.tcx.sess.source_map(), self.tcx.hir_span(variable));
+            self.diagnostics.push(RustcDiagnostic {
+                rule_id: "SEC019",
+                rule_name: "imbalance-escapes-transaction",
+                file,
+                line,
+                column,
+                message: format!(
+                    "`{}` is declared outside the transactional closure and receives a token imbalance inside it; it outlives the storage layer, so when the closure rolls back, storage is restored but the imbalance's Drop still writes issuance afterwards. Declare it inside the closure, or resolve it before returning",
+                    self.tcx.hir_name(variable)
+                ),
+            });
+        }
+    }
+}
+
+/// Scans a transactional closure body for imbalances moved into captured locals
+/// (`withdrawn.subsume_assets(credit)`, `slot = credit`) and for exits that can roll back
+/// after such a move. Positions are call-site byte offsets (so a cross-crate `ensure!` counts
+/// where it is written); inside a loop, a move counts from the outermost loop's start, since
+/// a later iteration can exit, unless its block then unconditionally leaves that loop.
+/// Nested closures are skipped: they may never run, and their exits don't end this closure.
+struct EscapeScan<'a, 'tcx> {
+    tcx: TyCtxt<'tcx>,
+    typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
+    captured: &'a HashSet<HirId>,
+    body_value: HirId,
+    /// `with_transaction*` closures return `TransactionOutcome`; only `Rollback` rolls back.
+    returns_outcome: bool,
+    outer_loop: Option<(HirId, Span)>,
+    last_exit: Option<rustc_span::BytePos>,
+    moves: Vec<(HirId, rustc_span::BytePos)>,
+}
+
+impl<'tcx> Visitor<'tcx> for EscapeScan<'_, 'tcx> {
+    fn visit_expr(&mut self, expr: &'tcx Expr<'tcx>) {
+        let moves_imbalance = |value: &Expr<'_>| {
+            let ty = self.typeck.expr_ty(value);
+            !ty.is_ref() && type_holds_imbalance(self.tcx, ty)
+        };
+        let receiver = match expr.kind {
+            ExprKind::MethodCall(_, receiver, args, _) if args.iter().any(moves_imbalance) => {
+                local_binding_id(self.typeck, receiver)
+            }
+            ExprKind::Assign(place, value, _) if moves_imbalance(value) => {
+                local_binding_id(self.typeck, place)
+            }
+            ExprKind::Closure(_) => return,
+            ExprKind::Loop(..) if self.outer_loop.is_none() => {
+                self.outer_loop = Some((expr.hir_id, expr.span.source_callsite()));
+                intravisit::walk_expr(self, expr);
+                self.outer_loop = None;
+                return;
+            }
+            ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_)) => {
+                if !self.returns_outcome {
+                    self.exit_at(expr.span);
+                }
+                None
+            }
+            ExprKind::Call(
+                callee @ Expr {
+                    kind: ExprKind::Path(qpath),
+                    ..
+                },
+                _,
+            ) => {
+                if let Res::Def(rustc_hir::def::DefKind::Ctor(..), ctor) =
+                    self.typeck.qpath_res(qpath, callee.hir_id)
+                {
+                    let variant = self.tcx.parent(ctor);
+                    let exits = if self.returns_outcome {
+                        self.tcx.item_name(variant).as_str() == "Rollback"
+                            && self.tcx.item_name(self.tcx.parent(variant)).as_str()
+                                == "TransactionOutcome"
+                    } else {
+                        self.tcx
+                            .is_lang_item(variant, rustc_hir::LangItem::ResultErr)
+                    };
+                    if exits && self.is_returned(expr.hir_id) {
+                        self.exit_at(expr.span);
+                    }
+                }
+                None
+            }
+            _ => None,
+        };
+        if let Some(local) = receiver.filter(|local| self.captured.contains(local)) {
+            let at = match self.outer_loop {
+                Some((id, span)) if !self.leaves_loop_after(expr.hir_id, id) => span.lo(),
+                _ => expr.span.source_callsite().hi(),
+            };
+            self.moves.push((local, at));
+        }
+        intravisit::walk_expr(self, expr);
+    }
+}
+
+impl EscapeScan<'_, '_> {
+    fn exit_at(&mut self, span: Span) {
+        self.last_exit = self.last_exit.max(Some(span.source_callsite().lo()));
+    }
+
+    /// Whether the statements after the one holding `expr`, in its block, include a `return`
+    /// or a `break` out of `outer_loop`, so the loop can't iterate again after `expr`.
+    fn leaves_loop_after(&self, expr: HirId, outer_loop: HirId) -> bool {
+        let mut current = expr;
+        for (parent_id, node) in self.tcx.hir_parent_iter(expr) {
+            if let rustc_hir::Node::Block(block) = node {
+                let rest = block.stmts.iter().skip_while(|stmt| stmt.hir_id != current);
+                return rest
+                    .filter_map(|stmt| match stmt.kind {
+                        StmtKind::Expr(e) | StmtKind::Semi(e) => Some(e),
+                        _ => None,
+                    })
+                    .chain(block.expr)
+                    .any(|e| match e.kind {
+                        ExprKind::Ret(_) => true,
+                        ExprKind::Break(dest, _) => dest.target_id == Ok(outer_loop),
+                        _ => false,
+                    });
+            }
+            current = parent_id;
+        }
+        false
+    }
+
+    /// Whether `expr` is `return`ed or is the closure's value (a tail or branch of its body).
+    fn is_returned(&self, expr: HirId) -> bool {
+        let mut current = expr;
+        for (parent_id, node) in self.tcx.hir_parent_iter(expr) {
+            if current == self.body_value {
+                return true;
+            }
+            let passes_value = match node {
+                rustc_hir::Node::Expr(parent) => match parent.kind {
+                    ExprKind::Ret(_) => return true,
+                    ExprKind::Block(..) | ExprKind::DropTemps(_) => true,
+                    ExprKind::If(cond, ..) | ExprKind::Match(cond, ..) => cond.hir_id != current,
+                    _ => false,
+                },
+                rustc_hir::Node::Block(block) => block.expr.is_some_and(|e| e.hir_id == current),
+                rustc_hir::Node::Arm(arm) => arm.body.hir_id == current,
+                _ => false,
+            };
+            if !passes_value {
+                return false;
+            }
+            current = parent_id;
+        }
+        false
+    }
+}
+
+/// Functions that run a closure in a storage layer: `with_storage_layer` and
+/// `ProcessTransaction::process` roll back when the closure returns `Err`, `with_transaction*`
+/// when it returns `TransactionOutcome::Rollback`.
+fn is_transactional_layer_fn(tcx: TyCtxt<'_>, def_id: DefId, name: &str) -> bool {
+    let krate = tcx.crate_name(def_id.krate);
+    match krate.as_str() {
+        "frame_support" => name.starts_with("with_transaction") || name == "with_storage_layer",
+        krate if krate.ends_with("xcm_executor") => {
+            name.starts_with("transactional_process")
+                || (name == "process"
+                    && tcx.def_kind(def_id).is_assoc()
+                    && tcx
+                        .associated_item(def_id)
+                        .trait_container(tcx)
+                        .or_else(|| implemented_trait_id(tcx, def_id))
+                        .is_some_and(|tr| tcx.item_name(tr).as_str() == "ProcessTransaction"))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty` (or a generic argument of it, e.g. `Vec<Credit<..>>`) is a value whose `Drop`
+/// writes total issuance: fungible(s) `Imbalance`, legacy `Positive/NegativeImbalance`, or
+/// xcm-executor `AssetsInHolding` (which holds imbalances).
+/// References and raw pointers are not followed: a `Vec<&Credit<..>>` owns no imbalance.
+fn type_holds_imbalance<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let mut walker = ty.walk();
+    while let Some(arg) = walker.next() {
+        let GenericArgKind::Type(ty) = arg.kind() else {
+            continue;
+        };
+        let def_id = match ty.kind() {
+            TyKind::Adt(adt, _) => adt.did(),
+            TyKind::Alias(AliasTyKind::Projection, alias) => alias.def_id,
+            TyKind::Ref(..) | TyKind::RawPtr(..) => {
+                walker.skip_current_subtree();
+                continue;
+            }
+            _ => continue,
+        };
+        let krate = tcx.crate_name(def_id.krate);
+        if match tcx.item_name(def_id).as_str() {
+            "NegativeImbalance" | "PositiveImbalance" => true,
+            "Imbalance" => krate.as_str() == "frame_support",
+            "AssetsInHolding" => krate.as_str().ends_with("xcm_executor"),
+            _ => false,
+        } {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_verifier_name(name: &str) -> bool {
+    name.contains("verify") || matches!(name, "is_valid" | "check_signature" | "validate_proof")
+}
+
+/// `bool`, `Result<bool, _>` or `Option<bool>`.
+fn type_carries_bool_verdict<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    ty.is_bool()
+        || (type_is_option_or_result(tcx, ty)
+            && matches!(ty.kind(), TyKind::Adt(_, args) if args.type_at(0).is_bool()))
+}
+
+/// Follows the verdict through `?` and value-preserving adapters and reports whether it ends in a
+/// statement, a `let _ =`, or an adapter that drops it (`is_ok()`, `map(|_| ..)`).
+fn verdict_is_discarded(tcx: TyCtxt<'_>, call: HirId) -> bool {
+    let mut current = call;
+    for (parent_id, node) in tcx.hir_parent_iter(call) {
+        match node {
+            rustc_hir::Node::Expr(parent) => match parent.kind {
+                ExprKind::DropTemps(_)
+                | ExprKind::Match(_, _, rustc_hir::MatchSource::TryDesugar(_)) => {}
+                // `?` desugars to `match Try::branch(value) { .. }`.
+                ExprKind::Call(callee, _)
+                    if matches!(callee.kind, ExprKind::Path(QPath::LangItem(..))) => {}
+                ExprKind::MethodCall(segment, receiver, args, _) if receiver.hir_id == current => {
+                    match segment.ident.as_str() {
+                        "map_err" | "inspect_err" | "ok" | "ok_or" | "ok_or_else" | "expect"
+                        | "unwrap" | "unwrap_or" | "unwrap_or_default" => {}
+                        "is_ok" | "is_err" | "is_some" | "is_none" => return true,
+                        "map" | "and_then" => {
+                            return matches!(args, [arg] if matches!(arg.kind, ExprKind::Closure(closure)
+                                if tcx.hir_body(closure.body).params.first()
+                                    .is_some_and(|param| matches!(param.pat.kind, PatKind::Wild))));
+                        }
+                        _ => return false,
+                    }
+                }
+                _ => return false,
+            },
+            rustc_hir::Node::Stmt(stmt) => return matches!(stmt.kind, StmtKind::Semi(_)),
+            rustc_hir::Node::LetStmt(local) => return matches!(local.pat.kind, PatKind::Wild),
+            _ => return false,
+        }
+        current = parent_id;
+    }
+    false
 }
 
 struct Sec006Visitor<'a, 'tcx> {

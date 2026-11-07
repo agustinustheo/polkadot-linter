@@ -33,6 +33,8 @@
   - [SEC016 - Runtime Upgrade Writes Storage Without a StorageVersion Check](rules/SEC016.md)
   - [SEC017 - Unbounded Vec Fields in Pallet Events](rules/SEC017.md)
   - [SEC018 - Weight Does Not Account for Unbounded Extrinsic Input](rules/SEC018.md)
+  - [SEC019 - Token Imbalance Escapes a Transactional Storage Layer](rules/SEC019.md)
+  - [SEC020 - Discarded Verification Verdict](rules/SEC020.md)
 - [Validation Order Rules (VAL)](rules/validation.md)
   - [VAL001 - Heavy Storage Reads Before Cheap Validation](rules/VAL001.md)
   - [VAL002 - Division by Unproven Config, Storage, or Collection Divisors](rules/VAL002.md)

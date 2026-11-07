@@ -20,7 +20,7 @@ security IDs are retired and are not registered in the public rule set.
 | --- | --- |
 | `VAL002`, `VAL003` | Resolved expressions, control flow, and storage-write evidence. |
 | `SEM006`, `SEM009`, `SEM010`, `SEM016` | Resolved paths, operators, storage methods, and trait implementations. |
-| `SEC001`-`SEC018` | Resolved types and paths, macro/cfg-expanded code, trait/operator resolution, and control-flow/dataflow evidence as required by each rule. |
+| `SEC001`-`SEC020` | Resolved types and paths, macro/cfg-expanded code, trait/operator resolution, and control-flow/dataflow evidence as required by each rule. |
 
 The focused driver checks in `scripts/check-rustc-*.sh` cover the released
 compiler path. `scripts/check-sdk-benchmarks.sh` maintains pinned SDK
@@ -52,8 +52,7 @@ not replace a more accurate source implementation merely for uniformity.
 
 ## Scope boundaries
 
-The current binary has no `DOC001`, `SEC019`, `SEC020`, `SEM017`, `SEM018`,
-or `TST007` rule. Those identifiers must not be described as enforced until
+The current binary has no `DOC001`, `SEM017`, `SEM018`, or `TST007` rule. Those identifiers must not be described as enforced until
 they are implemented, tested, registered, and benchmarked. A clean run only
 means the implemented evidence was absent; it does not replace runtime review,
 benchmark review, or whole-program security analysis.
