@@ -31,7 +31,7 @@ owns each rule.
 
 ## Precision first
 
-29 of the 63 rules are on by default. The other 34 were measured on real code
+29 of the 64 rules are on by default. The other 35 were measured on real code
 and found too noisy, or are Parity SDK style conventions. They stay available
 through `[rules.enabled]` or `config/all-rules.toml`.
 

@@ -85,3 +85,4 @@ run with `config/all-rules.toml`.
 | [`SEC021`](rules/SEC021.md) | Security | `inverted-verification-guard` | `error` | `if verify(..) { reject }`: the rejecting branch runs when the verifier returns `true`. |
 | [`SEC022`](rules/SEC022.md) | Security | `discarded-origin-check` | `error` | The `Result` of `ensure_signed`/`ensure_root`/`EnsureOrigin::ensure_origin` is discarded, so any origin passes. Off by default. |
 | [`SEC023`](rules/SEC023.md) | Security | `option-equality-authorization` | `error` | An `EnsureOrigin` impl compares two `Option`s, so `None == None` authorizes. Off by default. |
+| [`SEC024`](rules/SEC024.md) | Security | `discarded-funds-in-error` | `error` | A `Result` whose `Err` holds a `Credit`/`Debt`/imbalance (e.g. `resolve`) is discarded, so the funds are burned or minted. Off by default. |

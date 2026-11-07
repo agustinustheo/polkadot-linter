@@ -33,7 +33,7 @@ available, but are off unless you ask for them.
 
 ## Highlights
 
-- **Precision first.** 29 of 63 rules are on by default. The rest were
+- **Precision first.** 29 of 64 rules are on by default. The rest were
   measured, found noisy, and turned off. The numbers are in
   [`benchmarks/precision/`](benchmarks/precision).
 - **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
@@ -138,7 +138,7 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html), [TST006](http://agustinustheo.github.io/polkadot-linter/rules/TST006.html) | error, warning | `assert_ok!` on `apply_extrinsic`; storage-mutating extrinsic without an event | |
 | SEM009, SEM013, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, `#[repr(u8)]` invalidity enums, OCW log targets, spelling | |
 
-Every rule, including the 34 that are off by default, is in the
+Every rule, including the 35 that are off by default, is in the
 [rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
 
 ## How rules are measured
