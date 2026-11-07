@@ -8,6 +8,7 @@
 - [Command-Line Reference](guide/cli-reference.md)
 - [Output & Exit Codes](guide/output-and-exit-codes.md)
 - [Configuration](guide/configuration.md)
+- [Suppressing Findings](guide/suppressing-findings.md)
 - [CI Integration](guide/ci-integration.md)
 - [Rule Authority Matrix](rule-authority-matrix.md)
 - [Review Remediation](review-remediation.md)
