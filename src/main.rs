@@ -458,7 +458,7 @@ mod tests {
             selected_compiler_backed_rules(None, &[], &Config::default()),
             strings(&[
                 "SEM009", "SEM010", "SEM016", "SEC006", "SEC010", "SEC011", "SEC012", "SEC015",
-                "SEC020"
+                "SEC020", "SEC021",
             ])
         );
     }
