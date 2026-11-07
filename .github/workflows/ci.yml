@@ -95,6 +95,12 @@ jobs:
       - name: Check rustc-backed SEM016 authorized-transaction detection
         run: scripts/check-rustc-sem016.sh
 
+      - name: Check rustc-backed SEC019/SEC020 imbalance and verdict detection
+        run: scripts/check-rustc-sec019-sec020.sh
+
+      - name: Check rustc-backed SEC021-SEC023 auth-guard detection
+        run: scripts/check-rustc-sec021-sec023.sh
+
       - name: Check rustc-backed SDK benchmarks
         run: scripts/check-sdk-benchmarks.sh .repos/polkadot-sdk .benchmarks
 
