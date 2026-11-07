@@ -53,6 +53,9 @@ repository's `benchmarks/precision/` directory.
   covers formats, severities and gating. See also
   [CI Integration](guide/ci-integration.md).
 - **Tuning it?** See [Configuration](guide/configuration.md).
+- **Using a coding agent?** Give it the
+  [agent skill](https://github.com/agustinustheo/polkadot-linter/blob/main/skill/SKILL.md).
+  The repository README's "For AI agents" section shows how to install it.
 - **Looking up a rule?** [All Rules](rule-index.md) lists every rule on one
   page. The **Rules Reference** in the sidebar has a page per rule: what it
   detects, the incident behind it, bad and good examples, and configuration.
