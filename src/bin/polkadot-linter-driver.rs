@@ -1815,7 +1815,8 @@ fn result_is_discarded(tcx: TyCtxt<'_>, call: HirId, followed: Followed) -> bool
     } else if followed == Followed::OriginError {
         (&["ok", "err", "map", "map_err", "is_ok", "is_err"], &[])
     } else {
-        (&["ok", "err", "map", "is_ok", "is_err"], &[])
+        // Not `err`: `.err().map(..)` would act on the funds themselves.
+        (&["ok", "map", "is_ok", "is_err"], &[])
     };
     let mut current = call;
     for (parent_id, node) in tcx.hir_parent_iter(call) {

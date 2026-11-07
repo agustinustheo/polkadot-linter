@@ -146,6 +146,7 @@ pub fn handled(who: u64) -> Result<(), Credit<u64>> {
     let _ = Balances::resolve(&who, c()).map_err(|credit| drop(credit)); // OK SEC024
     Balances::resolve(&who, c()).unwrap_or_else(|credit| handle(credit)); // OK SEC024
     let _ = Balances::resolve(&who, c()).defensive(); // OK SEC024
+    let _ = Balances::resolve(&who, c()).err().map(|credit| handle(credit)); // OK SEC024
     if Balances::resolve(&who, c()).is_err() { // OK SEC024
         return Ok(());
     }
