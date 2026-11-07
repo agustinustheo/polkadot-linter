@@ -115,6 +115,9 @@ pub struct RuntimeConfigConfig {
     pub include_dev_runtimes: bool,
     /// Cargo package names of development runtimes that are not meant for production
     pub dev_runtime_packages: Vec<String>,
+    /// Package or crate-directory name tokens that mark a dev runtime (e.g.
+    /// `peaq-dev`, `development-runtime`), skipped like `dev_runtime_packages`.
+    pub dev_runtime_tokens: Vec<String>,
     /// Package or crate-directory name tokens (split on `-`/`_`) that mark a
     /// test runtime, which is always skipped. Set to `[]` to lint them.
     pub test_runtime_tokens: Vec<String>,
@@ -139,6 +142,7 @@ impl Default for RuntimeConfigConfig {
                 "rococo-parachain-runtime".to_string(),
                 "yet-another-parachain-runtime".to_string(),
             ],
+            dev_runtime_tokens: vec!["dev".to_string(), "development".to_string()],
             test_runtime_tokens: vec![
                 "test".to_string(),
                 "tests".to_string(),

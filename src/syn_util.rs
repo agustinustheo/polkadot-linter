@@ -165,3 +165,32 @@ pub(crate) fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
     visitor.visit_type(ty);
     visitor.found
 }
+
+/// `#[test]`, or a `cfg` that requires `test` (`all(test, ..)`, `any(test, doctest)`).
+pub(crate) fn test_only(attrs: &[Attribute]) -> bool {
+    fn requires_test(meta: &syn::Meta) -> bool {
+        match meta {
+            syn::Meta::Path(path) => path.is_ident("test") || path.is_ident("doctest"),
+            syn::Meta::List(list) => {
+                let Ok(predicates) = list.parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+                ) else {
+                    return false;
+                };
+                (list.path.is_ident("all") && predicates.iter().any(requires_test))
+                    || (list.path.is_ident("any")
+                        && !predicates.is_empty()
+                        && predicates.iter().all(requires_test))
+            }
+            _ => false,
+        }
+    }
+    attrs.iter().any(|attr| {
+        attr.path().is_ident("test")
+            || (attr.path().is_ident("cfg")
+                && attr
+                    .parse_args::<syn::Meta>()
+                    .ok()
+                    .is_some_and(|meta| requires_test(&meta)))
+    })
+}

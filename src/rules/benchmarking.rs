@@ -9,15 +9,15 @@ use std::{
 use syn::{
     spanned::Spanned,
     visit::{self, Visit},
-    Attribute, File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, TraitItem,
+    File as SynFile, ImplItem, ItemFn, ItemImpl, ItemTrait, TraitItem,
 };
 
 use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{crate_root, scan_cached, FileContext},
-    rules::LintRule,
-    syn_util::{has_attr, path_attr, path_last_ident, span_line},
+    engine::{crate_lib, crate_root, scan_cached, FileContext},
+    rules::{runtime_config::construct_runtime_entries, LintRule},
+    syn_util::{has_attr, path_attr, path_last_ident, span_line, test_only},
 };
 
 fn parse_ast(content: &str) -> Option<SynFile> {
@@ -147,6 +147,7 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
 
 // Syntax is intentionally kept here: these macros consume authored verification
 // and call markers before compiler expansion.
+#[derive(Clone)]
 struct Benchmark {
     name: String,
     line: usize,
@@ -154,34 +155,9 @@ struct Benchmark {
     calls: HashSet<String>,
     verification: TokenStream,
     name_only: bool,
-}
-
-fn test_only(attrs: &[Attribute]) -> bool {
-    fn requires_test(meta: &syn::Meta) -> bool {
-        match meta {
-            syn::Meta::Path(path) => path.is_ident("test") || path.is_ident("doctest"),
-            syn::Meta::List(list) => {
-                let Ok(predicates) = list.parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                ) else {
-                    return false;
-                };
-                (list.path.is_ident("all") && predicates.iter().any(requires_test))
-                    || (list.path.is_ident("any")
-                        && !predicates.is_empty()
-                        && predicates.iter().all(requires_test))
-            }
-            _ => false,
-        }
-    }
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("test")
-            || (attr.path().is_ident("cfg")
-                && attr
-                    .parse_args::<syn::Meta>()
-                    .ok()
-                    .is_some_and(|meta| requires_test(&meta)))
-    })
+    /// v2 `#[block] {}` that returns `Err(BenchmarkError::Override(..))`: the
+    /// weight is set by hand and there is nothing to verify.
+    overridden: bool,
 }
 
 fn excluded_context(ctx: &FileContext) -> bool {
@@ -199,6 +175,9 @@ fn excluded_context(ctx: &FileContext) -> bool {
         || ctx.ast.as_ref().is_some_and(|ast| test_only(&ast.attrs))
 }
 
+/// Paths that name the current crate.
+const LOCAL: [&str; 3] = ["crate", "self", "super"];
+
 #[derive(Clone)]
 struct Owners {
     modules: HashSet<String>,
@@ -213,6 +192,11 @@ impl Owners {
             pallets: ["Pallet", "Self"].into_iter().map(str::to_owned).collect(),
             calls: ["Call"].into_iter().map(str::to_owned).collect(),
         }
+    }
+
+    /// The current crate's pallet, also reached as `crate::Pallet`.
+    fn local() -> Self {
+        Self::new(LOCAL.into_iter().map(str::to_owned).collect())
     }
 
     fn owns_type(&self, path: &syn::Path, call: bool) -> bool {
@@ -427,10 +411,20 @@ fn called_names(
                         .segments
                         .pop()
                         .map(|p| p.into_value().ident.to_string());
-                    if path.qself.is_none()
-                        && (self.owners.owns_type(&receiver, false)
-                            || (self.extrinsic_marker && path.path.segments.len() == 1))
-                    {
+                    let owned = match &path.qself {
+                        None => {
+                            self.owners.owns_type(&receiver, false)
+                                || (self.extrinsic_marker && path.path.segments.len() == 1)
+                        }
+                        // `<Pallet<T>>::call(..)`, but not `<T as Trait>::call(..)`.
+                        Some(qself) => {
+                            qself.position == 0
+                                && path.path.segments.len() == 1
+                                && matches!(&*qself.ty, syn::Type::Path(ty)
+                                    if ty.qself.is_none() && self.owners.owns_type(&ty.path, false))
+                        }
+                    };
+                    if owned {
                         self.names.extend(name);
                     }
                 }
@@ -543,6 +537,7 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
             end_line,
             calls,
             name_only: false,
+            overridden: false,
             verification: verify
                 .map(|i| match &measured[i + 1] {
                     TokenTree::Group(group) if !group.stream().is_empty() => {
@@ -558,7 +553,7 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
 
 fn collect_benchmarks(content: &str) -> Vec<Benchmark> {
     parse_ast(content)
-        .map(|ast| collect_benchmarks_ast(&ast, &Owners::new(HashSet::new())))
+        .map(|ast| collect_benchmarks_ast(&ast, &Owners::local()))
         .unwrap_or_default()
 }
 
@@ -594,6 +589,7 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                     .iter()
                     .any(|s| measured_statement(s).is_some());
                 let mut after_measurement = !has_measured;
+                let mut empty_block = false;
                 for stmt in &function.block.stmts {
                     if let Some(extrinsic_marker) = measured_statement(stmt) {
                         calls.extend(called_names(
@@ -605,6 +601,14 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                         ));
                         after_measurement = true;
                         verification = TokenStream::new();
+                        empty_block = false;
+                        if let syn::Stmt::Expr(syn::Expr::Block(block), _) = stmt {
+                            if !extrinsic_marker {
+                                empty_block = block.block.stmts.is_empty();
+                                verification =
+                                    block_verification(&block.block, &name, &bindings, &owners);
+                            }
+                        }
                     } else if after_measurement {
                         verification.extend(stmt.to_token_stream());
                     }
@@ -617,6 +621,7 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                 if !has_measured {
                     calls.insert(name.clone());
                 }
+                let overridden = empty_block && mentions_override(verification.clone());
                 self.entries.push(Benchmark {
                     name,
                     line: span_line(function.sig.fn_token.span),
@@ -624,6 +629,7 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                     calls,
                     verification,
                     name_only: !has_measured,
+                    overridden,
                 });
             }
         }
@@ -649,6 +655,71 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
         visitor.visit_file(ast);
     }
     visitor.entries
+}
+
+/// Statements of a measured `#[block]` that verify it: those after the first
+/// statement calling a pallet call, plus that statement if it asserts
+/// (`assert_ok!(Pallet::f(..))`). Assertions before the measured call are
+/// preconditions. A block with no pallet call that is assertion-only counts as
+/// a whole.
+fn block_verification(
+    block: &syn::Block,
+    benchmark: &str,
+    bindings: &HashMap<String, String>,
+    owners: &Owners,
+) -> TokenStream {
+    let owners = owners.in_block(block);
+    let mut bindings = bindings.clone();
+    let mut verification = TokenStream::new();
+    let mut measured = false;
+    for stmt in &block.stmts {
+        if measured {
+            verification.extend(stmt.to_token_stream());
+        } else if !called_names(stmt.to_token_stream(), benchmark, &bindings, &owners, false)
+            .is_empty()
+        {
+            measured = true;
+            // An assertion in the calling statement (`assert_ok!(Pallet::f(..))`)
+            // verifies it.
+            if has_verification(stmt.to_token_stream(), &[]) {
+                verification.extend(stmt.to_token_stream());
+            }
+        }
+        if let syn::Stmt::Local(local) = stmt {
+            bind_call(local, &owners, &mut bindings);
+        }
+    }
+    // A block whose every statement asserts (pov read benchmarks) measures
+    // what it asserts.
+    if !measured && assertion_only(&block.stmts) {
+        return block.to_token_stream();
+    }
+    verification
+}
+
+/// Every statement asserts. A statement holding blocks (a loop, closure or
+/// `let`) asserts only through them: each block must itself be assertion-only.
+fn assertion_only(stmts: &[syn::Stmt]) -> bool {
+    struct Blocks<'ast>(Vec<&'ast syn::Block>);
+    impl<'ast> Visit<'ast> for Blocks<'ast> {
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            self.0.push(block);
+        }
+    }
+    stmts.iter().all(|stmt| {
+        let mut blocks = Blocks(Vec::new());
+        blocks.visit_stmt(stmt);
+        if blocks.0.is_empty() {
+            has_verification(stmt.to_token_stream(), &[])
+        } else {
+            blocks.0.iter().all(|block| assertion_only(&block.stmts))
+        }
+    })
+}
+
+/// The tokens mention `BenchmarkError::Override`, at any depth.
+fn mentions_override(tokens: TokenStream) -> bool {
+    tokens.to_string().contains("BenchmarkError :: Override")
 }
 
 fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
@@ -728,10 +799,8 @@ fn discover_benchmarks(path: &Path) -> Discovery {
     };
     let crate_root = crate_root(path);
     let mut roots = vec![crate_root.unwrap_or(parent).to_path_buf()];
-    let mut modules = ["crate", "self", "super"]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<HashSet<_>>();
+    let mut hosted = Vec::new();
+    let mut modules = LOCAL.into_iter().map(str::to_owned).collect::<HashSet<_>>();
     if let Some(crate_root) = crate_root {
         if let Some(package_name) = manifest(&crate_root.join("Cargo.toml"))
             .and_then(|m| m.get("package")?.get("name")?.as_str().map(str::to_owned))
@@ -739,13 +808,7 @@ fn discover_benchmarks(path: &Path) -> Discovery {
             modules.insert(package_name.replace('-', "_"));
             // Find companion crates by directory scan, exact package name, and a
             // declared dependency back on this crate.
-            let workspace = crate_root
-                .ancestors()
-                .find(|dir| {
-                    manifest(&dir.join("Cargo.toml"))
-                        .is_some_and(|cargo| cargo.get("workspace").is_some())
-                })
-                .unwrap_or(crate_root);
+            let workspace = workspace_root(crate_root);
             let deps = manifest(&workspace.join("Cargo.toml"))
                 .and_then(|cargo| {
                     cargo
@@ -788,82 +851,211 @@ fn discover_benchmarks(path: &Path) -> Discovery {
                 {
                     continue;
                 }
-                let owns = companion
-                    .get("dependencies")
-                    .and_then(toml::Value::as_table)
-                    .is_some_and(|dependencies| {
-                        dependencies.iter().any(|(alias, dependency)| {
-                            let dep_package = dependency
-                                .get("package")
-                                .and_then(toml::Value::as_str)
-                                .unwrap_or(alias);
-                            if dep_package != package_name {
-                                return false;
-                            }
-                            let declared =
-                                if dependency.get("workspace").and_then(toml::Value::as_bool)
-                                    == Some(true)
-                                {
-                                    deps.get(alias)
-                                } else {
-                                    Some(dependency)
-                                };
-                            let base = if dependency.get("workspace").and_then(toml::Value::as_bool)
-                                == Some(true)
-                            {
-                                workspace
-                            } else {
-                                &candidate
-                            };
-                            declared
-                                .and_then(|d| d.get("path"))
-                                .and_then(toml::Value::as_str)
-                                .is_some_and(|p| {
-                                    base.join(p).canonicalize().ok()
-                                        == crate_root.canonicalize().ok()
-                                })
-                        })
-                    });
-                if owns {
-                    if let Some(dependencies) = companion
-                        .get("dependencies")
-                        .and_then(toml::Value::as_table)
-                    {
-                        for (alias, dep) in dependencies {
-                            if dep
-                                .get("package")
-                                .and_then(toml::Value::as_str)
-                                .unwrap_or(alias)
-                                == package_name
-                            {
-                                modules.insert(alias.replace('-', "_"));
-                            }
+                let aliases = dependency_aliases(
+                    &companion,
+                    &candidate,
+                    &package_name,
+                    crate_root,
+                    workspace,
+                    &deps,
+                );
+                if !aliases.is_empty() {
+                    modules.extend(aliases.iter().map(|alias| alias.replace('-', "_")));
+                    roots.push(candidate);
+                }
+            }
+            // Benchmarks another workspace crate (e.g. a runtime) hosts for this
+            // pallet in an orml `runtime_benchmarks! { { Runtime, pallet } .. }`.
+            if workspace != crate_root {
+                for member in workspace_members(workspace).iter() {
+                    let Some(cargo) = manifest(&member.join("Cargo.toml")) else {
+                        continue;
+                    };
+                    for alias in dependency_aliases(
+                        &cargo,
+                        member,
+                        &package_name,
+                        crate_root,
+                        workspace,
+                        &deps,
+                    ) {
+                        if let Some(entries) =
+                            hosted_benchmarks(member).get(&alias.replace('-', "_"))
+                        {
+                            hosted.extend(entries.iter().cloned());
                         }
                     }
-                    roots.push(candidate);
                 }
             }
         }
     }
     let mut discovery = Discovery::default();
     let owners = Owners::new(modules);
+    let benchmarks = &mut discovery.benchmarks;
+    let mut visit = |ast: &SynFile, owners: &Owners| {
+        benchmarks.extend(collect_benchmarks_ast(ast, owners));
+    };
     for root in roots {
         if crate_root.is_some() {
-            let cargo = manifest(&root.join("Cargo.toml"));
-            let lib = cargo
-                .as_ref()
-                .and_then(|c| c.get("lib")?.get("path")?.as_str())
-                .unwrap_or("src/lib.rs");
-            let lib = root.join(lib);
-            discover_module(&lib, Some(&lib), &owners, &mut discovery);
+            let lib = crate_lib(&root, manifest(&root.join("Cargo.toml")).as_deref());
+            discover_module(&lib, Some(&lib), &owners, &mut discovery.files, &mut visit);
         } else {
             // Standalone source snippets have no Cargo module root.
             for file in benchmark_sources(&root) {
-                discover_module(&file, None, &owners, &mut discovery);
+                discover_module(&file, None, &owners, &mut discovery.files, &mut visit);
             }
         }
     }
+    // Hosted entries carry only a name and the measured calls (for BEN001 and
+    // BEN003); BEN002 reads benchmark files directly and never sees them.
+    discovery.benchmarks.extend(hosted);
     discovery
+}
+
+fn workspace_root(crate_root: &Path) -> &Path {
+    crate_root
+        .ancestors()
+        .find(|dir| {
+            manifest(&dir.join("Cargo.toml")).is_some_and(|cargo| cargo.get("workspace").is_some())
+        })
+        .unwrap_or(crate_root)
+}
+
+/// Aliases under which the manifest `dependent` (of the crate at `dir`)
+/// depends on `package_name` at `crate_root`, by path or workspace path.
+fn dependency_aliases(
+    dependent: &toml::Value,
+    dir: &Path,
+    package_name: &str,
+    crate_root: &Path,
+    workspace: &Path,
+    deps: &toml::map::Map<String, toml::Value>,
+) -> Vec<String> {
+    let Some(dependencies) = dependent
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+    else {
+        return Vec::new();
+    };
+    dependencies
+        .iter()
+        .filter(|(alias, dependency)| {
+            let dep_package = dependency
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(alias);
+            if dep_package != package_name {
+                return false;
+            }
+            let (declared, base) =
+                if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                    (deps.get(alias.as_str()), workspace)
+                } else {
+                    (Some(*dependency), dir)
+                };
+            declared
+                .and_then(|d| d.get("path"))
+                .and_then(toml::Value::as_str)
+                .is_some_and(|p| base.join(p).canonicalize().ok() == crate_root.canonicalize().ok())
+        })
+        .map(|(alias, _)| alias.clone())
+        .collect()
+}
+
+fn workspace_members(workspace: &Path) -> Rc<Vec<PathBuf>> {
+    scan_cached(workspace.join("Cargo.toml"), |cargo| {
+        let members = manifest(cargo)
+            .and_then(|m| m.get("workspace")?.get("members")?.as_array().cloned())
+            .unwrap_or_default();
+        Rc::new(
+            members
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .filter_map(|member| glob::glob(&workspace.join(member).to_string_lossy()).ok())
+                .flat_map(|paths| paths.flatten())
+                .collect(),
+        )
+    })
+}
+
+/// Benchmarks in orml `runtime_benchmarks!` blocks of
+/// the crate's declared non-test modules, keyed by the pallet named in the
+/// `{ Runtime, pallet }` header.
+type Hosted = HashMap<String, Vec<Benchmark>>;
+
+fn hosted_benchmarks(root: &Path) -> Rc<Hosted> {
+    scan_cached(root.to_path_buf(), |root| {
+        // Benchmark tokens with their file's `use`/`type` items, and
+        // `construct_runtime!` names (`Ice: pallet_ice`), keyed by pallet crate.
+        let mut blocks = HashMap::<String, Vec<(TokenStream, Vec<syn::Item>)>>::new();
+        let mut names = HashMap::<String, HashSet<String>>::new();
+        let lib = crate_lib(root, manifest(&root.join("Cargo.toml")).as_deref());
+        let mut visit = |ast: &SynFile, _: &Owners| {
+            for item in &ast.items {
+                let syn::Item::Macro(item) = item else {
+                    continue;
+                };
+                if test_only(&item.attrs) {
+                    continue;
+                }
+                let mut tokens = item.mac.tokens.clone().into_iter();
+                match path_last_ident(&item.mac.path).as_deref() {
+                    Some("runtime_benchmarks") => {
+                        let Some(TokenTree::Group(header)) = tokens.next() else {
+                            continue;
+                        };
+                        if let Some(TokenTree::Ident(pallet)) = header.stream().into_iter().last() {
+                            let aliases = ast
+                                .items
+                                .iter()
+                                .filter(|item| {
+                                    matches!(item, syn::Item::Use(_) | syn::Item::Type(_))
+                                })
+                                .cloned()
+                                .collect();
+                            blocks
+                                .entry(pallet.to_string())
+                                .or_default()
+                                .push((tokens.collect(), aliases));
+                        }
+                    }
+                    Some("construct_runtime") => {
+                        // `Name: pallet_x ..`: attributes are groups, so the
+                        // first two idents are the name and the crate.
+                        for entry in construct_runtime_entries(item.mac.tokens.clone()) {
+                            let mut idents = entry.iter().filter_map(|tree| match tree {
+                                TokenTree::Ident(ident) => Some(ident.to_string()),
+                                _ => None,
+                            });
+                            if let (Some(name), Some(krate)) = (idents.next(), idents.next()) {
+                                names.entry(krate).or_default().insert(name);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+        let owners = Owners::new(HashSet::new());
+        discover_module(&lib, Some(&lib), &owners, &mut HashSet::new(), &mut visit);
+        let mut hosted = Hosted::new();
+        for (pallet, blocks) in blocks {
+            // Block-form calls count on `pallet_x::Pallet` or its runtime name,
+            // also when imported as `crate::Name`.
+            let modules = LOCAL.into_iter().chain([pallet.as_str()]);
+            let mut owners = Owners::new(modules.map(str::to_owned).collect());
+            owners
+                .pallets
+                .extend(names.get(&pallet).into_iter().flatten().cloned());
+            hosted
+                .entry(pallet)
+                .or_default()
+                .extend(blocks.into_iter().flat_map(|(tokens, aliases)| {
+                    legacy_benchmarks(tokens, &owners.in_scope(&aliases))
+                }));
+        }
+        Rc::new(hosted)
+    })
 }
 
 #[derive(Default)]
@@ -880,18 +1072,22 @@ impl Discovery {
     }
 }
 
+type FileVisit<'a> = dyn FnMut(&SynFile, &Owners) + 'a;
+
+/// Visits each non-test file declared (`mod`, `#[path]`) from `file`.
 fn discover_module(
     file: &Path,
     crate_root_file: Option<&Path>,
     owners: &Owners,
-    discovery: &mut Discovery,
+    files: &mut HashSet<PathBuf>,
+    visit: &mut FileVisit,
 ) {
     let is_crate_root = Some(file) == crate_root_file;
     let Ok(canonical) = file.canonicalize() else {
         return;
     };
     let file = canonical.as_path();
-    if discovery.files.contains(file) {
+    if files.contains(file) {
         return;
     }
     let Some(ast) = std::fs::read_to_string(file)
@@ -903,10 +1099,8 @@ fn discover_module(
     if test_only(&ast.attrs) {
         return;
     }
-    discovery.files.insert(file.to_path_buf());
-    discovery
-        .benchmarks
-        .extend(collect_benchmarks_ast(&ast, owners));
+    files.insert(file.to_path_buf());
+    visit(&ast, owners);
     let parent = file.parent().unwrap_or(Path::new("."));
     let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let module_dir = if is_crate_root || matches!(stem, "lib" | "main" | "mod") {
@@ -914,7 +1108,7 @@ fn discover_module(
     } else {
         parent.join(stem)
     };
-    discover_children(&ast.items, &module_dir, parent, owners, discovery);
+    discover_children(&ast.items, &module_dir, parent, owners, files, visit);
 }
 
 fn discover_children(
@@ -922,7 +1116,8 @@ fn discover_children(
     dir: &Path,
     path_base: &Path,
     owners: &Owners,
-    discovery: &mut Discovery,
+    files: &mut HashSet<PathBuf>,
+    visit: &mut FileVisit,
 ) {
     let owners = owners.in_scope(items);
     for item in items {
@@ -937,7 +1132,7 @@ fn discover_children(
             let child_dir = explicit
                 .map(|p| dir.join(p))
                 .unwrap_or_else(|| dir.join(module.ident.to_string()));
-            discover_children(items, &child_dir, &child_dir, &owners, discovery);
+            discover_children(items, &child_dir, &child_dir, &owners, files, visit);
         } else {
             let file = explicit.map(|p| path_base.join(p)).unwrap_or_else(|| {
                 let flat = dir.join(format!("{}.rs", module.ident));
@@ -947,7 +1142,7 @@ fn discover_children(
                     dir.join(module.ident.to_string()).join("mod.rs")
                 }
             });
-            discover_module(&file, None, &owners, discovery);
+            discover_module(&file, None, &owners, files, visit);
         }
     }
 }
@@ -1069,7 +1264,7 @@ impl LintRule for BenchmarkVerification {
         let benchmarks = ctx
             .ast
             .as_ref()
-            .map(|ast| collect_benchmarks_ast(ast, &Owners::new(HashSet::new())))
+            .map(|ast| collect_benchmarks_ast(ast, &Owners::local()))
             .unwrap_or_else(|| collect_benchmarks(ctx.content));
         if benchmarks.is_empty() {
             return None;
@@ -1081,10 +1276,12 @@ impl LintRule for BenchmarkVerification {
         }
         let mut diagnostics = Vec::new();
         for benchmark in benchmarks {
-            if !has_verification(
-                benchmark.verification,
-                &config.benchmarking.verification_patterns,
-            ) {
+            if !benchmark.overridden
+                && !has_verification(
+                    benchmark.verification,
+                    &config.benchmarking.verification_patterns,
+                )
+            {
                 diagnostics.push(Diagnostic {
                     rule_id: self.id().to_string(),
                     rule_name: self.name().to_string(),

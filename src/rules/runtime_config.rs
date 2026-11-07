@@ -21,7 +21,8 @@
 //!   through `#[cfg(test)]` (or benchmark-gated) `mod` declarations,
 //!   `mock`/`tests`/`benches` path tokens, and test runtime crates (a package
 //!   or directory name token listed in `test_runtime_tokens`);
-//! - dev runtimes listed in `[runtime_config].dev_runtime_packages` are
+//! - dev runtimes listed in `[runtime_config].dev_runtime_packages`, or whose
+//!   package or directory name has a `dev_runtime_tokens` token, are
 //!   skipped unless `include_dev_runtimes = true`.
 
 use std::{
@@ -44,7 +45,7 @@ use syn::{
 use crate::{
     config::{Config, RuntimeConfigConfig},
     diagnostics::{Diagnostic, RuleCategory, Severity},
-    engine::{scan_cached, FileContext},
+    engine::{crate_lib, scan_cached, FileContext},
     rules::LintRule,
     syn_util::{compact_tokens, macro_name, path_attr, path_last_ident, strip_expr_wrappers},
 };
@@ -125,7 +126,7 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
 fn load_runtime_crate(root: &Path) -> RuntimeCrate {
     let manifest = fs::read_to_string(root.join("Cargo.toml"))
         .ok()
-        .and_then(|manifest| manifest.parse::<toml::Table>().ok());
+        .and_then(|manifest| manifest.parse::<toml::Value>().ok());
     let package = manifest
         .as_ref()
         .and_then(|manifest| manifest.get("package")?.get("name")?.as_str())
@@ -140,13 +141,13 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         };
     }
 
-    let lib_path = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.get("lib")?.get("path")?.as_str())
-        .unwrap_or("src/lib.rs");
-
     let mut modules = ModuleTree::default();
-    modules.walk(&root.join(lib_path), true, Gate::Production, false);
+    modules.walk(
+        &crate_lib(root, manifest.as_ref()),
+        true,
+        Gate::Production,
+        false,
+    );
 
     let mut declarations = Declarations::default();
     for module in modules.files.values() {
@@ -433,15 +434,10 @@ fn is_test_path(path: &Path) -> bool {
         .any(|component| is_test_component(&component.as_os_str().to_string_lossy()))
 }
 
-/// Package or directory names that identify a test-only runtime crate: one of
-/// the configured `test_runtime_tokens` is a whole name token.
-fn is_test_package(name: &str, config: &RuntimeConfigConfig) -> bool {
-    name_tokens(name).any(|token| {
-        config
-            .test_runtime_tokens
-            .iter()
-            .any(|test| test.eq_ignore_ascii_case(&token))
-    })
+/// One of `tokens` is a whole name token of the package or directory `name`,
+/// e.g. `test` in `polkadot-test-runtime` but not in `mychain-testnet-runtime`.
+fn has_name_token(name: &str, tokens: &[String]) -> bool {
+    name_tokens(name).any(|token| tokens.iter().any(|t| t.eq_ignore_ascii_case(&token)))
 }
 
 /// Shared gate: the file is non-test source of a production (or opted-in dev)
@@ -477,16 +473,17 @@ fn runtime_scope(ctx: &FileContext, config: &RuntimeConfigConfig) -> Option<Arc<
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    if is_test_package(&dir_name, config) {
+    let package = krate.package.as_deref().unwrap_or_default();
+    let named =
+        |tokens: &[String]| has_name_token(&dir_name, tokens) || has_name_token(package, tokens);
+    if named(&config.test_runtime_tokens) {
         return None;
     }
-    if let Some(package) = &krate.package {
-        if is_test_package(package, config) {
-            return None;
-        }
-        if !config.include_dev_runtimes && config.dev_runtime_packages.contains(package) {
-            return None;
-        }
+    if !config.include_dev_runtimes
+        && (named(&config.dev_runtime_tokens)
+            || config.dev_runtime_packages.iter().any(|p| p == package))
+    {
+        return None;
     }
     Some(krate)
 }
@@ -1771,7 +1768,7 @@ fn find_ident(tokens: TokenStream, needles: &[&str]) -> Option<(String, usize)> 
 
 /// Pallet entries of a `construct_runtime!` body (`Name: path = index,`),
 /// without the entries gated on `cfg(test)` or benchmark/try-runtime features.
-fn construct_runtime_entries(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
+pub(crate) fn construct_runtime_entries(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
     // The entries are the last top-level brace group: `pub enum Runtime { .. }`
     // or the legacy `pub enum Runtime where .. { .. }`.
     let Some(body) = tokens

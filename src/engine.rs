@@ -233,6 +233,15 @@ pub(crate) fn crate_root(path: &Path) -> Option<&Path> {
         .find(|dir| dir.join("Cargo.toml").is_file())
 }
 
+/// The crate's `[lib] path` from its parsed manifest, or `src/lib.rs`.
+pub(crate) fn crate_lib(root: &Path, manifest: Option<&toml::Value>) -> PathBuf {
+    root.join(
+        manifest
+            .and_then(|m| m.get("lib")?.get("path")?.as_str())
+            .unwrap_or("src/lib.rs"),
+    )
+}
+
 thread_local! {
     static SCAN_CACHES: RefCell<Option<HashMap<TypeId, Box<dyn Any>>>> = const { RefCell::new(None) };
 }
