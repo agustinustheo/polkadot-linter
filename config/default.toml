@@ -74,6 +74,12 @@ VAL002 = false
 # in a closure defined before the comparison and called after it. Opt-in.
 SEC022 = false
 SEC023 = false
+# SEC024 (discarded `Result` whose `Err` holds funds): 10 compiled findings on
+# polkadot-sdk (28 crates) and astar-runtime, 3 TP / 7 NOISE / 0 FP. The noise is
+# deliberate "burn on failure" code, mostly commented as such (asset-tx-payment
+# refund, delegated-staking reporter reward, xcm-executor best-effort return).
+# See docs/rules/SEC024.md.
+SEC024 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]

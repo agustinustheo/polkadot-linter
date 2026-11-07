@@ -40,6 +40,7 @@
   - [SEC021 - Inverted Verification Guard](rules/SEC021.md)
   - [SEC022 - Discarded Origin Check](rules/SEC022.md)
   - [SEC023 - Option Equality in an Origin Check](rules/SEC023.md)
+  - [SEC024 - Discarded Funds in an Error](rules/SEC024.md)
 - [Validation Order Rules (VAL)](rules/validation.md)
   - [VAL001 - Heavy Storage Reads Before Cheap Validation](rules/VAL001.md)
   - [VAL002 - Division by Unproven Config, Storage, or Collection Divisors](rules/VAL002.md)

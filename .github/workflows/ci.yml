@@ -101,6 +101,9 @@ jobs:
       - name: Check rustc-backed SEC021-SEC023 auth-guard detection
         run: scripts/check-rustc-sec021-sec023.sh
 
+      - name: Check rustc-backed SEC024 discarded-funds detection
+        run: scripts/check-rustc-sec024.sh
+
       - name: Check rustc-backed SDK benchmarks
         run: scripts/check-sdk-benchmarks.sh .repos/polkadot-sdk .benchmarks
 
