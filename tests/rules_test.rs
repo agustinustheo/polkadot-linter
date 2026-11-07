@@ -6924,7 +6924,7 @@ fn rustdoc_sec013_honors_rule_disablement() {
             }
         }
     });
-    let mut config = polkadot_linter::config::Config::default();
+    let mut config = all_rules_config();
     config.rules.enabled.insert("SEC013".to_string(), false);
 
     let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(

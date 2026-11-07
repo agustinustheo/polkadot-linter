@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:red;">Critical</span>
 
-> **Linter coverage — Enforced.** The linter requires benchmarks for weight functions and extrinsics, and checks weight parameterisation, PoV/proof-size accounting, zero and placeholder weights, unsafe or expensive weight arithmetic, and input-length accounting. See [BEN001](../../rules/BEN001.md), [BEN003](../../rules/BEN003.md), [SEM005](../../rules/SEM005.md), [SEM006](../../rules/SEM006.md), [SEM011](../../rules/SEM011.md), [SEC004](../../rules/SEC004.md), [SEC005](../../rules/SEC005.md), and [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Enforced.** The linter requires benchmarks for weight functions and extrinsics, and checks weight parameterisation, PoV/proof-size accounting, zero and placeholder weights, unsafe or expensive weight arithmetic, and input-length accounting. BEN001, SEM005, SEM006, SEC004, SEC005 and SEC018 are off by default; BEN003 and SEM011 report by default. See [BEN001](../../rules/BEN001.md), [BEN003](../../rules/BEN003.md), [SEM005](../../rules/SEM005.md), [SEM006](../../rules/SEM006.md), [SEM011](../../rules/SEM011.md), [SEC004](../../rules/SEC004.md), [SEC005](../../rules/SEC005.md), and [SEC018](../../rules/SEC018.md).
 
 ## Description
 

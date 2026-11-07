@@ -77,7 +77,7 @@ Rule codes in the callouts link to the corresponding page in the
 | [Distribute finalization costs](high/Prevent_Inconsistent_State_By_Distributing_Finalization_Costs.md) | Partial | SEC011, SEC012 |
 | [Set up XCM barriers correctly](high/Properly_Setup_XCM_Barrier.md) | Review gate | — |
 | [Use atomic operations](high/Use_Atomic_Operations_To_Prevent_State_Inconsistencies.md) | Enforced | SEC010, VAL003\* |
-| [Use safe arithmetic](high/Use_Safe_Arithmetic_Operations.md) | Enforced | SEC004\*, SEC009\*, VAL002\*, SEM010 |
+| [Use safe arithmetic](high/Use_Safe_Arithmetic_Operations.md) | Partial | SEC004\*, SEC009\*, VAL002\*, SEM010 |
 
 ### Medium
 

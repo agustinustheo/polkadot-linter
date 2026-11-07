@@ -71,23 +71,26 @@ and `TRM001` had 0 findings on this corpus.
 
 ## Effect on default-config findings
 
-Syntax counts come from a fresh `--syntax-only` run of this branch's release
-binary. The run used the old defaults (`origin/main` `default.toml` with the 7
-rules enabled) and the new `config/default.toml`. Compiler counts come from the
-all-rules compiler scans above, filtered to the rules each default enables.
+All counts are summed from `inventory.tsv` (the audit's scans), over the rules
+each default enables: "before" is every rule on after PR #17, "after" drops the
+7 rules.
 
 | Corpus | Before | After |
 | --- | ---: | ---: |
-| 10 external repositories, syntax | 765 | 758 |
-| polkadot-sdk (`substrate/frame`, cumulus runtimes, `polkadot/runtime`), syntax | 512 | 423 |
+| 10 external repositories, syntax | 750 | 743 |
+| polkadot-sdk (`substrate/frame`, cumulus runtimes, `polkadot/runtime`), syntax | 504 | 415 |
 | 8 runtimes, compiler (deduplicated) | 280 | 63 |
-| **Total** | **1,557** | **1,244** |
+| **Total** | **1,534** | **1,221** |
 
 Before the change, the 7 rules produced 313 default findings with 4 TPs in 91
 labeled samples.
 
 ## Caveats
 
+- Samples are small. 0 TPs in 15 samples still allows a true precision of about
+  20% (95% upper bound); SEC014 (6) and VAL002 (10) were labeled in full. The
+  56-bug audited-commit check is weak evidence against rules aimed at rare
+  patterns. The decision is "off by default", not removal, for that reason.
 - One labeler judged each finding against the cited lines. The labels are not
   an oracle. Where a rule's claim can be checked (a pallet opts out, a bound
   exists, a function is not an extrinsic), the label is FP and cites the line.
