@@ -83,6 +83,25 @@ polkadot-linter --package pallet-xcm --lib ./xcm/pallet-xcm   # compiler rules f
 [CLI reference](http://agustinustheo.github.io/polkadot-linter/guide/cli-reference.html)
 explains them.
 
+## For AI agents
+
+Most runs come from coding agents. [`skill/SKILL.md`](skill/SKILL.md) tells
+them when to run the linter, which commands to use, how to read the JSON, and
+how to triage each finding (fix it, or allow it with a reason).
+
+- **Claude Code:** copy the skill so every session knows the tool:
+
+  ```bash
+  mkdir -p ~/.claude/skills/polkadot-linter && cp skill/SKILL.md ~/.claude/skills/polkadot-linter/
+  ```
+
+- **Codex and other agents:** add one line to `AGENTS.md` (or the agent's
+  instructions):
+  *"For Polkadot SDK, FRAME or runtime code, run `polkadot-linter` and triage
+  each finding as described in https://github.com/agustinustheo/polkadot-linter/blob/main/skill/SKILL.md."*
+
+The linter itself never calls an LLM.
+
 ## Two engines
 
 | | Syntax engine | Compiler-backed engine |
