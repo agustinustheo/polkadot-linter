@@ -20,7 +20,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 ```
 
 - `[rules.enabled]` is optional and overrides the bundled entries. Rules whose
-  sampled findings on third-party parachain repositories were under 30%
+  sampled findings on polkadot-sdk or third-party parachain repositories were under 30%
   actionable or at least 30% false positives are off by default, as are the
   Parity SDK style conventions `SEM002`, `SEM003`, `SEM004`, `SEM012` and
   `TST003`; each rule page and family table says "off by default". Set a rule

@@ -1,0 +1,232 @@
+id	rule	repo	file:line	label	evidence
+S001	BEN002	runtimes	pallets/remote-proxy/src/benchmarking.rs:74	TP	no assertion after #[extrinsic_call] (benchmarking.rs:87-90)
+S002	BEN002	kilt-node	pallets/did/src/benchmarking.rs:455	TP	v1 benchmark ends at line 469 with no verify block
+S003	BEN002	centrifuge-chain	pallets/loans/src/benchmarking.rs:332	TP	v1 `create` ends at line 340 with no verify block
+S004	BEN002	hydration-node	pallets/dispatcher/src/benchmarking.rs:53	TP	v1 `note_aave_manager` lines 53-54, no verify block
+S005	BEN002	Astar	pallets/astar-xcm-benchmarks/src/fungible/benchmarking.rs:132	NOISE	stub: empty `#[block] {}` then Err(BenchmarkError::Override) at 133-137; nothing to verify
+S006	BEN002	moonbeam	pallets/moonbeam-orbiters/src/benchmarks.rs:98	TP	no assertion after #[extrinsic_call] (118-121)
+S007	BEN002	polkadot-sdk	substrate/frame/benchmarking/pov/src/benchmarking.rs:179	NOISE	assert_eq! is inside the measured #[block] (line 184); read-only PoV benchmark, no postcondition possible
+S008	BEN002	Acala	modules/idle-scheduler/src/benchmarking.rs:40	NOISE	hook benchmark on_initialize with only #[block] (41-44); no state to assert
+S009	BEN002	kilt-node	pallets/pallet-migration/src/benchmarking.rs:167	TP	explicit empty `verify {}` at line 184
+S010	BEN002	centrifuge-chain	pallets/transfer-allowlist/src/benchmarking.rs:59	TP	no assertion after #[extrinsic_call] (67-74)
+S011	BEN002	hydration-node	pallets/signet/src/benchmarks.rs:56	TP	no assertion after #[extrinsic_call] (78-88)
+S012	BEN002	Astar	pallets/astar-xcm-benchmarks/src/generic/benchmarking.rs:90	NOISE	stub: empty `#[block] {}` + BenchmarkError::Override (91-95)
+S013	BEN002	moonbeam	pallets/parachain-staking/src/benchmarks.rs:1547	TP	#[block] prepare_staking_payouts then Ok(()) (1576-1581), no assertion
+S014	BEN002	polkadot-sdk	substrate/frame/benchmarking/pov/src/benchmarking.rs:230	NOISE	assert! inside #[block] line 233 (PoV benchmark)
+S015	BEN002	Acala	modules/nft/src/benchmarking.rs:94	TP	no assertion after #[extrinsic_call] (101-110)
+S016	BEN003	kilt-node	pallets/pallet-did-lookup/src/lib.rs:377	TP	pallet-did-lookup has no reclaim_deposit benchmark; grep hits are other pallets
+S017	BEN003	polkadot-sdk	substrate/frame/glutton/src/lib.rs:349	TP	substrate/frame/glutton/src/benchmarking.rs has no set_block_length benchmark
+S018	BEN003	Acala	modules/xcm-interface/src/lib.rs:133	TP	no benchmark named update_xcm_dest_weight_and_fee anywhere in Acala
+S019	BEN003	Astar	pallets/dapp-staking/src/lib.rs:1322	TP	dapp-staking benchmarking has no claim_staker_rewards_for
+S020	BEN003	moonbeam	pallets/ethereum-xcm/src/lib.rs:272	TP	no force_transact_as benchmark; governance-only call
+S021	BEN003	hydration-node	pallets/currencies/src/lib.rs:206	FP	runtime-hosted benchmark exists: runtime/hydradx/src/benchmarking/currencies.rs:71 `transfer_native_currency {`
+S022	BEN003	centrifuge-chain	pallets/liquidity-pools/src/lib.rs:384	TP	liquidity-pools has no add_tranche benchmark
+S023	BEN003	runtimes	pallets/ah-ops/src/lib.rs:381	TP	ah-ops has no benchmark for this call (returns Pays::No)
+S024	BEN003	peaq-network-node	pallets/parachain-staking/src/lib.rs:1529	TP	pallets/parachain-staking/src/benchmarking.rs:578 has delegate_another_candidate commented out
+S025	BEN003	kilt-node	dip-template/pallets/pallet-postit/src/lib.rs:121	NOISE	dip-template demo pallet, constant #[pallet::weight(1_000)] at line 122
+S026	BEN003	polkadot-sdk	substrate/frame/examples/offchain-worker/src/lib.rs:335	NOISE	substrate/frame/examples/offchain-worker is an example crate (weight({0}) line 336); examples/ workspace dir not excluded
+S027	BEN003	Acala	modules/homa/src/lib.rs:665	NOISE	weight reuses benchmarked on_initialize_with_bump_era (line 666); call appears as setup in runtime/mandala/src/benchmark_common.rs:562
+S028	BEN003	Astar	pallets/collator-selection/src/lib.rs:381	FP	benchmark exists: pallets/collator-selection/src/benchmarking.rs:157-163 measures `<CollatorSelection<T>>::set_desired_candidates(origin, max)`; qualified-self path not matched
+S029	BEN003	moonbeam	pallets/ethereum-xcm/src/lib.rs:248	TP	no suspend_ethereum_xcm_execution benchmark; root call with constant weight
+S030	BEN003	hydration-node	pallets/ice/src/lib.rs:524	FP	runtime-hosted benchmark exists: runtime/hydradx/src/benchmarking/ice.rs:242 `update_routing {`
+S031	RTC001	Acala	runtime/mandala/src/lib.rs:657	NOISE	mandala is the Acala dev runtime (not in dev_runtime_packages)
+S032	RTC001	runtimes	system-parachains/gluttons/glutton-kusama/src/lib.rs:246	NOISE	glutton-kusama is a load-test parachain; pallet_sudo
+S033	RTC001	kilt-node	runtimes/kestrel/src/lib.rs:469	NOISE	kestrel is the KILT dev/standalone runtime
+S034	RTC001	peaq-network-node	runtime/peaq/src/lib.rs:816	TP	peaq production runtime; cumulus_pallet_parachain_system `()` weights
+S035	RTC001	polkadot-sdk	polkadot/runtime/rococo/src/lib.rs:842	NOISE	rococo testnet runtime
+S036	RTC001	hydration-node	runtime/hydradx/src/assets.rs:350	TP	hydradx production; pallet_uniques `()`
+S037	RTC001	centrifuge-chain	runtime/altair/src/lib.rs:1232	NOISE	altair BaseCallFilter omits OrmlTokens calls (lib.rs:589) so weights are unused
+S038	RTC001	polkadot-sdk-parachain-template	runtime/src/configs/mod.rs:301	NOISE	polkadot-sdk-parachain-template is a template runtime
+S039	RTC001	Acala	runtime/karura/src/lib.rs:1545	TP	karura production; pallet_proxy `()`
+S040	RTC001	runtimes	system-parachains/asset-hubs/asset-hub-polkadot/src/staking/nom_pools.rs:79	NOISE	documented on the same line: "Have to use stock weights since nom-pools is not benchmarkable with pallet-staking-async"
+S041	RTC001	kilt-node	dip-template/runtimes/dip-consumer/src/lib.rs:370	NOISE	dip-consumer template runtime
+S042	RTC001	peaq-network-node	runtime/peaq-dev/src/lib.rs:471	NOISE	peaq-dev dev runtime
+S043	RTC001	polkadot-sdk	cumulus/parachains/runtimes/glutton/glutton-westend/src/lib.rs:269	NOISE	glutton-westend test parachain; pallet_sudo
+S044	RTC001	hydration-node	runtime/hydradx/src/system.rs:436	TP	hydradx production; pallet_session `()`
+S045	RTC001	centrifuge-chain	runtime/centrifuge/src/lib.rs:446	NOISE	comment at line 445: "Call NOT exposed, default weights are fine"
+S046	RTC002	hydration-node	runtime/hydradx/src/system.rs:360	TP	hydradx define_benchmarks! has no pallet_collator_selection entry
+S047	RTC002	Acala	runtime/karura/src/lib.rs:1426	TP	karura define_benchmarks! has no module_nft entry
+S048	RTC002	peaq-network-node	runtime/peaq/src/xcm_config.rs:374	TP	peaq lib.rs:1274 has `[pallet_xcm, ...]` commented out
+S049	RTC002	polkadot-sdk	cumulus/parachains/runtimes/assets/asset-hub-westend/src/lib.rs:1476	TP	asset-hub-westend define_benchmarks! has no pallet_scheduler entry
+S050	RTC002	centrifuge-chain	runtime/centrifuge/src/lib.rs:937	NOISE	comment lines 935-936: benchmarks fail with "failed to submit candidacy"; known
+S051	RTC002	Astar	runtime/shibuya/src/lib.rs:421	TP	shibuya line 420 TODO re-bench; not in define_benchmarks!
+S052	RTC002	runtimes	relay/kusama/src/lib.rs:1797	TP	kusama define_benchmarks! has no pallet_nomination_pools entry
+S053	RTC002	Acala	runtime/karura/src/lib.rs:804	TP	karura define_benchmarks! has no orml_oracle entry
+S054	RTC002	peaq-network-node	runtime/peaq-dev/src/xcm_config.rs:374	NOISE	peaq-dev dev runtime; same commented-out entry as peaq
+S055	RTC002	polkadot-sdk	cumulus/parachains/runtimes/people/people-westend/src/lib.rs:293	TP	people-westend define_benchmarks! has no pallet_transaction_payment entry
+S056	RTC002	Astar	runtime/astar/src/lib.rs:396	TP	astar line 395 TODO re-bench; not in define_benchmarks!
+S057	RTC002	runtimes	system-parachains/bulletin/bulletin-polkadot/src/lib.rs:331	TP	bulletin-polkadot define_benchmarks! has no pallet_transaction_payment entry
+S058	RTC002	polkadot-sdk	cumulus/parachains/runtimes/assets/asset-hub-westend/src/lib.rs:1520	TP	asset-hub-westend define_benchmarks! has no pallet_ah_ops entry
+S059	RTC002	runtimes	relay/polkadot/src/lib.rs:918	TP	polkadot relay define_benchmarks! has no pallet_treasury entry
+S060	RTC002	polkadot-sdk	cumulus/parachains/runtimes/assets/asset-hub-westend/src/governance/mod.rs:85	TP	asset-hub-westend define_benchmarks! has no pallet_referenda entry
+S061	RTC003	Astar	runtime/shiden/src/xcm_config.rs:348	TP	shiden (Kusama production) PriceForSiblingDelivery = NoPriceForMessageDelivery
+S062	RTC003	centrifuge-chain	runtime/development/src/xcm.rs:160	NOISE	centrifuge `development` runtime
+S063	RTC003	peaq-network-node	runtime/peaq-dev/src/xcm_config.rs:343	NOISE	peaq-dev runtime
+S064	RTC003	Acala	runtime/mandala/src/xcm_config.rs:151	NOISE	mandala dev runtime
+S065	RTC003	kilt-node	runtimes/spiritnet/src/xcm.rs:316	TP	spiritnet production: NoPriceForMessageDelivery
+S066	RTC003	moonbeam	runtime/moonbase/src/xcm_config.rs:393	NOISE	moonbase testnet runtime
+S067	RTC003	hydration-node	runtime/hydradx/src/xcm.rs:372	TP	hydradx production: NoPriceForMessageDelivery
+S068	RTC003	Astar	runtime/shiden/src/xcm_config.rs:296	TP	shiden production: ParentAsUmp<_, _, ()>
+S069	RTC003	centrifuge-chain	runtime/altair/src/lib.rs:351	TP	altair (Kusama production): NoPriceForMessageDelivery
+S070	RTC003	peaq-network-node	runtime/peaq-dev/src/xcm_config.rs:395	NOISE	peaq-dev runtime
+S071	RTC003	Acala	runtime/karura/src/xcm_config.rs:282	TP	karura production: NoPriceForMessageDelivery
+S072	RTC003	kilt-node	runtimes/peregrine/src/xcm.rs:272	NOISE	peregrine testnet runtime
+S073	RTC003	moonbeam	runtime/moonbeam/src/xcm_config.rs:298	TP	moonbeam production: ParentAsUmp<_, _, ()>
+S074	RTC003	hydration-node	runtime/hydradx/src/xcm.rs:622	TP	hydradx production: ParentAsUmp<_, _, ()>
+S075	RTC003	Astar	runtime/shibuya/src/xcm_config.rs:225	NOISE	shibuya testnet runtime
+S076	RTC005	peaq-network-node	runtime/peaq-dev/src/lib.rs:1112	NOISE	peaq-dev runtime
+S077	RTC005	runtimes	system-parachains/encointer/src/lib.rs:579	TP	encointer: RandomnessSource = RandomnessCollectiveFlip drives meetup assignment
+S078	RTC005	peaq-network-node	runtime/peaq/src/lib.rs:1134	TP	peaq production construct_runtime includes pallet_insecure_randomness_collective_flip
+S079	RTC005	runtimes	system-parachains/encointer/src/lib.rs:899	TP	encointer construct_runtime includes pallet_insecure_randomness_collective_flip
+S080	RTC005	peaq-network-node	runtime/peaq/src/lib.rs:419	TP	peaq pallet_contracts::Config Randomness = RandomnessCollectiveFlip (contract-readable)
+S081	RTC005	peaq-network-node	runtime/peaq-dev/src/lib.rs:397	NOISE	peaq-dev runtime
+S082	RTC006	moonbeam	runtime/moonriver/src/xcm_config.rs:282	TP	moonriver FeeManager = () with MessageExporter = BridgeXcmOverMoonbeam (line 283)
+S083	RTC006	polkadot-sdk-parachain-template	runtime/src/configs/xcm_config.rs:146	NOISE	parachain template runtime
+S084	RTC006	moonbeam	runtime/moonbeam/src/xcm_config.rs:274	TP	moonbeam FeeManager = () with MessageExporter set (line 275)
+S085	TST004	moonbeam	pallets/crowdloan-rewards/src/lib.rs:410	NOISE	signed extrinsic; tests.rs has no pays_fee assertion; absence of such a test is not a defect
+S086	TST004	polkadot-sdk	substrate/frame/staking-async/src/pallet/mod.rs:3031	NOISE	staking-async prune_era_step; pallet/mod.rs has no sibling tests.rs so companion lookup cannot succeed
+S087	TST004	runtimes	pallets/ah-ops/src/lib.rs:378	NOISE	ah-ops transfer_to_post_migration_treasury; signed; no pays_fee test convention
+S088	TST004	hydration-node	pallets/route-executor/src/lib.rs:704	FP	insert_route (line 697) is a private helper with no origin parameter, not an extrinsic
+S089	TST004	moonbeam	pallets/moonbeam-lazy-migrations/src/lib.rs:100	NOISE	create_contract_metadata; signed; no pays_fee test convention
+S090	TST004	polkadot-sdk	substrate/frame/nomination-pools/src/lib.rs:3212	NOISE	nomination-pools migrate_delegation; upstream SDK pallet has no such test
+S091	TST004	hydration-node	pallets/ema-oracle/src/lib.rs:618	FP	do_set_oracle_inner (line 585) is a private helper, not an extrinsic
+S092	TST004	polkadot-sdk	substrate/frame/honzon/oracle/src/lib.rs:376	NOISE	honzon oracle feed_values; signed
+S093	TST004	hydration-node	pallets/circuit-breaker/src/lib.rs:646	NOISE	release_deposit; signed/AuthorityOrigin
+S094	TST004	polkadot-sdk	substrate/frame/election-provider-multi-block/src/lib.rs:674	NOISE	manage: ManagerOrigin/AdminOrigin only; refund semantics for privileged origins not a spam risk
+S095	TST004	hydration-node	pallets/intent/src/lib.rs:397	NOISE	cleanup_intent: ensure_none path; unsigned has no fee payer
+S096	TST004	polkadot-sdk	substrate/frame/broker/src/lib.rs:734	NOISE	broker renew; upstream SDK pallet
+S097	TST004	polkadot-sdk	substrate/frame/staking/src/pallet/mod.rs:2110	NOISE	staking update_payee; pallet/mod.rs has no sibling tests.rs
+S098	TST004	polkadot-sdk	polkadot/runtime/parachains/src/hrmp.rs:899	NOISE	hrmp establish_channel_with_system: parachain origin, not a signed fee payer
+S099	TST004	polkadot-sdk	substrate/frame/broker/src/lib.rs:722	NOISE	broker purchase; upstream SDK pallet
+S100	TST006	moonbeam	pallets/moonbeam-orbiters/src/lib.rs:403	TP	CollatorsPool::take / AccountLookupOverride::remove (412-418), no event
+S101	TST006	Astar	vendor/treasury/src/lib.rs:446	NOISE	Astar vendor/treasury is a vendored upstream pallet; approve_proposal is deprecated
+S102	TST006	polkadot-sdk	polkadot/runtime/common/src/assigned_slots/mod.rs:404	TP	PermanentSlots/TemporarySlots remove (419-423); no deposit_event in body
+S103	TST006	runtimes	pallets/rc2-migrator/src/lib.rs:497	FP	Self::transition (lib.rs:799-802) deposits Event::StageTransition
+S104	TST006	Acala	modules/dex-oracle/src/lib.rs:223	TP	AveragePrices::take / Cumulatives::remove (232-233), no event
+S105	TST006	peaq-network-node	pallets/inflation-manager/src/lib.rs:257	TP	root call puts DoInitializeAt/DoRecalculationAt/TotalIssuanceNum (279-281), no event
+S106	TST006	kilt-node	pallets/did/src/lib.rs:598	FP	try_insert_did deposits Event::DidCreated at lib.rs:1319
+S107	TST006	centrifuge-chain	pallets/block-rewards/src/lib.rs:294	TP	NextSessionChanges::mutate (300), no event
+S108	TST006	polkadot-sdk-parachain-template	pallets/template/src/lib.rs:158	NOISE	template pallet cause_error
+S109	TST006	hydration-node	pallets/dispatcher/src/lib.rs:259	NOISE	ExtraGas::set/kill (264-266) are transient around do_dispatch; the dispatched call emits its own events
+S110	TST006	moonbeam	pallets/moonbeam-orbiters/src/lib.rs:383	TP	CollatorsPool::insert (395), no event
+S111	TST006	Astar	pallets/collator-selection/src/lib.rs:475	TP	SlashDestination put/kill (481-482), no event
+S112	TST006	polkadot-sdk	substrate/frame/society/src/lib.rs:1254	TP	Candidates::insert (1261); check_skeptic (1622) has no deposit_event
+S113	TST006	runtimes	pallets/rc2-migrator/src/lib.rs:640	TP	Limits::put (643), no event
+S114	TST006	Acala	modules/dex-oracle/src/lib.rs:177	TP	AveragePrices/Cumulatives insert (199-210), no event
+S115	BEN002	polkadot-sdk	substrate/frame/glutton/src/benchmarking.rs:98	NOISE	hook benchmark on_idle with only a #[block] (103-109); no state to assert
+S116	BEN002	polkadot-sdk	substrate/frame/contracts/src/benchmarking/mod.rs:271	TP	no assertion after #[block] (281-286)
+S117	BEN002	polkadot-sdk	substrate/frame/utility/src/benchmarking.rs:108	TP	no assertion after #[extrinsic_call] (114-116)
+S118	BEN002	polkadot-sdk	substrate/frame/scheduler/src/benchmarking.rs:231	TP	assert is commented out at line 243
+S119	BEN002	polkadot-sdk	substrate/frame/nis/src/benchmarking.rs:285	TP	no assertion after #[block] (295-307)
+S120	BEN002	polkadot-sdk	substrate/frame/elections-phragmen/src/benchmarking.rs:285	TP	no assertion after #[extrinsic_call] (306-313)
+S121	BEN002	polkadot-sdk	substrate/frame/benchmarking/pov/src/benchmarking.rs:121	NOISE	assert_eq! inside the measured #[block] (131); PoV read benchmark
+S122	BEN002	polkadot-sdk	substrate/frame/benchmarking/pov/src/benchmarking.rs:371	NOISE	`noop` benchmark; nothing to verify
+S123	TST006	polkadot-sdk	substrate/frame/people/src/lib.rs:912	TP	AliasToAccount/AccountToPersonalId writes; no deposit_event in body (912-961) or called helpers
+S124	TST006	polkadot-sdk	substrate/frame/staking-async/src/pallet/mod.rs:3042	TP	MaxCommission::put (3045), no event; admin setter
+S125	TST006	polkadot-sdk	substrate/frame/staking-async/src/pallet/mod.rs:2705	TP	MinCommission::put (2708), no event; admin setter
+S126	TST006	polkadot-sdk	substrate/frame/elections-phragmen/src/lib.rs:456	TP	Candidates::mutate (477), no event; upstream pallet convention
+S127	TST006	polkadot-sdk	substrate/frame/elections-phragmen/src/lib.rs:371	TP	Voting::insert path, no event; upstream pallet convention
+S128	TST006	polkadot-sdk	substrate/frame/people/src/lib.rs:715	TP	OnboardingQueue::take / ring writes (732-805), no deposit_event in body or helpers
+S129	TST006	polkadot-sdk	substrate/frame/child-bounties/src/lib.rs:277	FP	Self::create_child_bounty helper deposits Event::Added
+S130	TST006	polkadot-sdk	substrate/frame/people/src/lib.rs:1041	TP	People::insert (1047), no event
+C001	SEC006	polkadot-sdk	substrate/frame/society/src/lib.rs:1841	NOISE	society:1841 result checked only by debug_assert!(r.is_ok()) on the next line; deliberate
+C002	SEC006	polkadot-sdk	substrate/frame/identity/src/lib.rs:1085	NOISE	identity:1085 `let _ = repatriate_reserved` inside SubsOf::mutate; deliberate SDK choice
+C003	SEC007	polkadot-sdk	substrate/frame/balances/src/lib.rs:928	NOISE	balances:928 preceded by comment "Should never fail - we're only setting a bit"
+C004	SEC007	Astar	runtime/astar/src/lib.rs:2144	NOISE	Astar runtime API pending_block: apply_extrinsic results intentionally ignored in an RPC simulation
+C005	SEC007	polkadot-sdk	substrate/utils/wasm-builder/src/wasm_project.rs:143	NOISE	substrate/utils/wasm-builder is a host build tool, not runtime code
+C006	SEC007	Astar	runtime/astar/src/lib.rs:638	TP	Balances::resolve drops the credit (burn) if the staking pot account does not exist; no comment
+C007	SEC007	polkadot-sdk	substrate/frame/session/src/lib.rs:1223	NOISE	session:1223 release_all discard is deliberate cleanup (comment at 1221)
+C008	SEC007	Astar	pallets/inflation/src/lib.rs:547	NOISE	Astar inflation:547 comment 543-546 documents why the result is ignored
+C009	SEC007	polkadot-sdk	substrate/frame/revive/src/lib.rs:856	NOISE	revive:856 mint_into of ED for the pallet account, guarded by account_exists; deliberate
+C010	SEC007	Astar	pallets/collator-selection/src/lib.rs:771	NOISE	Astar collator-selection:771 comment "no error, who is a candidate"
+C011	SEC007	polkadot-sdk	substrate/frame/preimage/src/lib.rs:535	NOISE	preimage:535 comment 533-534 "We don't really care if this fails"
+C012	SEC007	Astar	runtime/astar/src/lib.rs:484	TP	Balances::resolve to the treasury account can fail and burn the credit; same pattern as 6
+C013	SEC007	polkadot-sdk	bridges/snowbridge/primitives/outbound-queue/src/v2/converter/convert.rs:234	NOISE	snowbridge converter: `let _ = self.next()` deliberately consumes one instruction
+C014	SEC007	polkadot-sdk	substrate/primitives/runtime-interface/proc-macro/src/lib.rs:54	NOISE	substrate/primitives/runtime-interface/proc-macro is a proc-macro crate (host), parse discard is idiomatic
+C015	SEC007	polkadot-sdk	substrate/frame/society/src/lib.rs:1674	NOISE	society:1674 strike_member discard; deliberate, SDK
+C016	SEC007	polkadot-sdk	bridges/snowbridge/primitives/outbound-queue/src/v2/converter/convert.rs:224	NOISE	snowbridge converter: deliberate skip, same as 13
+C017	SEC007	polkadot-sdk	substrate/primitives/statement-store/src/runtime_api.rs:200	NOISE	sp-statement-store runtime_api host-side extension; discard is deliberate
+C018	SEC011	Astar	pallets/dapp-staking/src/lib.rs:1869	NOISE	Astar dapp-staking:1869 comment 1867 "bounded by max amount of dApps"; counter guard follows
+C019	SEC011	polkadot-sdk	substrate/frame/elections-phragmen/src/migrations/v3.rs:123	FP	migrations/v3.rs:123 one-off migration logging iter().count(); not a callable runtime path
+C020	SEC011	Astar	pallets/collator-selection/src/lib.rs:763	NOISE	Astar collator-selection kick_stale_candidates iterates LastAuthoredBlock, bounded by MaxCandidates
+C021	SEC011	polkadot-sdk	polkadot/runtime/common/src/crowdloan/migration.rs:100	FP	crowdloan/migration.rs:100 one-off migration
+C022	SEC011	polkadot-sdk	polkadot/runtime/parachains/src/disputes/slashing.rs:582	NOISE	slashing.rs:582 unapplied_slashes() is a pub(crate) view bounded by dispute_period sessions
+C023	SEC011	polkadot-sdk	substrate/frame/nomination-pools/src/lib.rs:3970	FP	nomination-pools:3970 is inside do_try_state (try-runtime only)
+C024	SEC011	polkadot-sdk	substrate/frame/bags-list/src/list/mod.rs:176	FP	bags-list:176 iteration is inside debug_assert! (debug builds only)
+C025	SEC011	polkadot-sdk	polkadot/runtime/common/src/slots/migration.rs:54	FP	slots/migration.rs:54 one-off migration
+C026	SEC011	polkadot-sdk	substrate/frame/recovery/src/lib.rs:542	TP	recovery:542 inheritance() iterates the whole Inheritor map on a reachable path with no bound
+C027	SEC011	polkadot-sdk	substrate/frame/society/src/migrations.rs:235	FP	society/migrations.rs:235 assert inside migration post-check
+C028	SEC011	polkadot-sdk	substrate/frame/election-provider-multi-phase/src/signed.rs:476	FP	election-provider-multi-phase signed.rs:476 inside debug_assert!
+C029	SEC011	polkadot-sdk	substrate/frame/society/src/migrations.rs:234	FP	society/migrations.rs:234 assert inside migration post-check
+C030	SEC011	polkadot-sdk	substrate/frame/society/src/migrations.rs:236	FP	society/migrations.rs:236 assert inside migration post-check
+C031	SEC011	polkadot-sdk	polkadot/runtime/common/src/crowdloan/migration.rs:190	FP	crowdloan/migration.rs:190 inside post_upgrade check
+C032	SEC011	polkadot-sdk	substrate/frame/honzon/oracle/src/lib.rs:322	NOISE	oracle:322 all_values() view; Values bounded by configured oracle keys
+C033	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:814	TP	staking clear_era_information clear_prefix(.., u32::MAX, None) in an on_initialize path; FIXME at 802 admits it
+C034	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:808	TP	same function as 33 (line 808)
+C035	SEC012	polkadot-sdk	polkadot/runtime/parachains/src/shared.rs:307	NOISE	shared.rs:307 per-session AllowedRelayParents entries are few; cleared once per session
+C036	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:804	TP	same function as 33 (line 804)
+C037	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:806	TP	same function as 33 (line 806)
+C038	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:812	TP	same function as 33 (line 812)
+C039	SEC012	polkadot-sdk	substrate/frame/honzon/oracle/src/lib.rs:440	NOISE	oracle:440 clear_prefix per outgoing member; bounded by number of oracle keys
+C040	SEC012	polkadot-sdk	substrate/frame/staking/src/pallet/impls.rs:810	TP	same function as 33 (line 810)
+C041	SEC013	Astar	pallets/collator-selection/src/lib.rs:221	NOISE	Astar Candidates Vec: pallet has #[pallet::without_storage_info]; bounded by MaxCandidates in calls
+C042	SEC013	polkadot-sdk	polkadot/runtime/parachains/src/paras/mod.rs:927	NOISE	paras UpcomingUpgrades: without_storage_info pallet; bounded by number of paras
+C043	SEC013	Astar	pallets/collator-selection/src/lib.rs:217	NOISE	Astar Invulnerables Vec: without_storage_info pallet; bounded by MaxInvulnerables
+C044	SEC013	polkadot-sdk	cumulus/pallets/parachain-system/src/lib.rs:895	NOISE	parachain-system NewValidationCode: without_storage_info; cleared each block (comment 892)
+C045	SEC013	polkadot-sdk	polkadot/runtime/common/src/crowdloan/mod.rs:239	NOISE	crowdloan NewRaise: without_storage_info; cleared each block
+C046	SEC013	polkadot-sdk	substrate/frame/session/src/lib.rs:617	NOISE	session DisabledValidators: without_storage_info; bounded by validator count
+C047	SEC013	polkadot-sdk	polkadot/runtime/parachains/src/hrmp.rs:457	NOISE	hrmp HrmpChannelContents: without_storage_info; bounded by channel capacity
+C048	SEC013	polkadot-sdk	polkadot/runtime/parachains/src/hrmp.rs:387	NOISE	hrmp HrmpOpenChannelRequestsList: NOTE at 383 documents the choice
+C049	SEC013	polkadot-sdk	polkadot/runtime/parachains/src/disputes.rs:413	NOISE	disputes BackersOnDisputes: without_storage_info; bounded by validator count
+C050	SEC013	polkadot-sdk	cumulus/pallets/parachain-system/src/lib.rs:1004	NOISE	parachain-system HrmpOutboundMessages: cleared each block (comment 1002)
+C051	SEC013	polkadot-sdk	polkadot/runtime/parachains/src/shared.rs:153	NOISE	shared ActiveValidatorKeys: bounded by validator count
+C052	SEC013	polkadot-sdk	substrate/frame/elections-phragmen/src/lib.rs:707	NOISE	elections-phragmen Candidates: without_storage_info; bounded by MaxCandidates
+C053	SEC013	polkadot-sdk	substrate/frame/collective/src/lib.rs:453	NOISE	collective Members: without_storage_info; bounded by MaxMembers
+C054	SEC013	polkadot-sdk	substrate/frame/node-authorization/src/lib.rs:113	NOISE	node-authorization AdditionalConnections BTreeSet: without_storage_info; dev pallet
+C055	SEC013	polkadot-sdk	substrate/frame/elections-phragmen/src/lib.rs:689	NOISE	elections-phragmen Members: bounded by DesiredMembers
+C056	SEC014	polkadot-sdk	substrate/frame/merkle-mountain-range/src/lib.rs:232	NOISE	MMR Nodes keyed by NodeIndex (u64) assigned sequentially by the pallet; Identity is the intended layout
+C057	SEC014	polkadot-sdk	substrate/frame/assets/precompiles/src/foreign_assets.rs:71	NOISE	asset index is assigned internally from NextAssetIndex, not attacker-chosen
+C058	SEC014	polkadot-sdk	substrate/frame/mixnet/src/lib.rs:245	NOISE	mixnet AuthorityIndex assigned internally
+C059	SEC014	polkadot-sdk	polkadot/runtime/parachains/src/session_info.rs:97	NOISE	SessionIndex is internally assigned; Identity on session index is the SDK convention
+C060	SEC014	polkadot-sdk	polkadot/runtime/parachains/src/session_info.rs:107	NOISE	same as 59
+C061	SEC014	polkadot-sdk	polkadot/runtime/parachains/src/session_info.rs:103	NOISE	same as 59
+C062	SEC017	polkadot-sdk	substrate/frame/elections-phragmen/src/lib.rs:624	NOISE	NewTerm new_members bounded by DesiredMembers
+C063	SEC017	Astar	pallets/collator-selection/src/lib.rs:295	NOISE	Astar NewInvulnerables bounded by MaxInvulnerables (set_invulnerables checks length)
+C064	SEC017	polkadot-sdk	substrate/frame/grandpa/src/lib.rs:273	NOISE	grandpa AuthorityList bounded by validator set
+C065	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:87	NOISE	cumulus/parachains/pallets/ping is a demo pallet
+C066	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:88	NOISE	ping demo pallet
+C067	SEC017	polkadot-sdk	cumulus/pallets/collator-selection/src/lib.rs:287	NOISE	cumulus collator-selection NewInvulnerables comes from a BoundedVec
+C068	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:83	NOISE	ping demo pallet
+C069	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:85	NOISE	ping demo pallet
+C070	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:84	NOISE	ping demo pallet
+C071	SEC017	polkadot-sdk	substrate/frame/fast-unstake/src/lib.rs:239	NOISE	fast-unstake BatchChecked eras bounded by BondingDuration
+C072	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:86	NOISE	ping demo pallet
+C073	SEC017	polkadot-sdk	substrate/frame/offences/src/lib.rs:103	NOISE	offences OpaqueTimeSlot is a short encoded slot
+C074	SEC017	polkadot-sdk	substrate/frame/root-offences/src/lib.rs:116	NOISE	root-offences is root-only test tooling
+C075	SEC017	polkadot-sdk	cumulus/parachains/pallets/ping/src/lib.rs:89	NOISE	ping demo pallet
+C076	SEC017	polkadot-sdk	substrate/frame/honzon/oracle/src/lib.rs:251	NOISE	oracle NewFeedData values come from a BoundedVec<_, MaxFeedValues> parameter
+C077	SEC018	polkadot-sdk	substrate/frame/contracts/src/lib.rs:944	NOISE	contracts call data: input bytes are charged by the length fee and gas_limit; SDK convention
+C078	SEC018	polkadot-sdk	substrate/frame/node-authorization/src/lib.rs:426	TP	node-authorization add_connections inserts every element of `connections` with constant weight and no length check (body 428-445)
+C079	SEC018	polkadot-sdk	substrate/frame/system/src/lib.rs:739	NOISE	system set_code_without_checks is root-only and returns max_block post-weight (744)
+C080	SEC018	polkadot-sdk	substrate/frame/system/src/lib.rs:875	NOISE	apply_authorized_upgrade: code must match a pre-authorized hash; consumes max_block
+C081	SEC018	polkadot-sdk	polkadot/runtime/common/src/claims/mod.rs:464	NOISE	claims attest statement is compared to a fixed text (468); length fee covers bytes
+C082	SEC018	polkadot-sdk	substrate/frame/revive/src/lib.rs:1141	FP	revive eth_transact has #[pallet::weight(Weight::MAX)] and always returns Err (1140-1142)
+C083	SEC018	polkadot-sdk	substrate/frame/staking-async/rc-client/src/lib.rs:1313	NOISE	rc-client set_keys proof validated via ownership proof; standard session pattern
+C084	SEC018	polkadot-sdk	substrate/frame/session/src/lib.rs:704	NOISE	session set_keys proof: standard SDK pattern since 2019; length fee covers bytes
+C085	SEC018	polkadot-sdk	polkadot/runtime/common/src/purchase/mod.rs:204	NOISE	purchase create_account is ValidityOrigin-gated
+C086	SEC018	polkadot-sdk	substrate/frame/system/src/lib.rs:723	NOISE	system set_code is root-only, Operational, returns max_block
+C087	SEC018	polkadot-sdk	substrate/frame/staking-async/ah-client/src/lib.rs:646	NOISE	ah-client set_keys origin is AssetHub or root
+C088	SEC018	polkadot-sdk	substrate/frame/staking-async/rc-client/src/lib.rs:1312	NOISE	same call as 83 (keys param)
+C089	SEC018	polkadot-sdk	substrate/frame/bounties/src/lib.rs:891	NOISE	bounties _remark is unused; bytes charged by the length fee
+C090	SEC018	polkadot-sdk	substrate/frame/node-authorization/src/lib.rs:391	TP	node-authorization remove_connections: same as 78
+C091	SEC018	polkadot-sdk	polkadot/runtime/common/src/crowdloan/mod.rs:626	FP	crowdloan add_memo enforces memo.len() <= MaxMemoLength at line 629; the rule claims no bound
+C092	VAL002	polkadot-sdk	substrate/frame/collective/src/lib.rs:276	NOISE	collective proposal_count / Period::get(): config period, never zero in a sane config
+C093	VAL002	polkadot-sdk	substrate/frame/broker/src/utility_impls.rs:44	NOISE	broker TimeslicePeriod config divisor
+C094	VAL002	polkadot-sdk	substrate/frame/revive/src/evm/call.rs:201	NOISE	revive NativeToEthRatio config divisor
+C095	VAL002	polkadot-sdk	substrate/frame/staking-async/src/lib.rs:721	NOISE	staking-async RS::get() config divisor
+C096	VAL002	polkadot-sdk	cumulus/pallets/parachain-system/src/block_weight/mod.rs:226	NOISE	parachain-system target_blocks derived from config
+C097	VAL002	polkadot-sdk	polkadot/runtime/common/src/slots/mod.rs:456	NOISE	slots LeasePeriod config divisor
+C098	VAL002	polkadot-sdk	substrate/frame/aura/src/lib.rs:137	NOISE	aura SlotDuration config divisor
+C099	VAL002	polkadot-sdk	substrate/frame/broker/src/utility_impls.rs:37	NOISE	broker TimeslicePeriod config divisor
+C100	VAL002	polkadot-sdk	substrate/frame/babe/src/equivocation.rs:180	NOISE	babe EpochDuration config divisor
+C101	VAL002	polkadot-sdk	substrate/frame/broker/src/tick_impls.rs:102	NOISE	broker TimeslicePeriod config divisor

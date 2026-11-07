@@ -6896,7 +6896,7 @@ fn rustdoc_sec013_reports_resolved_unbounded_storage_values_only() {
     let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(
         &rustdoc.to_string(),
         Some(std::path::Path::new("/workspace/pallet")),
-        &polkadot_linter::config::Config::default(),
+        &all_rules_config(),
     )
     .expect("rustdoc JSON should parse");
 

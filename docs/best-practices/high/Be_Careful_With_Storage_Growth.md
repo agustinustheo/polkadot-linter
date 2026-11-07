@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Enforced.** Several rules flag unbounded storage shapes by default: SEC013 for unbounded storage collections, SEC001 for unbounded `Vec` inputs in extrinsics, SEC017 for unbounded `Vec` in events, and SEC018 for missing input-length weight accounting. SEC014 (Identity hasher on common keys) is also related. See [SEC013](../../rules/SEC013.md), [SEC001](../../rules/SEC001.md), [SEC017](../../rules/SEC017.md), [SEC018](../../rules/SEC018.md), and [SEC014](../../rules/SEC014.md).
+> **Linter coverage — Partial (opt-in).** These rules are off by default: on polkadot-sdk and third-party parachains their findings were deliberate `without_storage_info` opt-outs or values bounded elsewhere. With `config/all-rules.toml` several rules flag unbounded storage shapes: SEC013 for unbounded storage collections, SEC001 for unbounded `Vec` inputs in extrinsics, SEC017 for unbounded `Vec` in events, and SEC018 for missing input-length weight accounting. SEC014 (Identity hasher on common keys) is also related. See [SEC013](../../rules/SEC013.md), [SEC001](../../rules/SEC001.md), [SEC017](../../rules/SEC017.md), [SEC018](../../rules/SEC018.md), and [SEC014](../../rules/SEC014.md).
 
 ## Description
 

@@ -52,6 +52,21 @@ VAL003 = false
 # reviewers reproduced rare false positives (a move inside a nested block before
 # a loop exit), so it stays opt-in until those are fixed.
 SEC019 = false
+# 2026-11 round 2 (benchmarks/precision/2026-11-run-audit: polkadot-sdk plus
+# the 10 repositories above, compiler rules on 8 runtimes). No rule below
+# caught any of 56 auditor-reported bugs in an audited-commit benchmark.
+# TST004 0/15 (a test no SDK pallet writes); SEC013 0/15 (only flags
+# `without_storage_info` pallets); SEC017 0/15 and SEC018 2/15 (bounded
+# elsewhere or priced by length fees); VAL002 0/10 (`Get` constant divisors);
+# SEC014 0/6 (sequential indices); SEC007 2/15 (`let _ =` is an explicit
+# discard, and it skips dispatchable bodies).
+SEC007 = false
+SEC013 = false
+SEC014 = false
+SEC017 = false
+SEC018 = false
+TST004 = false
+VAL002 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]
@@ -60,8 +75,8 @@ TST002 = "error"
 # If re-enabled, keep these as review hints rather than warnings.
 SEC005 = "advisory"
 SEM008 = "advisory"
-# SDK sample: VAL002 3/3 findings were non-actionable; retain it as a review
-# hint without treating config constants as warnings.
+# SDK sample: VAL002 3/3 findings were non-actionable; if re-enabled, keep it
+# as a review hint without treating config constants as warnings.
 VAL002 = "advisory"
 
 # ---------------------------------------------------------------------------

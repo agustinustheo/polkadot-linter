@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Enforced.** Multiple rules flag unsafe arithmetic by default: SEC009 for raw arithmetic in fallible code, SEC004 for unsafe weight arithmetic, VAL002 for unguarded division, and SEM010 for `^` mistaken as exponentiation. See [SEC009](../../rules/SEC009.md), [SEC004](../../rules/SEC004.md), [VAL002](../../rules/VAL002.md), and [SEM010](../../rules/SEM010.md).
+> **Linter coverage — Enforced.** SEM010 flags `^` mistaken as exponentiation by default. SEC009 for raw arithmetic in fallible code, SEC004 for unsafe weight arithmetic and VAL002 for unguarded division are off by default (enable them with `config/all-rules.toml`). See [SEC009](../../rules/SEC009.md), [SEC004](../../rules/SEC004.md), [VAL002](../../rules/VAL002.md), and [SEM010](../../rules/SEM010.md).
 
 ## Description
 

@@ -37,8 +37,9 @@ three labels:
   static analysis cannot establish reliably. Some pages point to a *related*
   rule that touches an adjacent concern; a related rule is never a substitute.
 
-Rule codes marked \* are off by default because the
-[2026-11 precision audit](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-external)
+Rule codes marked \* are off by default because the 2026-11 precision audits
+([external repositories](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-external),
+[polkadot-sdk run audit](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-run-audit))
 found them mostly noisy or wrong on real parachain code; enable them with
 `config/all-rules.toml`. A practice whose only rules are off by default is
 labeled Partial.
@@ -56,9 +57,9 @@ Rule codes in the callouts link to the corresponding page in the
 | --- | --- | --- |
 | [Use appropriate origin checks](critical/Use_Appropriate_Origin_Checks.md) | Review gate | — (SEC015 related) |
 | [Avoid unbounded iteration](critical/Avoid_Unbounded_Iteration.md) | Partial | SEC011, SEC012 |
-| [Validate input parameters](critical/Unchecked_Input_Parameters.md) | Partial | VAL001\*–003, SEC001\*, SEC003\*, SEC018 |
+| [Validate input parameters](critical/Unchecked_Input_Parameters.md) | Partial | VAL001\*–003\*, SEC001\*, SEC003\*, SEC018\* |
 | [Avoid `unwrap` inside the runtime](critical/Avoid_Unwrap_Usage_Inside_Runtime.md) | Partial | SEC002\*, SEC008\* |
-| [Benchmark dynamic weights](critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.md) | Enforced | BEN001\*, BEN003, SEM005\*, SEM006\*, SEM011, SEC004\*, SEC005\*, SEC018 |
+| [Benchmark dynamic weights](critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.md) | Enforced | BEN001\*, BEN003, SEM005\*, SEM006\*, SEM011, SEC004\*, SEC005\*, SEC018\* |
 | [Prefer reserve transfers over teleports](critical/Prioritize_Reserve_Asset_Transfer_Over_Teleport.md) | Review gate | — |
 
 ### High
@@ -67,8 +68,8 @@ Rule codes in the callouts link to the corresponding page in the
 | --- | --- | --- |
 | [Avoid redundant storage access in mutations](high/Avoid_Redundant_Storage_Access_in_Mutations.md) | Enforced | SEM009 |
 | [Avoid pseudo-random numbers](high/Avoid_the_Usage_of_Pseudo_Random_Numbers.md) | Review gate | — |
-| [Be careful with storage growth](high/Be_Careful_With_Storage_Growth.md) | Enforced | SEC001\*, SEC013, SEC014, SEC017, SEC018 |
-| [Benchmark worst-case extrinsics](high/Benchmark_Extrinsic_Worst_Case_Scenario.md) | Partial | BEN001\*–003, SEC018 |
+| [Be careful with storage growth](high/Be_Careful_With_Storage_Growth.md) | Partial | SEC001\*, SEC013\*, SEC014\*, SEC017\*, SEC018\* |
+| [Benchmark worst-case extrinsics](high/Benchmark_Extrinsic_Worst_Case_Scenario.md) | Partial | BEN001\*–003, SEC018\* |
 | [Consistent asset registration](high/Ensure_Consistent_Asset_Registration_by_Adhering_to_Host_Chain_Schema.md) | Review gate | — |
 | [Implement a `try_state` hook](high/Implement_Try_State_Hook.md) | Review gate | — |
 | [Keep dependencies up to date](high/Keep_Dependencies_Up_To_Date.md) | Review gate | — |
@@ -76,14 +77,14 @@ Rule codes in the callouts link to the corresponding page in the
 | [Distribute finalization costs](high/Prevent_Inconsistent_State_By_Distributing_Finalization_Costs.md) | Partial | SEC011, SEC012 |
 | [Set up XCM barriers correctly](high/Properly_Setup_XCM_Barrier.md) | Review gate | — |
 | [Use atomic operations](high/Use_Atomic_Operations_To_Prevent_State_Inconsistencies.md) | Enforced | SEC010, VAL003\* |
-| [Use safe arithmetic](high/Use_Safe_Arithmetic_Operations.md) | Enforced | SEC004\*, SEC009\*, VAL002, SEM010 |
+| [Use safe arithmetic](high/Use_Safe_Arithmetic_Operations.md) | Enforced | SEC004\*, SEC009\*, VAL002\*, SEM010 |
 
 ### Medium
 
 | Practice | Coverage | Rules |
 | --- | --- | --- |
 | [Append entries efficiently](medium/Append_Entries_Efficiently.md) | Review gate | — |
-| [Avoid hardcoded parameters and values](medium/Avoid_Hardcoded_Parameters_and_Values.md) | Partial | SEC001\*, SEC013, SEC018 |
+| [Avoid hardcoded parameters and values](medium/Avoid_Hardcoded_Parameters_and_Values.md) | Partial | SEC001\*, SEC013\*, SEC018\* |
 | [Avoid redundant data structures](medium/Avoid_Redundant_Data_Structures.md) | Review gate | — |
 | [Avoid resource-intensive execution in hooks](medium/Avoid_Resource_Intensive_Execution_Inside_Hooks.md) | Enforced | SEC010, SEC011, SEC012 |
 | [Break down complex functions](medium/Break_Down_Complex_Functions.md) | Review gate | — |
@@ -92,11 +93,11 @@ Rule codes in the callouts link to the corresponding page in the
 | [Efficient data structures](medium/Enhance_Performance_with_Efficient_Data_Structures.md) | Review gate | — |
 | [Interface segregation](medium/Implement_Proper_Interface_Segregation.md) | Review gate | — |
 | [XCM fee management](medium/Implement_Proper_XCM_Fee_Management.md) | Review gate | — |
-| [Test all error cases](medium/Implement_Tests_For_All_Error_Cases.md) | Partial | TST001\*, TST002, TST004, TST006 |
+| [Test all error cases](medium/Implement_Tests_For_All_Error_Cases.md) | Partial | TST001\*, TST002, TST004\*, TST006 |
 | [Include error documentation](medium/Include_Error_Documentation.md) | Review gate | — |
 | [Include extrinsic documentation](medium/Include_Extrinsic_Documentation.md) | Review gate | — |
-| [Include tests for edge cases](medium/Include_Tests_for_Edge_Cases.md) | Partial | TST004, TST005\*, MOK001\* |
-| [Make `BoundedVec` size configurable](medium/Make_BoundedVec_Size_Configurable.md) | Partial | SEC001\*, SEC013, SEC018 |
+| [Include tests for edge cases](medium/Include_Tests_for_Edge_Cases.md) | Partial | TST004\*, TST005\*, MOK001\* |
+| [Make `BoundedVec` size configurable](medium/Make_BoundedVec_Size_Configurable.md) | Partial | SEC001\*, SEC013\*, SEC018\* |
 | [Modularize large files](medium/Modularize_Large_Files.md) | Review gate | — |
 | [Provide event documentation](medium/Provide_Event_Documentation.md) | Review gate | — |
 | [Provide pallet configuration documentation](medium/Provide_Pallet_Configuration_Documentation.md) | Review gate | — |
@@ -113,7 +114,7 @@ Rule codes in the callouts link to the corresponding page in the
 | [Avoid unnecessary cloning](low/Avoid_Unnecessary_Cloning.md) | Review gate | — (SEM003\* related) |
 | [Expose runtime APIs](low/Expose_Runtime_APIs_For_Key_Functionalities.md) | Review gate | — |
 | [Implement descriptive logging](low/Implement_Descriptive_Logging.md) | Review gate | — (SEM014 related) |
-| [Remove unnecessary return values](low/Remove_Unnecessary_Return_Values.md) | Review gate | — (SEC007 related) |
+| [Remove unnecessary return values](low/Remove_Unnecessary_Return_Values.md) | Review gate | — (SEC007\* related) |
 | [Remove unused code](low/Remove_Unused_Code.md) | Partial | SEM012\* |
 | [Update benchmarks with latest syntax](low/Update_Benchmarks_With_Latest_Syntax.md) | Partial | BEN002 |
 | [Use appropriate naming conventions](low/Use_Appropriate_Naming_Conventions.md) | Partial | TRM001 |
