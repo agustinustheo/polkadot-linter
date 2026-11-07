@@ -1,0 +1,54 @@
+rule	engine	detection	method	default_after_pr17	syntax_default_total	syntax_allrules_total	syn:Acala	syn:Astar	syn:centrifuge-chain	syn:hydration-node	syn:kilt-node	syn:moonbeam	syn:peaq-network-node	syn:polkadot-runtime-templates	syn:polkadot-sdk-parachain-template	syn:runtimes	syn:sdk-cumulus-runtimes	syn:sdk-frame	syn:sdk-polkadot-runtime	compiler_total(all-rules, in-repo, deduped across scans)	rustc:Astar	rustc:hydration-node	rustc:parachain-template	rustc:runtimes-ahp	rustc:runtimes-relay	rustc:sdk-asset-hub-westend	rustc:sdk-kitchensink	rustc:sdk-westend
+BEN001	syntax	syn AST + tokens	WeightInfo trait/impl fn names vs #[benchmark]/benchmarks! names discovered in the crate and its *-benchmarking companion crate	off	0	176	0	0	33	122	0	5	0	0	0	0	0	16	0	0	0	0	0	0	0	0	0	0
+BEN002	syntax	syn AST + tokens	statements after #[extrinsic_call]/#[block] (v2) or the v1 verify{} block must contain an assert*/ensure/verify ident token	on	475	475	105	20	59	30	18	15	0	0	0	1	0	197	30	0	0	0	0	0	0	0	0	0
+BEN003	syntax	syn AST + tokens	#[pallet::call] fn names in lib.rs vs calls found in discovered benchmarks (crate + companion crate); name-based	on	290	290	11	13	43	112	4	16	1	0	0	15	0	72	3	0	0	0	0	0	0	0	0	0
+MOK001	syntax	syn + config name list	counts mock_patterns identifiers in test files	off	0	27	0	0	3	0	0	0	21	0	0	0	0	3	0	0	0	0	0	0	0	0	0	0
+RTC001	syntax	syn AST	`type WeightInfo = ()`/TestWeightInfo in runtime-crate Config impls; skips test runtimes by name tokens and listed dev runtimes	on	189	189	79	0	29	2	30	0	26	0	10	6	4	0	3	0	0	0	0	0	0	0	0	0
+RTC002	syntax	syn AST + tokens	`weights::<pallet>::..` bound but pallet missing from define_benchmarks! entries	on	24	24	2	2	1	1	0	0	2	0	0	6	9	0	1	0	0	0	0	0	0	0	0	0
+RTC003	syntax	syn AST	NoPriceForMessageDelivery / `()` delivery price on priced routers; WaiveDeliveryFees or Everything-waived FeeManager	on	34	34	6	6	6	2	4	6	4	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+RTC004	syntax	syn AST + tokens	zero-valued *Deposit parameter_types bound into Config impls	off	0	31	1	0	1	2	0	5	6	0	0	13	3	0	0	0	0	0	0	0	0	0	0	0
+RTC005	syntax	syn AST	pallet_insecure_randomness_collective_flip in construct_runtime / Randomness bindings	on	6	6	0	0	0	0	0	0	4	0	0	2	0	0	0	0	0	0	0	0	0	0	0	0
+RTC006	syntax	syn AST	xcm_executor::Config FeeManager = ()	on	3	3	0	0	0	0	0	2	0	0	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEC001	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	88	1	4	0	0	0	51	32	0
+SEC002	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	168	1	31	0	0	0	108	28	0
+SEC003	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	69	1	7	1	2	2	54	1	1
+SEC004	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	8	0	2	2	0	0	3	1	0
+SEC005	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	32	1	6	0	2	0	19	4	0
+SEC006	compiler	rustc HIR/types	repatriate_reserved result discarded/unchecked	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	2	0	0	0	0	0	1	1	0
+SEC007	compiler	rustc types	`let _ = <Result<_,E>>` with E != ()	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	103	5	10	0	3	0	78	7	0
+SEC008	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	275	8	19	1	12	1	177	56	1
+SEC009	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	150	18	18	0	0	0	99	15	0
+SEC010	compiler	rustc HIR	Hooks fn with >=2 resolved storage writes and a `?` after a write, no #[transactional]	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEC011	compiler	rustc HIR + call graph	storage iter()/drain() reachable from entry points without literal .take(n)	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	53	2	7	0	0	8	23	13	0
+SEC012	compiler	rustc HIR + flow	clear_prefix with None/u32::MAX limit reachable from entry points	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	8	0	0	0	0	0	7	1	0
+SEC013	compiler	rustc types	#[pallet::storage] value type contains Vec/BTreeMap/.. without #[pallet::unbounded]	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	50	2	0	0	0	0	39	9	0
+SEC014	compiler	rustc types	Identity hasher with u32/u64/Balance/BlockNumber key	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	6	0	0	0	0	0	4	2	0
+SEC015	compiler	rustc HIR	dispatch_bypass_filter reachable from entry point without ensure_root guard	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEC016	compiler	rustc HIR/types	see docs/rules	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	18	1	7	0	2	0	8	0	0
+SEC017	compiler	rustc types + dataflow	#[pallet::event] field containing unbounded Vec	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	24	1	7	0	1	0	2	13	0
+SEC018	compiler	rustc types	dispatchable with Vec param whose weight expr ignores its length and body has no bound check	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	24	0	1	0	0	0	15	8	0
+SEM002	syntax	syn visitor	.collect() without turbofish	off	0	600	8	20	20	208	18	29	37	5	0	25	1	202	27	0	0	0	0	0	0	0	0	0
+SEM003	syntax	syn visitor	by-value iteration where & would do	off	0	123	2	0	5	33	4	1	8	0	0	0	0	59	11	0	0	0	0	0	0	0	0	0
+SEM004	syntax	syn visitor	`use path::*` wildcard imports	off	0	192	5	11	9	12	0	16	9	4	14	34	20	47	11	0	0	0	0	0	0	0	0	0
+SEM005	syntax	syn visitor	WeightInfo fns with no parameters	off	0	14	0	0	1	10	1	0	0	0	0	0	0	2	0	0	0	0	0	0	0	0	0	0
+SEM006	compiler	rustc types (syn fallback)	DbWeight reads/writes without proof-size component	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	292	9	42	2	6	30	166	37	0
+SEM007	syntax	syn visitor	#[derive(RuntimeDebug)]	off	0	474	106	0	139	127	79	0	19	4	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM008	syntax	text/lines	`sp_std::` substring	off	0	1766	332	58	223	414	305	277	76	13	0	1	12	54	1	0	0	0	0	0	0	0	0	0
+SEM009	compiler	rustc HIR	contains_key then remove/take on the same resolved storage item	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM010	compiler	rustc HIR	`2 ^ n`/`10 ^ n` integer XOR literals	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM011	syntax	syn visitor	#[pallet::weight(Weight::zero())]	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM012	syntax	syn + content	#[allow(dead_code)] inside pallet	off	0	31	3	1	1	7	1	0	0	5	0	2	1	8	2	0	0	0	0	0	0	0	0	0
+SEM013	syntax	syn + name match	enum named *Invalidity* without #[repr(u8)]	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM014	syntax	text/lines	SubmitTransaction::<..>::submit_transaction line followed within 12 lines by log::x! without `target:`	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM015	syntax	syn visitor	#[pallet::authorize] fn without #[pallet::weight_of_authorize]	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+SEM016	compiler	rustc HIR (syn fallback)	CreateAuthorizedTransaction::create_extension without AuthorizeCall::new	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+TRM001	syntax	regex over comments/strings	configured spelling dictionaries; dormant until configured	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+TST001	syntax	syn visitor	assert!(..is_err()) / assert_err! in tests where assert_noop! fits	off	0	27	0	0	0	7	0	19	0	0	0	0	0	1	0	0	0	0	0	0	0	0	0	0
+TST002	syntax	syn visitor	assert_ok!(..apply_extrinsic(..)) in tests	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0
+TST003	syntax	syn visitor	`use` inside closures in tests	off	0	312	1	8	1	105	0	93	0	10	0	20	5	65	4	0	0	0	0	0	0	0	0	0
+TST004	syntax	syn + text substring	`Ok(.. Pays::No ..)` in any non-test fn; companion tests.rs or tests/*.rs must contain both substrings "Pays::Yes" and "pays_fee"	on	96	96	0	0	0	4	0	2	0	0	0	1	0	83	6	0	0	0	0	0	0	0	0	0
+TST005	syntax	regex on assert tokens	internal_field_patterns (`\._\w+`, `.inner`, `.state`...) in assert macros in tests	off	0	63	0	1	0	22	12	0	0	0	0	6	8	4	10	0	0	0	0	0	0	0	0	0
+TST006	syntax	syn visitor, name-based	#[pallet::call] fn with call_index whose body calls put/insert/mutate/remove/kill/set/append/try_append (any receiver) and has no deposit_event call in the same body	on	137	137	6	3	9	4	6	5	4	0	1	3	0	79	17	0	0	0	0	0	0	0	0	0
+VAL001	syntax	text/substring (config lists)	heavy_operations substring (e.g. `::get(`) on a line before a cheap_validations substring (`ensure!`) in the same fn	off	0	12	0	0	0	4	1	0	0	0	0	0	0	4	3	0	0	0	0	0	0	0	0	0
+VAL002	compiler	rustc types	`/` by a Get::get() config value or .len()/.count() without non-zero proof	on	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	10	0	0	0	0	0	9	1	0
+VAL003	compiler	rustc HIR	resolved storage write before a validation check in a dispatchable	off	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	36	4	17	0	0	1	10	4	0

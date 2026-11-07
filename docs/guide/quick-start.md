@@ -35,7 +35,7 @@ package (the manifest is discovered from the scan path):
 
 ```bash
 cargo run -- \
-  --rules SEC013 \
+  --rules SEC011 \
   --package pallet-xcm \
   --lib \
   ../polkadot-sdk/polkadot/xcm/pallet-xcm

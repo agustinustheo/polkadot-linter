@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Partial.** BEN001, BEN002, BEN003, and SEC018 prove that benchmarks exist, are verified, and that some input length is accounted for in weights. They cannot prove that the chosen inputs actually exercise every worst-case execution path or state, which still requires reviewer judgment. See [BEN001](../../rules/BEN001.md), [BEN002](../../rules/BEN002.md), [BEN003](../../rules/BEN003.md), and [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Partial.** BEN001, BEN002, BEN003, and SEC018 prove that benchmarks exist, are verified, and that some input length is accounted for in weights. They cannot prove that the chosen inputs actually exercise every worst-case execution path or state, which still requires reviewer judgment. BEN001 and SEC018 are off by default (enable them with `config/all-rules.toml`). See [BEN001](../../rules/BEN001.md), [BEN002](../../rules/BEN002.md), [BEN003](../../rules/BEN003.md), and [SEC018](../../rules/SEC018.md).
 
 ## Description
 

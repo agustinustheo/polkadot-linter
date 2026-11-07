@@ -49,14 +49,14 @@ cargo +nightly-2025-09-01 build \
   --bin polkadot-linter-driver
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" \
+  --config "$ROOT_DIR/config/all-rules.toml" \
   --format json \
   --rules SEC013 \
   --syntax-only \
   "$FIXTURE_DIR" > "$SYNTAX_JSON"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
-  --config "$ROOT_DIR/config/default.toml" \
+  --config "$ROOT_DIR/config/all-rules.toml" \
   --format json \
   --rules SEC013 \
   --driver-path "$DRIVER" \

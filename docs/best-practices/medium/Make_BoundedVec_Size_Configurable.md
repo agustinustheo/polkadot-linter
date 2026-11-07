@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Partial.** SEC013 (unbounded storage collections), SEC001 (unbounded vec in extrinsic), and SEC018 (missing weight for unbounded input) flag unbounded data, but whether the bound is exposed as a `Config` associated type is a design decision. See [SEC013](../../rules/SEC013.md), [SEC001](../../rules/SEC001.md), [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Partial.** SEC013 (unbounded storage collections), SEC001 (unbounded vec in extrinsic), and SEC018 (missing weight for unbounded input) flag unbounded data, but whether the bound is exposed as a `Config` associated type is a design decision. SEC001, SEC013 and SEC018 are off by default (enable them with `config/all-rules.toml`). See [SEC013](../../rules/SEC013.md), [SEC001](../../rules/SEC001.md), [SEC018](../../rules/SEC018.md).
 
 ## Description
 

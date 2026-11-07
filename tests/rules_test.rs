@@ -6896,7 +6896,7 @@ fn rustdoc_sec013_reports_resolved_unbounded_storage_values_only() {
     let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(
         &rustdoc.to_string(),
         Some(std::path::Path::new("/workspace/pallet")),
-        &polkadot_linter::config::Config::default(),
+        &all_rules_config(),
     )
     .expect("rustdoc JSON should parse");
 
@@ -6924,7 +6924,7 @@ fn rustdoc_sec013_honors_rule_disablement() {
             }
         }
     });
-    let mut config = polkadot_linter::config::Config::default();
+    let mut config = all_rules_config();
     config.rules.enabled.insert("SEC013".to_string(), false);
 
     let diags = polkadot_linter::rustdoc_analysis::analyze_rustdoc_json_str(

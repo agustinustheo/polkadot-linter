@@ -52,7 +52,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | Code | Family | Name | Severity | What it entails |
 | --- | --- | --- | --- | --- |
 | `VAL001` | Validation | `validation-before-heavy-read` | `warning` | Expensive storage reads happen before cheap precondition checks such as `ensure!` or bounds checks. Off by default. |
-| `VAL002` | Validation | `division-without-zero-guard` | `warning` | Division uses a config or runtime-derived value without first proving the divisor cannot be zero. |
+| `VAL002` | Validation | `division-without-zero-guard` | `advisory` | Division uses a config or runtime-derived value without first proving the divisor cannot be zero. Off by default. |
 | `VAL003` | Validation | `storage-write-before-validation` | `warning` | Storage is mutated before all validations finish, which can leave unnecessary writes or rollback risk. Off by default. |
 | `SEM002` | Semantic | `prefer-collect-turbofish` | `advisory` | `iter.collect()` uses a separate type annotation instead of `.collect::<Vec<_>>()`. Off by default. |
 | `SEM003` | Semantic | `prefer-ref-iteration` | `advisory` | A `for` loop uses `.iter()` where borrowing the collection directly would be more idiomatic. Off by default. |
@@ -73,7 +73,7 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `TST001` | Test smell | `prefer-assert-noop` | `warning` | Tests manually check for failure instead of using `assert_noop!`, which also verifies storage is unchanged. Off by default. |
 | `TST002` | Test smell | `apply-extrinsic-assert-ok` | `error` | `assert_ok!` is used on `apply_extrinsic`, which can hide the inner `DispatchError`. |
 | `TST003` | Test smell | `imports-inside-closures` | `warning` | `use` imports appear inside functions or closures instead of at module scope. Off by default. |
-| `TST004` | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. |
+| `TST004` | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. Off by default. |
 | `TST005` | Test smell | `implementation-detail-assertions` | `warning` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. Off by default. |
 | `TST006` | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. |
 | `MOK001` | Mock usage | `excessive-mock-setup` | `warning` | Test setup is dominated by mocks and scaffolding relative to actual assertions. Off by default. |
@@ -97,18 +97,18 @@ This matrix maps each diagnostic code to the rule it represents and the kind of 
 | `SEC004` | Security | `unsafe-weight-arithmetic` | `warning` | A weight attribute uses non-saturating arithmetic that can overflow or undercount. Off by default. |
 | `SEC005` | Security | `expensive-weight-calculation` | `advisory` | Weight calculation performs storage reads, encoding, or other expensive work before dispatch. Off by default. |
 | `SEC006` | Security | `unchecked-repatriate-reserved` | `warning` | The remaining balance from `repatriate_reserved` is ignored instead of being checked. |
-| `SEC007` | Security | `let-underscore-result` | `warning` | `let _ =` discards a likely `Result`, hiding potential failures. |
+| `SEC007` | Security | `let-underscore-result` | `warning` | `let _ =` discards a likely `Result`, hiding potential failures. Off by default. |
 | `SEC008` | Security | `panic-in-production` | `warning` | Production code uses panic paths such as `unwrap`, `expect`, `panic!`, or `todo!`. Off by default. |
 | `SEC009` | Security | `raw-arithmetic-in-fallible` | `advisory` | Fallible functions use raw arithmetic operators where overflow handling should be explicit. Off by default. |
 | `SEC010` | Security | `missing-transactional-in-hook` | `warning` | A hook performs multiple storage writes without a transactional storage layer. |
 | `SEC011` | Security | `storage-iteration-in-dispatchables` | `warning` | Dispatchable or hook code iterates storage in a state-size-dependent way. |
 | `SEC012` | Security | `unbounded-clear-prefix` | `warning` | Trie cleanup uses an effectively unbounded `clear_prefix` or related call. |
-| `SEC013` | Security | `unbounded-storage-collections` | `warning` | Storage types use unbounded collections without explicitly marking them as unbounded. |
-| `SEC014` | Security | `identity-hasher-on-common-keys` | `warning` | `Identity` hashing is used with common key types that should not be stored unhashed. |
+| `SEC013` | Security | `unbounded-storage-collections` | `warning` | Storage types use unbounded collections without explicitly marking them as unbounded. Off by default. |
+| `SEC014` | Security | `identity-hasher-on-common-keys` | `warning` | `Identity` hashing is used with common key types that should not be stored unhashed. Off by default. |
 | `SEC015` | Security | `dispatch-bypass-filter-in-production` | `warning` | Production code calls `.dispatch_bypass_filter()`, bypassing the runtime filter. |
 | `SEC016` | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. Off by default. |
-| `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. |
-| `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. |
+| `SEC017` | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. Off by default. |
+| `SEC018` | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. Off by default. |
 | `SEC019` | Security | `imbalance-escapes-transaction` | `error` | A rollback-capable `with_storage_layer`/`with_transaction`/`ProcessTransaction::process` closure moves a token imbalance into an outer local, so its `Drop` writes issuance after a rollback. Off by default. |
 | `SEC020` | Security | `discarded-verification-result` | `error` | A verifier's `bool`/`Result<bool, _>` verdict is discarded, so an invalid proof is accepted. |
 
@@ -134,7 +134,7 @@ cheap_validations = ["ensure!", ".is_empty()", ".is_zero()"]
 ### Configuration Notes
 
 - [`polkadot-linter.toml`](polkadot-linter.toml) provides this repository's project-level defaults and shows how to disable noisy rules temporarily, promote specific rules, and tune family-specific heuristics.
-- `[rules.enabled]` and `[rules.severity]` override the bundled per-rule entries rather than replacing them. Every rule is enabled except those marked "Off by default" above. A blind two-labeler precision audit on 10 third-party parachain repositories turned off every rule whose sampled findings were under 30% actionable or at least 30% false positives; see [`benchmarks/precision/2026-11-external`](benchmarks/precision/2026-11-external/README.md). `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` are Parity SDK style conventions, and `SEM007`, `TST005` and `MOK001` were mostly false positives in an earlier sample. Projects that follow the SDK conventions can turn them back on:
+- `[rules.enabled]` and `[rules.severity]` override the bundled per-rule entries rather than replacing them. Every rule is enabled except those marked "Off by default" above. A blind two-labeler precision audit on 10 third-party parachain repositories turned off every rule whose sampled findings were under 30% actionable or at least 30% false positives; see [`benchmarks/precision/2026-11-external`](benchmarks/precision/2026-11-external/README.md). A second, run-based audit on polkadot-sdk and the same repositories turned off `TST004`, `SEC007`, `SEC013`, `SEC014`, `SEC017`, `SEC018` and `VAL002` (0-13% actionable, and none caught any bug in an audited-commit benchmark); see [`benchmarks/precision/2026-11-run-audit`](benchmarks/precision/2026-11-run-audit/README.md). `SEM002`, `SEM003`, `SEM004`, `SEM012` and `TST003` are Parity SDK style conventions, and `SEM007`, `TST005` and `MOK001` were mostly false positives in an earlier sample. Projects that follow the SDK conventions can turn them back on:
 
   ```toml
   [rules.enabled]
