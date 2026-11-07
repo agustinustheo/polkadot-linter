@@ -180,7 +180,7 @@ impl LintEngine {
         diagnostics
     }
 
-    pub(crate) fn is_test_file(path: &Path, _content: &str) -> bool {
+    pub fn is_test_file(path: &Path, _content: &str) -> bool {
         let path_str = path.to_string_lossy().replace('\\', "/");
         let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         path_str.contains("/tests/")
@@ -196,7 +196,7 @@ impl LintEngine {
             || file_name == "testing_utils.rs"
     }
 
-    pub(crate) fn is_benchmark_file(path: &Path) -> bool {
+    pub fn is_benchmark_file(path: &Path) -> bool {
         let path_str = path.to_string_lossy().replace('\\', "/");
         path_str.contains("/benchmarking")
             || path_str.contains("/benchmarks")

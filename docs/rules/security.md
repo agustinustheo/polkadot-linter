@@ -24,3 +24,6 @@ Security rules target patterns that put a live chain at risk: weight-exhaustion 
 | [`SEC018`](SEC018.md) | Weight Does Not Account for Unbounded Extrinsic Input | Warning, off by default | compiler-backed |
 | [`SEC019`](SEC019.md) | Token Imbalance Escapes a Transactional Storage Layer | Error, off by default | compiler-backed |
 | [`SEC020`](SEC020.md) | Discarded Verification Verdict | Error | compiler-backed |
+| [`SEC021`](SEC021.md) | Inverted Verification Guard | Error | compiler-backed |
+| [`SEC022`](SEC022.md) | Discarded Origin Check | Error, off by default | compiler-backed |
+| [`SEC023`](SEC023.md) | Option Equality in an Origin Check | Error, off by default | compiler-backed |
