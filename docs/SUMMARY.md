@@ -14,6 +14,7 @@
 
 # Polkadot Linter Rules Reference
 
+- [All Rules](rule-index.md)
 - [Security Rules (SEC)](rules/security.md)
   - [SEC001 - Unbounded Vec in Extrinsic Parameters](rules/SEC001.md)
   - [SEC002 - Debug Assertions Reachable from Runtime Entry Points](rules/SEC002.md)
