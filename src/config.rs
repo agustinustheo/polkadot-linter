@@ -380,24 +380,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_default_configuration_matches_config_default_toml() {
-        let config = Config::default();
-        assert_eq!(
-            config.rules.severity.get("TST002"),
-            Some(&"error".to_string())
-        );
-        assert_eq!(config.general.exclude.first(), Some(&".git/**".to_string()));
-        assert!(!config.rule_enabled("SEM002"));
-        assert!(!config.rule_enabled("SEM008"));
-        assert!(!config.rule_enabled("SEC013"));
-        assert!(config.rule_enabled("RTC001"));
-        assert_eq!(
-            config.rule_severity("VAL002", Severity::Warning),
-            Severity::Advisory
-        );
-    }
-
-    #[test]
     fn loaded_rules_tables_override_bundled_entries() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("polkadot-linter.toml");

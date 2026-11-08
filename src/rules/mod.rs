@@ -11,17 +11,6 @@ use crate::{
     engine::FileContext,
 };
 
-/// Security rules whose public implementation is the rustc-backed driver.
-///
-/// They deliberately do not appear in [`all_rules`]. Keeping a `syn` rule
-/// registered for the same ID would create a second, lower-fidelity authority
-/// for a compiler-backed diagnostic.
-pub const COMPILER_BACKED_SECURITY_RULE_IDS: &[&str] = &[
-    "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009",
-    "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
-    "SEC019", "SEC020", "SEC021", "SEC022", "SEC023", "SEC024",
-];
-
 /// All public rules implemented by the rustc driver.
 pub const COMPILER_BACKED_RULE_IDS: &[&str] = &[
     "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003",

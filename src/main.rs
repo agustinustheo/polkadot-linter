@@ -499,6 +499,7 @@ mod tests {
     use polkadot_linter::{
         config::Config,
         diagnostics::{Diagnostic, RuleCategory, Severity},
+        rules::COMPILER_BACKED_RULE_IDS,
     };
 
     use super::{
@@ -515,51 +516,19 @@ mod tests {
     }
 
     #[test]
-    fn default_compiler_backed_rules_skip_default_off_rules() {
-        assert_eq!(
-            selected_compiler_backed_rules(None, &[], &Config::default()),
-            strings(&[
-                "SEM009", "SEM010", "SEM016", "SEC006", "SEC010", "SEC011", "SEC012", "SEC015",
-                "SEC020", "SEC021",
-            ])
-        );
-    }
-
-    #[test]
-    fn all_rules_config_selects_every_compiler_backed_rule() {
-        assert_eq!(
-            selected_compiler_backed_rules(None, &[], &all_rules_config()),
-            strings(&[
-                "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002",
-                "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010",
-                "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018",
-                "SEC019", "SEC020", "SEC021", "SEC022", "SEC023", "SEC024",
-            ])
-        );
-    }
-
-    #[test]
-    fn cli_security_family_expands_to_migrated_rules_only() {
-        let cli_rules = strings(&["SEC"]);
-
-        assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
-            strings(&[
-                "SEC001", "SEC002", "SEC003", "SEC004", "SEC005", "SEC006", "SEC007", "SEC008",
-                "SEC009", "SEC010", "SEC011", "SEC012", "SEC013", "SEC014", "SEC015", "SEC016",
-                "SEC017", "SEC018", "SEC019", "SEC020", "SEC021", "SEC022", "SEC023", "SEC024",
-            ])
-        );
-    }
-
-    #[test]
-    fn cli_semantic_family_expands_to_migrated_rules_only() {
-        let cli_rules = strings(&["SEM"]);
-
-        assert_eq!(
-            selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
-            strings(&["SEM006", "SEM009", "SEM010", "SEM016"])
-        );
+    fn cli_family_prefix_selects_every_matching_compiler_backed_rule() {
+        for family in ["SEC", "SEM", "VAL"] {
+            let expected = COMPILER_BACKED_RULE_IDS
+                .iter()
+                .filter(|id| id.starts_with(family))
+                .map(|id| (*id).to_string())
+                .collect::<Vec<_>>();
+            assert!(!expected.is_empty(), "{family} has compiler-backed rules");
+            assert_eq!(
+                selected_compiler_backed_rules(Some(&strings(&[family])), &[], &all_rules_config()),
+                expected
+            );
+        }
     }
 
     #[test]

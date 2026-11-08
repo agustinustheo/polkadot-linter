@@ -36,10 +36,6 @@ pub struct ProjectModel {
 }
 
 impl ProjectModel {
-    pub fn discover(scan_root: &Path) -> Option<Self> {
-        Self::discover_with_features(scan_root, false, &[])
-    }
-
     pub fn discover_with_features(
         scan_root: &Path,
         no_default_features: bool,
