@@ -7,174 +7,31 @@ include = []
 [rules]
 # Override individual rule enablement: rule_id = true/false
 [rules.enabled]
-# Every other rule is enabled. Evidence: benchmarks/precision/ (labeled
-# findings on 10 third-party parachain repositories: moonbeam, astar, acala,
-# hydration, centrifuge, kilt, peaq, the fellows runtimes, the OpenZeppelin
-# templates and the parachain template). Counts are TP/sampled.
+# Every rule not listed here is enabled. The rules that were mostly wrong or
+# low-value on real projects were deleted; docs/retired-rules.md records what
+# they were and why they were removed.
 #
-# 2026-10, 0/10 each. Parity SDK style conventions:
-SEM002 = false
-SEM003 = false
-SEM004 = false
-SEM012 = false
-TST003 = false
-# 2026-10, 0/10 each. False positives: RuntimeDebug is deprecated only from
-# sp-debug-derive 15.0.0 (every flagged repository locks 14.0.0); public state
-# and `.inner()` accessors; precompile test-harness assertions counted as mocks.
-SEM007 = false
-TST005 = false
-MOK001 = false
-# 2026-11, rule: off if TP < 30% or FP >= 30%.
-# Mostly false positives: Ethereum ABI decoding read as SCALE (SEC003 0/10);
-# genesis and `qed` code it claims to exclude (SEC008 0/12); validity and XCM
-# errors read as dispatch results (TST001 0/12); SEC009 2/12, SEC001 1/4,
-# VAL001 2/5.
-SEC001 = false
-SEC003 = false
-SEC008 = false
-SEC009 = false
-TST001 = false
-VAL001 = false
-# Correct but not actionable: SEC004 0/4, SEC005 0/8, SEC016 0/9, SEM008 0/12
-# (58% of all output), RTC004 1/12, SEC002 1/12, SEM005 1/12, VAL003 1/12,
-# SEM006 3/12, BEN001 4/12 (misses runtime-hosted benchmarks).
-BEN001 = false
+# 2026-11 round 1 (benchmarks/precision/2026-11-external): SEC004 0/4 and
+# RTC004 1/12 were correct but not actionable, so they are opt-in.
 RTC004 = false
-SEC002 = false
 SEC004 = false
-SEC005 = false
-SEC016 = false
-SEM005 = false
-SEM006 = false
-SEM008 = false
-VAL003 = false
-# 2026-11 round 2 (benchmarks/precision/2026-11-run-audit: polkadot-sdk plus
-# the 10 repositories above, compiler rules on 8 runtimes). No rule below
-# caught any of 56 auditor-reported bugs in an audited-commit benchmark.
-# TST004 0/15 (a test no SDK pallet writes); SEC013 0/15 (only flags
-# `without_storage_info` pallets); SEC017 0/15 and SEC018 2/15 (bounded
-# elsewhere or priced by length fees); VAL002 0/10 (`Get` constant divisors);
-# SEC014 0/6 (sequential indices); SEC007 2/15 (`let _ =` is an explicit
-# discard, and it skips dispatchable bodies).
-SEC007 = false
-SEC013 = false
-SEC014 = false
-SEC017 = false
-SEC018 = false
-TST004 = false
-VAL002 = false
 # SEC024 (discarded `Result` whose `Err` holds funds): 10 compiled findings on
 # polkadot-sdk (28 crates) and astar-runtime, 3 TP / 7 NOISE / 0 FP. The noise is
 # deliberate "burn on failure" code, mostly commented as such (asset-tx-payment
 # refund, delegated-staking reporter reward, xcm-executor best-effort return).
 # See docs/rules/SEC024.md.
 SEC024 = false
-# 2026-11 individuality-community acceptance test
-# (benchmarks/precision/2026-11-individuality-community): 39 default findings,
-# three skeptical reviewers, and a finding counts only if an engineer would fix
-# it at reasonable cost. BEN002 0/9 (pure-read and single-op microbenchmarks;
-# `#[extrinsic_call]` already propagates errors), TST006 0/8 (off-chain worker
-# maintenance steps; helpers that emit from an `if` condition), SEM013 0/2
-# (explicit discriminants below 256 already make `as u8` well-defined), BEN003
-# 0/12 with 9 wrong: it does not follow weight helpers, closure-based benchmark
-# setup or metered step budgets. A wrong finding costs more than a missed one.
-BEN002 = false
-BEN003 = false
-SEM013 = false
-TST006 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]
 # TST002 (assert_ok on apply_extrinsic) is error-level because it silently hides failures
 TST002 = "error"
-# If re-enabled, keep these as review hints rather than warnings.
-SEC005 = "advisory"
-SEM008 = "advisory"
-# SDK sample: VAL002 3/3 findings were non-actionable; if re-enabled, keep it
-# as a review hint without treating config constants as warnings.
-VAL002 = "advisory"
 
 # ---------------------------------------------------------------------------
-# Rule family: Validation order (VAL001)
-# ---------------------------------------------------------------------------
-[validation_order]
-severity = "warning"
-
-# Known expensive/heavy operations — Polkadot SDK storage reads
-heavy_operations = [
-	"::contains_key(",
-	"::count(",
-	"::decode_len(",
-	"::get(",
-	"::iter(",
-	"::iter_keys(",
-	"::iter_prefix(",
-	"::try_get(",
-	"CountedStorageMap::get",
-	"StorageDoubleMap::get",
-	"StorageMap::get",
-	"StorageNMap::get",
-	"StorageValue::get",
-	"T::DbWeight::get()",
-]
-
-# Known cheap validation operations
-cheap_validations = [
-	".is_empty()",
-	".is_none()",
-	".is_some()",
-	".is_zero()",
-	"ensure!",
-	"ensure_none",
-	"ensure_root",
-	"ensure_signed",
-]
-
-# ---------------------------------------------------------------------------
-# Rule family: Test smells (TST001-TST006)
+# Rule family: Test smells (TST002)
 # ---------------------------------------------------------------------------
 [test_smells]
 severity = "warning"
-
-# Patterns in assertions that suggest testing implementation details
-internal_field_patterns = [
-	'\._\w+',      # underscore-prefixed private fields
-	'\.buffer\b',
-	'\.cache\b',
-	'\.counter\b',
-	'\.flag\b',
-	'\.inner\b',
-	'\.state\b',
-]
-
-# ---------------------------------------------------------------------------
-# Rule family: Mock usage (MOK001)
-# ---------------------------------------------------------------------------
-[mock_usage]
-severity = "warning"
-max_mock_expectations = 10
-max_mock_ratio = 3.0
-
-mock_patterns = [
-	"MOCK",
-	"Mock",
-	"MockBuilder",
-	"mock",
-	"new_test_ext",
-	"with_mock",
-]
-
-# ---------------------------------------------------------------------------
-# Rule family: Benchmarking compliance (BEN001-BEN003)
-# ---------------------------------------------------------------------------
-[benchmarking]
-severity = "warning"
-
-verification_patterns = [
-	"assert_has_event",
-	"assert_last_event",
-	"verify",
-]
 
 # ---------------------------------------------------------------------------
 # Rule family: Runtime configuration (RTC001-RTC010)

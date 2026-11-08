@@ -8,10 +8,7 @@ use crate::diagnostics::Severity;
 pub struct Config {
     pub general: GeneralConfig,
     pub rules: RulesConfig,
-    pub validation_order: ValidationOrderConfig,
     pub test_smells: TestSmellsConfig,
-    pub mock_usage: MockUsageConfig,
-    pub benchmarking: BenchmarkingConfig,
     pub terminology: TerminologyConfig,
     pub runtime_config: RuntimeConfigConfig,
 }
@@ -22,10 +19,7 @@ pub struct Config {
 struct BundledConfig {
     general: GeneralConfig,
     rules: RulesConfig,
-    validation_order: ValidationOrderConfig,
     test_smells: TestSmellsConfig,
-    mock_usage: MockUsageConfig,
-    benchmarking: BenchmarkingConfig,
     terminology: TerminologyConfig,
     runtime_config: RuntimeConfigConfig,
 }
@@ -50,42 +44,7 @@ pub struct RulesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct ValidationOrderConfig {
-    /// Known expensive/heavy operations (function name patterns)
-    pub heavy_operations: Vec<String>,
-    /// Known cheap validation operations
-    pub cheap_validations: Vec<String>,
-    /// Severity for this rule family
-    pub severity: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 pub struct TestSmellsConfig {
-    /// Patterns indicating internal field access in assertions
-    pub internal_field_patterns: Vec<String>,
-    /// Severity for this rule family
-    pub severity: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct MockUsageConfig {
-    /// Mock-related patterns to detect
-    pub mock_patterns: Vec<String>,
-    /// Maximum number of mock expectations per test before warning
-    pub max_mock_expectations: usize,
-    /// Maximum ratio of mock setup to actual assertions
-    pub max_mock_ratio: f64,
-    /// Severity for this rule family
-    pub severity: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct BenchmarkingConfig {
-    /// Expected benchmark verification patterns
-    pub verification_patterns: Vec<String>,
     /// Severity for this rule family
     pub severity: String,
 }
@@ -169,89 +128,9 @@ impl Default for GeneralConfig {
     }
 }
 
-impl Default for ValidationOrderConfig {
-    fn default() -> Self {
-        ValidationOrderConfig {
-            heavy_operations: vec![
-                // Polkadot SDK storage reads
-                "::get(".to_string(),
-                "::try_get(".to_string(),
-                "::iter(".to_string(),
-                "::iter_prefix(".to_string(),
-                "::iter_keys(".to_string(),
-                "::contains_key(".to_string(),
-                "::decode_len(".to_string(),
-                "::count(".to_string(),
-                // FRAME storage
-                "StorageValue::get".to_string(),
-                "StorageMap::get".to_string(),
-                "StorageDoubleMap::get".to_string(),
-                "StorageNMap::get".to_string(),
-                "CountedStorageMap::get".to_string(),
-                // Weight/computation
-                "T::DbWeight::get()".to_string(),
-            ],
-            cheap_validations: vec![
-                "ensure!".to_string(),
-                "ensure_signed".to_string(),
-                "ensure_root".to_string(),
-                "ensure_none".to_string(),
-                ".is_empty()".to_string(),
-                ".is_none()".to_string(),
-                ".is_some()".to_string(),
-                ".is_zero()".to_string(),
-                "== 0".to_string(),
-                "!= 0".to_string(),
-                ".len()".to_string(),
-            ],
-            severity: "warning".to_string(),
-        }
-    }
-}
-
 impl Default for TestSmellsConfig {
     fn default() -> Self {
         TestSmellsConfig {
-            internal_field_patterns: vec![
-                r"\._\w+".to_string(), // underscore-prefixed private fields
-                r"\.inner\b".to_string(),
-                r"\.state\b".to_string(),
-                r"\.cache\b".to_string(),
-                r"\.counter\b".to_string(),
-                r"\.buffer\b".to_string(),
-                r"\.flag\b".to_string(),
-            ],
-            severity: "warning".to_string(),
-        }
-    }
-}
-
-impl Default for MockUsageConfig {
-    fn default() -> Self {
-        MockUsageConfig {
-            mock_patterns: vec![
-                "mock".to_string(),
-                "Mock".to_string(),
-                "MOCK".to_string(),
-                "MockBuilder".to_string(),
-                "with_mock".to_string(),
-                "new_test_ext".to_string(),
-            ],
-            max_mock_expectations: 10,
-            max_mock_ratio: 3.0,
-            severity: "warning".to_string(),
-        }
-    }
-}
-
-impl Default for BenchmarkingConfig {
-    fn default() -> Self {
-        BenchmarkingConfig {
-            verification_patterns: vec![
-                "verify".to_string(),
-                "assert_last_event".to_string(),
-                "assert_has_event".to_string(),
-            ],
             severity: "warning".to_string(),
         }
     }
@@ -304,10 +183,7 @@ impl Config {
             self.validate_severity(&format!("rules.severity.{rule_id}"), severity)?;
         }
         for (section, severity) in [
-            ("validation_order.severity", &self.validation_order.severity),
             ("test_smells.severity", &self.test_smells.severity),
-            ("mock_usage.severity", &self.mock_usage.severity),
-            ("benchmarking.severity", &self.benchmarking.severity),
             ("terminology.severity", &self.terminology.severity),
             (
                 "runtime_config.substrate_weight_severity",
@@ -346,10 +222,7 @@ impl Config {
 
     fn family_severity(&self, rule_id: &str) -> Option<Severity> {
         let severity = match rule_id.get(..3) {
-            Some("VAL") => &self.validation_order.severity,
             Some("TST") => &self.test_smells.severity,
-            Some("MOK") => &self.mock_usage.severity,
-            Some("BEN") => &self.benchmarking.severity,
             Some("TRM") => &self.terminology.severity,
             Some("RTC") => self.runtime_config.severity.as_ref()?,
             _ => return None,
@@ -365,10 +238,7 @@ impl Default for Config {
         Self {
             general: defaults.general,
             rules: defaults.rules,
-            validation_order: defaults.validation_order,
             test_smells: defaults.test_smells,
-            mock_usage: defaults.mock_usage,
-            benchmarking: defaults.benchmarking,
             terminology: defaults.terminology,
             runtime_config: defaults.runtime_config,
         }
@@ -385,21 +255,18 @@ mod tests {
         let path = dir.path().join("polkadot-linter.toml");
         std::fs::write(
             &path,
-            "[rules.enabled]\nSEM003 = true\n[rules.severity]\nVAL001 = \"error\"\n",
+            "[rules.enabled]\nSEC004 = true\n[rules.severity]\nSEC011 = \"error\"\n",
         )
         .unwrap();
         let config = Config::load(&path).unwrap();
-        assert!(config.rule_enabled("SEM003"));
-        assert!(!config.rule_enabled("SEM002"));
-        for rule in ["BEN002", "BEN003", "SEM013", "TST006"] {
-            assert!(!config.rule_enabled(rule), "{rule} is off by default");
-        }
+        assert!(config.rule_enabled("SEC004"));
+        assert!(!config.rule_enabled("RTC004"));
         assert_eq!(
             config.rules.severity.get("TST002"),
             Some(&"error".to_string())
         );
         assert_eq!(
-            config.rules.severity.get("VAL001"),
+            config.rules.severity.get("SEC011"),
             Some(&"error".to_string())
         );
     }
@@ -421,40 +288,20 @@ mod tests {
     }
 
     #[test]
-    fn partial_test_smell_config_does_not_match_float_literals() {
-        let config: Config = toml::from_str(
-            r#"
-[test_smells]
-severity = "warning"
-"#,
-        )
-        .expect("partial test smell configuration must deserialize");
-
-        assert!(
-            !config
-                .test_smells
-                .internal_field_patterns
-                .iter()
-                .any(|pattern| pattern == r"\.0\b"),
-            "float literals must not be treated as tuple-field assertions"
-        );
-    }
-
-    #[test]
     fn per_rule_severity_overrides_family_severity() {
         let mut config = Config::default();
         config.test_smells.severity = "error".to_string();
         config
             .rules
             .severity
-            .insert("TST001".to_string(), "advisory".to_string());
+            .insert("TST002".to_string(), "advisory".to_string());
 
         assert_eq!(
-            config.rule_severity("TST001", Severity::Warning),
+            config.rule_severity("TST002", Severity::Warning),
             Severity::Advisory
         );
         assert_eq!(
-            config.rule_severity("TST003", Severity::Advisory),
+            config.rule_severity("TST999", Severity::Advisory),
             Severity::Error
         );
     }
@@ -490,7 +337,7 @@ severity = "warning"
         assert!(config.validate().unwrap_err().contains("invalid glob"));
 
         config.general.exclude.clear();
-        config.benchmarking.severity = "urgent".to_string();
+        config.test_smells.severity = "urgent".to_string();
         assert!(config.validate().unwrap_err().contains("invalid severity"));
     }
 }

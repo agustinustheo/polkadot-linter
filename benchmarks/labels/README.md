@@ -7,9 +7,8 @@ false positives must be backed by these labels, and must not win by
 suppressing true positives.
 
 `scripts/check-labeled-findings.sh [SDK_DIR] [LABELS_DIR]` runs a syntax-only
-scan over every SDK root the labels reference (`substrate/frame`,
-`substrate/bin/node/runtime`, `cumulus`, `polkadot/runtime`, `polkadot/xcm`,
-`templates`) and checks every `*.tsv` file here. CI runs it after the
+scan over every SDK root the labels reference (`substrate`, `cumulus`,
+`polkadot`, `templates`) and checks every `*.tsv` file here. CI runs it after the
 source-rule corpus baseline check, preceded by
 `scripts/check-labeled-findings.sh --self-test`.
 
@@ -22,7 +21,7 @@ an unknown rule or a compiler-backed rule (those never run under
 
 ## Format
 
-One file per rule family or branch (`SEM.tsv`, `TST.tsv`, `VAL.tsv`, ...).
+One file per rule family or branch (`RTC.tsv`, `SEM.tsv`, `TST.tsv`, ...).
 Tab-separated, with this exact header line:
 
 ```text

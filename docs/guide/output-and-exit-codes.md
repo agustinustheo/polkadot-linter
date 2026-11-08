@@ -30,11 +30,8 @@ Rules are grouped into families by prefix. Pass whole families or specific IDs t
 
 | Prefix | Family |
 | --- | --- |
-| `VAL` | Validation order and guard rails |
-| `SEM` | Semantic and style checks |
+| `SEM` | Semantic checks |
 | `TST` | Test quality checks |
-| `MOK` | Mock usage heuristics |
-| `BEN` | Benchmark coverage and verification |
 | `TRM` | Terminology and text conventions |
 | `SEC` | Security-focused rules |
 | `RTC` | Runtime configuration (`impl Config for Runtime`, XCM, deposits, benchmarks) |

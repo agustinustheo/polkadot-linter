@@ -13,8 +13,8 @@ binaries.
 
 ## The compiler-backed driver
 
-Compiler-backed rules (every `SEC` rule, plus `SEM006`, `SEM009`, `SEM010`,
-`SEM016`, `VAL002` and `VAL003`) run through `polkadot-linter-driver`, a rustc
+Compiler-backed rules (every `SEC` rule, plus `SEM009`, `SEM010` and
+`SEM016`) run through `polkadot-linter-driver`, a rustc
 driver built on a pinned nightly:
 
 ```bash

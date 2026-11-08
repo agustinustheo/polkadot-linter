@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Partial.** The linter flags related concerns — SEC001 (unbounded vec in extrinsic), SEC013 (unbounded storage collections), and SEC018 (missing weight for unbounded input) — but whether a value belongs in `Config` as a configurable constant is an API design decision left to reviewers. SEC001, SEC013 and SEC018 are off by default (enable them with `config/all-rules.toml`). See [SEC001](../../rules/SEC001.md), [SEC013](../../rules/SEC013.md), [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Review gate.** No shipping rule covers this; whether a value belongs in `Config` as a configurable constant is an API design decision left to reviewers. SEC001, SEC013 and SEC018 were related and were deleted; see [What we tried and removed](../../retired-rules.md).
 
 ## Description
 

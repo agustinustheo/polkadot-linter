@@ -5,42 +5,6 @@
 # Every other setting is the bundled default.
 
 [rules.enabled]
-BEN001 = true
-BEN002 = true
-BEN003 = true
-MOK001 = true
 RTC004 = true
-SEC001 = true
-SEC002 = true
-SEC003 = true
 SEC004 = true
-SEC005 = true
-SEC007 = true
-SEC008 = true
-SEC009 = true
-SEC013 = true
-SEC014 = true
-SEC016 = true
-SEC017 = true
-SEC018 = true
-SEC019 = true
-SEC022 = true
-SEC023 = true
 SEC024 = true
-SEM002 = true
-SEM003 = true
-SEM004 = true
-SEM005 = true
-SEM006 = true
-SEM007 = true
-SEM008 = true
-SEM012 = true
-SEM013 = true
-TST001 = true
-TST003 = true
-TST004 = true
-TST005 = true
-TST006 = true
-VAL001 = true
-VAL002 = true
-VAL003 = true

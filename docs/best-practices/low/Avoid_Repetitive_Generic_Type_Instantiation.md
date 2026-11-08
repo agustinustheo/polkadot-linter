@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Review gate.** No shipping rule detects repeated generic-type instantiations or suggests type aliases; spotting the duplication and naming a good alias is review work. [SEM002](../../rules/SEM002.md) (prefer turbofish on `collect`) touches generic-annotation style but is related, not a substitute.
+> **Linter coverage — Review gate.** No shipping rule detects repeated generic-type instantiations or suggests type aliases; spotting the duplication and naming a good alias is review work.
 
 ## Description
 

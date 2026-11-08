@@ -27,18 +27,18 @@
 
 `polkadot-linter` finds bugs specific to Polkadot SDK code: XCM barriers that
 nested programs bypass, proxy filters that fail open, discarded proof
-verdicts, vulnerable crate versions in `Cargo.lock`, free XCM delivery, missing
-benchmarks. It runs after `cargo fmt` and `cargo clippy`, and covers what they
+verdicts, vulnerable crate versions in `Cargo.lock`, free XCM delivery, pallets
+missing from `define_benchmarks!`. It runs after `cargo fmt` and `cargo clippy`, and covers what they
 cannot know about FRAME.
 
 Most rules come from a real incident. Each one is measured on third-party
-parachain code before it is turned on. Rules that were too noisy stay
-available, but are off unless you ask for them.
+parachain code before it is turned on. Rules that were mostly wrong or not worth
+fixing were deleted, and the reasons are written down.
 
 ## Highlights
 
-- **Precision first.** 28 of 64 rules are on by default. The rest were
-  measured, found noisy, and turned off. The numbers are in
+- **Precision first.** 31 rules, 28 on by default. 33 more were written,
+  measured on real code and deleted. The numbers are in
   [`benchmarks/precision/`](benchmarks/precision).
 - **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
   #12771, #1739, fellows runtimes #1237 and #1341, GHSA-wwx5, and the dotUSD backports.
@@ -47,7 +47,7 @@ available, but are off unless you ask for them.
 - **CI-ready.** `human`, `json` and SARIF 2.1.0 output. Exit code `1` on errors,
   or on warnings with `--fail-on-warning`.
 - **Configurable.** One TOML file. Turn rules on or off, change severities, tune
-  heuristics. `config/all-rules.toml` runs everything.
+  runtime and terminology settings. `config/all-rules.toml` runs everything.
 
 ## Install
 
@@ -111,7 +111,7 @@ The linter itself never calls an LLM.
 | | Syntax engine | Compiler-backed engine |
 |---|---|---|
 | Sees | source text, attributes, `Cargo.lock` | resolved types, trait impls, macro-expanded code |
-| Rules | `RTC`, `BEN`, `TST`, `TRM`, `MOK`, most `SEM`, `VAL001` | all `SEC`, `SEM006`, `SEM009`, `SEM010`, `SEM016`, `VAL002`, `VAL003` |
+| Rules | `RTC`, `TST`, `TRM`, `SEM011`, `SEM014`, `SEM015`, `SEM019` | all `SEC`, `SEM009`, `SEM010`, `SEM016` |
 | Runs | always | when the scan paths share one nearest `Cargo.toml` (or `--manifest-path`) and the driver exists |
 | Toolchain | stable, Rust 1.91+ | `nightly-2025-09-01` with `rustc-dev` |
 
@@ -141,11 +141,26 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [SEC006](http://agustinustheo.github.io/polkadot-linter/rules/SEC006.html), [SEC010](http://agustinustheo.github.io/polkadot-linter/rules/SEC010.html), [SEC011](http://agustinustheo.github.io/polkadot-linter/rules/SEC011.html), [SEC012](http://agustinustheo.github.io/polkadot-linter/rules/SEC012.html), [SEC015](http://agustinustheo.github.io/polkadot-linter/rules/SEC015.html) | warning | Ignored `repatriate_reserved` remainder, non-transactional hooks, storage iteration in dispatchables, unbounded `clear_prefix`, `dispatch_bypass_filter` | |
 | [SEM010](http://agustinustheo.github.io/polkadot-linter/rules/SEM010.html) | error | `^` used as exponentiation (it is XOR) | |
 | [SEM011](http://agustinustheo.github.io/polkadot-linter/rules/SEM011.html), [SEM015](http://agustinustheo.github.io/polkadot-linter/rules/SEM015.html), [SEM016](http://agustinustheo.github.io/polkadot-linter/rules/SEM016.html) | warning | Zero weights; `authorize` without `weight_of_authorize`; missing `AuthorizeCall` | |
-| [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html) | error | `assert_ok!` on `apply_extrinsic` hides dispatch errors | |
-| SEM009, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, OCW log targets, spelling | |
+| [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html) | error | `assert_ok!` on `apply_extrinsic` hides the inner dispatch error | |
+| SEM009, SEM014, TRM001 | advisory | Redundant `contains_key`, OCW log targets, spelling | |
 
-Every rule, including the 36 that are off by default, is in the
+Off by default: [RTC004](http://agustinustheo.github.io/polkadot-linter/rules/RTC004.html) (zero deposits),
+[SEC004](http://agustinustheo.github.io/polkadot-linter/rules/SEC004.html) (non-saturating weight arithmetic) and
+[SEC024](http://agustinustheo.github.io/polkadot-linter/rules/SEC024.html) (discarded funds in an error). Every rule is in the
 [rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
+
+## What we tried and removed
+
+33 rules were deleted after measurement: benchmark coverage (BEN001-BEN003),
+test and mock rules (TST001, TST003-TST006, MOK001), panics and raw arithmetic
+(SEC002, SEC008, SEC009, VAL002), storage, migration and decoding heuristics
+(SEC001, SEC003, SEC013, SEC014, SEC016, SEC017), weight heuristics (SEC005,
+SEC018, SEM005, SEM006), validation order (VAL001, VAL003), `let _ =` (SEC007),
+deprecations (SEM007, SEM008), SEM013 and SDK style conventions (SEM002-SEM004,
+SEM012). Some misread the code; more found a real pattern that was rarely worth fixing.
+[What we tried and removed](http://agustinustheo.github.io/polkadot-linter/retired-rules.html)
+([source](docs/retired-rules.md)) says what each one did, why it failed, and
+where to catch the problem instead.
 
 ## How rules are measured
 
@@ -168,6 +183,9 @@ Defaults come from three labeled audits:
   BEN003, SEM013 and TST006 were turned off and SEM011 and RTC001 narrowed;
   the project now gets 3 findings, all three of them the ones worth fixing.
 
+The rules these audits turned off were later deleted; see
+[What we tried and removed](docs/retired-rules.md).
+
 Rules are also run against auditor-reported bugs at the exact commits that were
 audited. Labels are judgments, not an oracle, and samples are small (12 to 15
 per rule). Each README lists its caveats.
@@ -187,8 +205,8 @@ SEM014 = false
 TST002 = "error"
 ```
 
-A severity alone does not enable a rule. Other sections tune the heuristics of
-each family; see
+A severity alone does not enable a rule. The `[runtime_config]`,
+`[test_smells]` and `[terminology]` sections tune their families; see
 [Configuration](http://agustinustheo.github.io/polkadot-linter/guide/configuration.html).
 
 To keep a reviewed, intentional finding quiet, add

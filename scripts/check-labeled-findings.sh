@@ -35,8 +35,8 @@ cat "$STUB_FINDINGS"
 EOF
   chmod +x "$dir/linter"
   local file="$dir/sdk/substrate/frame/x/src/lib.rs"
-  local hit="[{\"rule_id\":\"VAL001\",\"file\":\"$file\",\"line\":2}]"
-  local other="[{\"rule_id\":\"SEM004\",\"file\":\"$file\",\"line\":1}]"
+  local hit="[{\"rule_id\":\"SEM011\",\"file\":\"$file\",\"line\":2}]"
+  local other="[{\"rule_id\":\"SEM014\",\"file\":\"$file\",\"line\":1}]"
 
   # expect <pass|error pattern> <description> <findings json> <label rows...>
   # A failing case must exit non-zero and print the error pattern.
@@ -67,20 +67,20 @@ EOF
 
   local p=substrate/frame/x/src/lib.rs t=$'\t'
   expect pass "matching TP and FP" "$hit" \
-    "VAL001${t}$p${t}2${t}TP${t}manual${t}n" "VAL001${t}$p${t}3${t}FP${t}manual${t}n"
+    "SEM011${t}$p${t}2${t}TP${t}manual${t}n" "SEM011${t}$p${t}3${t}FP${t}manual${t}n"
   expect pass "scope: evidence is a must-not-report label" "$hit" \
-    "VAL001${t}$p${t}3${t}FP${t}scope:dev-only${t}n"
-  expect "produced no findings" "empty scan with a TP label" "[]" "VAL001${t}$p${t}2${t}TP${t}manual${t}n"
-  expect "produced no findings" "scan without findings with only FP labels" "[]" "VAL001${t}$p${t}2${t}FP${t}manual${t}n"
-  expect "missing TP" "missing TP" "$other" "VAL001${t}$p${t}2${t}TP${t}manual${t}n"
-  expect "reported FP" "reported FP" "$hit" "VAL001${t}$p${t}2${t}FP${t}manual${t}n"
+    "SEM011${t}$p${t}3${t}FP${t}scope:dev-only${t}n"
+  expect "produced no findings" "empty scan with a TP label" "[]" "SEM011${t}$p${t}2${t}TP${t}manual${t}n"
+  expect "produced no findings" "scan without findings with only FP labels" "[]" "SEM011${t}$p${t}2${t}FP${t}manual${t}n"
+  expect "missing TP" "missing TP" "$other" "SEM011${t}$p${t}2${t}TP${t}manual${t}n"
+  expect "reported FP" "reported FP" "$hit" "SEM011${t}$p${t}2${t}FP${t}manual${t}n"
   expect "no label rows" "label file without rows" "$hit"
-  expect "canonical relative" "non-canonical path" "$hit" "VAL001${t}substrate/frame/./x/src/lib.rs${t}2${t}FP${t}manual${t}n"
-  expect "canonical relative" "parent path segment" "$hit" "VAL001${t}substrate/frame/x/../x/src/lib.rs${t}2${t}FP${t}manual${t}n"
-  expect "past the end" "line beyond end of file" "$hit" "VAL001${t}$p${t}4${t}FP${t}manual${t}n"
-  expect "needs label FP" "scope: evidence on a TP" "$hit" "VAL001${t}$p${t}2${t}TP${t}scope:x${t}n"
+  expect "canonical relative" "non-canonical path" "$hit" "SEM011${t}substrate/frame/./x/src/lib.rs${t}2${t}FP${t}manual${t}n"
+  expect "canonical relative" "parent path segment" "$hit" "SEM011${t}substrate/frame/x/../x/src/lib.rs${t}2${t}FP${t}manual${t}n"
+  expect "past the end" "line beyond end of file" "$hit" "SEM011${t}$p${t}4${t}FP${t}manual${t}n"
+  expect "needs label FP" "scope: evidence on a TP" "$hit" "SEM011${t}$p${t}2${t}TP${t}scope:x${t}n"
   expect "duplicate of A.tsv" "duplicate across files" "$hit" \
-    "VAL001${t}$p${t}2${t}TP${t}manual${t}n" "B:VAL001${t}$p${t}2${t}TP${t}manual${t}n"
+    "SEM011${t}$p${t}2${t}TP${t}manual${t}n" "B:SEM011${t}$p${t}2${t}TP${t}manual${t}n"
 
   if [[ "$failures" -ne 0 ]]; then
     echo "check-labeled-findings self-test: $failures case(s) failed" >&2
@@ -174,11 +174,12 @@ fi
 # Scan only the roots the labels reference.
 scan_root_for() {
   case "$1" in
-    substrate/frame/*) echo "substrate/frame" ;;
-    substrate/bin/node/runtime/*) echo "substrate/bin/node/runtime" ;;
+    # substrate/bin/node/runtime and polkadot/xcm only hold out-of-scope (FP)
+    # labels, so they share a root with code that has findings: on their own
+    # they would trip the empty-scan guard below.
+    substrate/frame/* | substrate/bin/node/runtime/*) echo "substrate" ;;
     cumulus/*) echo "cumulus" ;;
-    polkadot/runtime/*) echo "polkadot/runtime" ;;
-    polkadot/xcm/*) echo "polkadot/xcm" ;;
+    polkadot/runtime/* | polkadot/xcm/*) echo "polkadot" ;;
     templates/*) echo "templates" ;;
     *) return 1 ;;
   esac

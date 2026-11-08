@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Enforced.** SEC010 flags lifecycle hooks that perform multiple storage writes without a transactional layer, enforcing a concrete subset of this practice. VAL003 (storage write before validation) is related. Atomicity outside hooks remains context-dependent and needs reviewer judgment. See [SEC010](../../rules/SEC010.md) and [VAL003](../../rules/VAL003.md).
+> **Linter coverage — Enforced.** [SEC010](../../rules/SEC010.md) flags lifecycle hooks that perform multiple storage writes without a transactional layer, enforcing a concrete subset of this practice. Dispatchables already run in a storage layer, so a write before a failing check is rolled back. Atomicity outside hooks remains context-dependent and needs reviewer judgment.
 
 ## Description
 

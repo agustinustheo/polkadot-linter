@@ -1,5 +1,3 @@
-pub mod benchmarking;
-pub mod mock_usage;
 pub mod runtime_config;
 pub mod semantic;
 pub mod terminology;
@@ -13,10 +11,8 @@ use crate::{
 
 /// All public rules implemented by the rustc driver.
 pub const COMPILER_BACKED_RULE_IDS: &[&str] = &[
-    "VAL002", "VAL003", "SEM006", "SEM009", "SEM010", "SEM016", "SEC001", "SEC002", "SEC003",
-    "SEC004", "SEC005", "SEC006", "SEC007", "SEC008", "SEC009", "SEC010", "SEC011", "SEC012",
-    "SEC013", "SEC014", "SEC015", "SEC016", "SEC017", "SEC018", "SEC019", "SEC020", "SEC021",
-    "SEC022", "SEC023", "SEC024",
+    "SEM009", "SEM010", "SEM016", "SEC004", "SEC006", "SEC010", "SEC011", "SEC012", "SEC015",
+    "SEC019", "SEC020", "SEC021", "SEC022", "SEC023", "SEC024",
 ];
 
 /// Default severity for a compiler-backed rule before configuration overrides.
@@ -32,7 +28,7 @@ pub fn compiler_backed_rule_default_severity(rule_id: &str) -> Severity {
 
 /// Trait that all lint rules implement
 pub trait LintRule: Send + Sync {
-    /// Unique rule identifier (e.g., "VAL001")
+    /// Unique rule identifier (e.g., "RTC001")
     fn id(&self) -> &str;
 
     /// Human-readable rule name
@@ -49,32 +45,12 @@ pub trait LintRule: Send + Sync {
 pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
     let mut rules: Vec<Box<dyn LintRule>> = vec![
         // Semantic rules
-        Box::new(semantic::ValidationBeforeHeavyRead),
-        Box::new(semantic::PreferCollectTurbofish),
-        Box::new(semantic::PreferRefIteration),
-        Box::new(semantic::NoWildcardImports),
-        Box::new(semantic::ParameteriseWeightFunctions),
-        Box::new(semantic::RuntimeDebugDeprecated),
-        Box::new(semantic::SpStdDeprecated),
         Box::new(semantic::WeightZeroPlaceholder),
-        Box::new(semantic::AllowDeadCodeInPallet),
-        Box::new(semantic::CustomInvalidityReprU8),
         Box::new(semantic::SubmitTransactionLogTarget),
         Box::new(semantic::MissingWeightOfAuthorize),
         Box::new(semantic::VerifierDefaultsToTrue),
         // Test smell rules
-        Box::new(test_smells::AssertNoop),
         Box::new(test_smells::ApplyExtrinsicAssertOk),
-        Box::new(test_smells::ImportsInsideClosures),
-        Box::new(test_smells::PaysYesErrorPath),
-        Box::new(test_smells::ImplementationDetailAssertions),
-        Box::new(test_smells::ExtrinsicWithoutEvent),
-        // Mock usage rules
-        Box::new(mock_usage::ExcessiveMockSetup),
-        // Benchmarking rules
-        Box::new(benchmarking::BenchmarkForWeightFunction),
-        Box::new(benchmarking::BenchmarkVerification),
-        Box::new(benchmarking::ExtrinsicWithoutBenchmark),
         // Terminology rules
         Box::new(terminology::SpellingConventions),
         // Runtime configuration rules

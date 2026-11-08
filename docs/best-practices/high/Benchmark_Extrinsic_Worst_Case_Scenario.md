@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Partial.** BEN001, BEN002, BEN003, and SEC018 prove that benchmarks exist, are verified, and that some input length is accounted for in weights. They cannot prove that the chosen inputs actually exercise every worst-case execution path or state, which still requires reviewer judgment. BEN001, BEN002, BEN003 and SEC018 are off by default (enable them with `config/all-rules.toml`). See [BEN001](../../rules/BEN001.md), [BEN002](../../rules/BEN002.md), [BEN003](../../rules/BEN003.md), and [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Review gate.** No shipping rule checks that benchmarks exercise the worst case. [RTC002](../../rules/RTC002.md) (related) checks that runtime-local weights are regenerated through `define_benchmarks!`. The benchmark-coverage rules (BEN001-BEN003) and SEC018 were deleted because they could not find where benchmarks live or what the weight already prices; see [What we tried and removed](../../retired-rules.md).
 
 ## Description
 

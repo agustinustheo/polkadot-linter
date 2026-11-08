@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Partial (opt-in).** [SEM012](../../rules/SEM012.md) (off by default) flags production `#[allow(dead_code)]` suppressions in pallet code, catching a common way unused items are hidden from the compiler. Actually locating and removing dead functions, variables, and commented-out code remains manual.
+> **Linter coverage — Review gate.** The compiler's `dead_code` warning finds unused items. SEM012, which flagged `#[allow(dead_code)]` in pallet code, was deleted because the attribute is already a deliberate choice; see [What we tried and removed](../../retired-rules.md). Locating and removing dead functions, variables and commented-out code remains manual.
 
 ## Description
 

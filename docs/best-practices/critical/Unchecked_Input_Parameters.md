@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:red;">Critical</span>
 
-> **Linter coverage — Partial.** The linter checks validation ordering, guards against zero divisors, premature storage writes, unbounded vectors, missing decode depth limits, and input-length weight accounting — but it cannot judge the domain validity of the values themselves. See [VAL001](../../rules/VAL001.md), [VAL002](../../rules/VAL002.md), [VAL003](../../rules/VAL003.md), [SEC001](../../rules/SEC001.md), [SEC003](../../rules/SEC003.md), and [SEC018](../../rules/SEC018.md).
+> **Linter coverage — Review gate.** No shipping rule checks input validation. The rules that tried (VAL001-VAL003 for validation order and divisors, SEC001 and SEC018 for unbounded inputs, SEC003 for decode depth) were deleted because they were mostly wrong on real code; see [What we tried and removed](../../retired-rules.md). Whether a value is valid for the domain is a reviewer's judgment.
 
 ## Description
 

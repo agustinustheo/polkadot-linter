@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Review gate.** No documentation-presence rule ships; TST006 checks that mutating extrinsics actually emit events (a different concern), not that events are documented. See [TST006](../../rules/TST006.md).
+> **Linter coverage — Review gate.** No documentation-presence rule ships; whether events are documented is review work.
 
 ## Description
 

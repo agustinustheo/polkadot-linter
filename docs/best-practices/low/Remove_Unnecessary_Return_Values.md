@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Review gate.** No shipping rule detects return values that add no information; deciding a return is redundant depends on function intent and is review work. [SEC007](../../rules/SEC007.md) (a `Result` discarded via `let _ =`) is a related but distinct concern, not a substitute.
+> **Linter coverage — Review gate.** No shipping rule detects return values that add no information; deciding a return is redundant depends on function intent and is review work.
 
 ## Description
 

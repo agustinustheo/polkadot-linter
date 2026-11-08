@@ -5,8 +5,8 @@ by default only when it was measured accurate on real code.**
 
 `polkadot-linter` finds bugs specific to Polkadot SDK code: XCM barriers that
 nested programs bypass, proxy filters that fail open, discarded proof verdicts,
-vulnerable crate versions in `Cargo.lock`, free XCM delivery, missing
-benchmarks. It runs after `cargo fmt` and `cargo clippy`, and covers what they
+vulnerable crate versions in `Cargo.lock`, free XCM delivery, pallets missing
+from `define_benchmarks!`. It runs after `cargo fmt` and `cargo clippy`, and covers what they
 cannot know about FRAME.
 
 ```bash
@@ -17,11 +17,11 @@ polkadot-linter ./pallets ./runtime
 ## Two engines
 
 - **Syntax engine** (`syn`, stable Rust 1.91+). Reads source text, attributes
-  and `Cargo.lock`. Runs on every scan. Covers the `RTC`, `BEN`, `TST`, `TRM`
-  and `MOK` families and most `SEM` rules.
+  and `Cargo.lock`. Runs on every scan. Covers the `RTC`, `TST` and `TRM` families
+  and `SEM011`, `SEM014`, `SEM015` and `SEM019`.
 - **Compiler-backed engine.** A rustc driver on `nightly-2025-09-01` that sees
   resolved types, trait impls and macro-expanded code. Covers every `SEC` rule
-  plus `SEM006`, `SEM009`, `SEM010`, `SEM016`, `VAL002` and `VAL003`. It runs
+  plus `SEM009`, `SEM010` and `SEM016`. It runs
   when the scan paths resolve to one Cargo project and the driver binary is
   available; `--syntax-only` skips it.
 
@@ -31,9 +31,12 @@ owns each rule.
 
 ## Precision first
 
-28 of the 64 rules are on by default. The other 36 were measured on real code
-and found too noisy, or are Parity SDK style conventions. They stay available
-through `[rules.enabled]` or `config/all-rules.toml`.
+The linter has 31 rules; 28 are on by default. The other 3 (`RTC004`, `SEC004`
+and `SEC024`) are correct often enough to keep but not to run unasked, so they
+stay available through `[rules.enabled]` or `config/all-rules.toml`. 33 more
+rules were written, measured on real code and deleted because they were mostly
+wrong or not worth fixing; [What we tried and removed](retired-rules.md)
+records each one and where to catch the problem instead.
 
 Three labeled audits set the defaults. On 10 third-party parachain repositories,
 a rule is off if under 30% of its sampled findings are worth acting on, or 30%
@@ -43,7 +46,8 @@ polkadot-sdk and the same repositories turned off 7 more rules (4 true positives
 in 91 labeled samples). An acceptance test on paritytech/individuality-community,
 where a finding counts only if an engineer would fix it at reasonable cost,
 turned off 4 more (3 of its 39 default findings were worth fixing; it now gets
-exactly those 3). Rules are also checked against auditor-reported bugs at
+exactly those 3). The rules these audits turned off were later deleted. Rules
+are also checked against auditor-reported bugs at
 the commits that were audited. The method, numbers and caveats are in the
 repository's `benchmarks/precision/` directory.
 

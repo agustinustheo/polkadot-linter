@@ -1,22 +1,15 @@
 # Semantic Rules (SEM)
 
-Semantic rules catch correct-looking code with wrong or outdated meaning: deprecated APIs, weight placeholders, operators that don't do what they appear to do, and missing pieces of newer FRAME idioms.
+Semantic rules catch correct-looking code with wrong meaning: weight placeholders, operators that don't do what they appear to do, verifiers that accept everything, and missing pieces of newer FRAME idioms.
 
 | Rule | Title | Default severity | Engine |
 | --- | --- | --- | --- |
-| [`SEM002`](SEM002.md) | Prefer Turbofish Syntax for collect() | Advisory, off by default | source (syn) |
-| [`SEM003`](SEM003.md) | Prefer Reference Iteration Over .iter() in for Loops | Advisory, off by default | source (syn) |
-| [`SEM004`](SEM004.md) | Wildcard Imports in Non-Test Code | Advisory, off by default | source (syn) |
-| [`SEM005`](SEM005.md) | Unparameterised Weight Functions Multiplied by Component Counts | Advisory, off by default | source (syn) |
-| [`SEM006`](SEM006.md) | DbWeight Estimates Ignore Proof Size | Advisory, off by default | compiler-backed |
-| [`SEM007`](SEM007.md) | Deprecated RuntimeDebug Derive | Advisory, off by default | source (syn) |
-| [`SEM008`](SEM008.md) | Deprecated sp_std Paths | Advisory, off by default | source (syn) |
 | [`SEM009`](SEM009.md) | Redundant contains_key Before remove or take | Advisory | compiler-backed |
 | [`SEM010`](SEM010.md) | XOR Operator Mistaken for Exponentiation | Error | compiler-backed |
 | [`SEM011`](SEM011.md) | Weight::zero() Placeholder in Weight Attributes | Warning | source (syn) |
-| [`SEM012`](SEM012.md) | Suppressed Dead Code in Production Pallet Code | Advisory, off by default | source (syn) |
-| [`SEM013`](SEM013.md) | Custom Invalidity Enum Without `#[repr(u8)]` | Warning, off by default | source (syn) |
 | [`SEM014`](SEM014.md) | Missing Log Target in SubmitTransaction Logging | Advisory | source (syn) |
 | [`SEM015`](SEM015.md) | Missing `#[pallet::weight_of_authorize]` on Authorized Calls | Warning | source (syn) |
 | [`SEM016`](SEM016.md) | Missing `AuthorizeCall` in `CreateAuthorizedTransaction` Extension | Warning | compiler-backed |
 | [`SEM019`](SEM019.md) | Verifier Trait Method Defaults to `true` | Warning | source (syn) |
+
+Retired rules of this family are listed in [What we tried and removed](../retired-rules.md).
