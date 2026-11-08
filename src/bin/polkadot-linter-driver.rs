@@ -346,7 +346,10 @@ impl Callbacks for PolkadotCallbacks {
                 root: root.expect_local(),
                 sec021: self.rule_enabled("SEC021"),
                 sec022: self.rule_enabled("SEC022") && !is_test_or_bench_code(tcx, def_id),
-                sec023: self.rule_enabled("SEC023") && is_ensure_origin_method(tcx, root),
+                // A closure's comparison can run after a guard written below it: suppressed.
+                sec023: self.rule_enabled("SEC023")
+                    && root == def_id.to_def_id()
+                    && is_ensure_origin_method(tcx, root),
                 sec024: self.rule_enabled("SEC024") && !is_test_or_bench_code(tcx, def_id),
                 diagnostics: &mut self.diagnostics,
             };
@@ -1907,11 +1910,46 @@ fn is_test_or_bench_code(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
             .filter(|attr| attr.has_name(rustc_span::sym::cfg_trace))
             .filter_map(|attr| tcx.sess.source_map().span_to_snippet(attr.span()).ok())
             .any(|cfg| {
-                !cfg.contains("not(")
-                    && cfg
-                        .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
-                        .any(|word| matches!(word, "test" | "runtime-benchmarks"))
+                let cfg = cfg
+                    .trim_start_matches(['#', '!', '['])
+                    .trim_end_matches(']');
+                syn::parse_str::<syn::Meta>(cfg).is_ok_and(|meta| match meta {
+                    syn::Meta::List(list) if list.path.is_ident("cfg") => list
+                        .parse_args()
+                        .is_ok_and(|pred| cfg_requires_test_or_bench(&pred)),
+                    _ => false,
+                })
             })
+}
+
+/// The cfg predicate holds only when `test` or `feature = "runtime-benchmarks"` is set:
+/// that predicate itself, `all(..)` with one such operand, or `any(..)` of only such operands.
+fn cfg_requires_test_or_bench(pred: &syn::Meta) -> bool {
+    let operands = |list: &syn::MetaList| {
+        list.parse_args_with(
+            syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+        )
+        .map(|operands| {
+            operands
+                .into_iter()
+                .map(|op| cfg_requires_test_or_bench(&op))
+        })
+    };
+    match pred {
+        syn::Meta::Path(path) => path.is_ident("test"),
+        syn::Meta::NameValue(nv) => {
+            nv.path.is_ident("feature")
+                && matches!(&nv.value, SynExpr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. })
+                    if s.value() == "runtime-benchmarks")
+        }
+        syn::Meta::List(list) if list.path.is_ident("all") => {
+            operands(list).is_ok_and(|mut ops| ops.any(|op| op))
+        }
+        syn::Meta::List(list) if list.path.is_ident("any") => {
+            operands(list).is_ok_and(|mut ops| ops.all(|op| op)) && !list.tokens.is_empty()
+        }
+        _ => false,
+    }
 }
 
 /// SEC021 (`if verify(..) { reject }`), SEC022 (origin-check `Result` discarded), SEC023
@@ -2051,14 +2089,8 @@ impl<'tcx> AuthGuardVisitor<'_, 'tcx> {
         {
             return false;
         }
-        let source_map = self.tcx.sess.source_map();
-        let Ok(operand) = source_map.span_to_snippet(inner.span) else {
-            return false;
-        };
-        let checked_earlier = |checked: &Expr<'_>| {
-            checked.span.lo() < at.lo()
-                && source_map.span_to_snippet(checked.span).as_deref() == Ok(operand.as_str())
-        };
+        let checked_earlier =
+            |checked: &Expr<'_>| checked.span.lo() < at.lo() && self.same_operand(checked, inner);
         !root_body_exprs(self.tcx, self.root).iter().any(|expr| match expr.kind {
             ExprKind::MethodCall(segment, receiver, ..) => {
                 matches!(segment.ident.as_str(), "is_none" | "is_some") && checked_earlier(receiver)
@@ -2072,6 +2104,31 @@ impl<'tcx> AuthGuardVisitor<'_, 'tcx> {
             }),
             _ => false,
         })
+    }
+
+    /// `a` and `b` (ignoring `&`/`&mut`) name the same place: the same local or path, or the same
+    /// field of the same place. Other operands (calls) compare by source text.
+    fn same_operand(&self, a: &Expr<'_>, b: &Expr<'_>) -> bool {
+        let (a, b) = (strip_drop_temps(a), strip_drop_temps(b));
+        match (a.kind, b.kind) {
+            (ExprKind::AddrOf(_, _, a), _) => self.same_operand(a, b),
+            (_, ExprKind::AddrOf(_, _, b)) => self.same_operand(a, b),
+            (ExprKind::Path(ref qa), ExprKind::Path(ref qb)) => {
+                let res = self.typeck.qpath_res(qa, a.hir_id);
+                res != Res::Err && res == self.typeck.qpath_res(qb, b.hir_id)
+            }
+            (ExprKind::Field(base_a, field_a), ExprKind::Field(base_b, field_b)) => {
+                field_a.name == field_b.name && self.same_operand(base_a, base_b)
+            }
+            (ExprKind::Path(_) | ExprKind::Field(..), _)
+            | (_, ExprKind::Path(_) | ExprKind::Field(..)) => false,
+            _ => {
+                let source_map = self.tcx.sess.source_map();
+                source_map
+                    .span_to_snippet(a.span)
+                    .is_ok_and(|text| Ok(text) == source_map.span_to_snippet(b.span))
+            }
+        }
     }
 
     /// Whether the `if` block `branch` itself rejects: one of its own statements (or its tail) is

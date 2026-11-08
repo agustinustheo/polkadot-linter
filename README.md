@@ -37,7 +37,7 @@ available, but are off unless you ask for them.
 
 ## Highlights
 
-- **Precision first.** 29 of 64 rules are on by default. The rest were
+- **Precision first.** 31 of 64 rules are on by default. The rest were
   measured, found noisy, and turned off. The numbers are in
   [`benchmarks/precision/`](benchmarks/precision).
 - **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
@@ -134,6 +134,8 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [RTC005](http://agustinustheo.github.io/polkadot-linter/rules/RTC005.html) | warning | Runtime uses collective-flip randomness | |
 | [SEC020](http://agustinustheo.github.io/polkadot-linter/rules/SEC020.html) | error | A verifier's `bool` verdict is discarded, so bad proofs pass | polkadot-sdk #11738 |
 | [SEC021](http://agustinustheo.github.io/polkadot-linter/rules/SEC021.html) | error | Inverted verify guard: `if verify(..) { reject }` rejects valid proofs and accepts bad ones | GHSA-wwx5 (grandpa-verifier-primitives) |
+| [SEC022](http://agustinustheo.github.io/polkadot-linter/rules/SEC022.html) | error | Discarded origin check: `let _ = T::AdminOrigin::ensure_origin(origin);` lets any origin through | polkadot-sdk #10248 (runtime 2.0.1 EPMB) |
+| [SEC023](http://agustinustheo.github.io/polkadot-linter/rules/SEC023.html) | error | `EnsureOrigin` impl compares two `Option`s, so `None == None` authorizes | polkadot-sdk #11910 (Snowbridge) |
 | [SEM019](http://agustinustheo.github.io/polkadot-linter/rules/SEM019.html) | warning | Verifier trait method defaults to `true` | polkadot-sdk #1739 |
 | [SEC006](http://agustinustheo.github.io/polkadot-linter/rules/SEC006.html), [SEC010](http://agustinustheo.github.io/polkadot-linter/rules/SEC010.html), [SEC011](http://agustinustheo.github.io/polkadot-linter/rules/SEC011.html), [SEC012](http://agustinustheo.github.io/polkadot-linter/rules/SEC012.html), [SEC015](http://agustinustheo.github.io/polkadot-linter/rules/SEC015.html) | warning | Ignored `repatriate_reserved` remainder, non-transactional hooks, storage iteration in dispatchables, unbounded `clear_prefix`, `dispatch_bypass_filter` | |
 | [SEM010](http://agustinustheo.github.io/polkadot-linter/rules/SEM010.html) | error | `^` used as exponentiation (it is XOR) | |
@@ -142,7 +144,7 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html), [TST006](http://agustinustheo.github.io/polkadot-linter/rules/TST006.html) | error, warning | `assert_ok!` on `apply_extrinsic`; storage-mutating extrinsic without an event | |
 | SEM009, SEM013, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, `#[repr(u8)]` invalidity enums, OCW log targets, spelling | |
 
-Every rule, including the 35 that are off by default, is in the
+Every rule, including the 33 that are off by default, is in the
 [rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
 
 ## How rules are measured
