@@ -22,7 +22,7 @@ security IDs are retired and are not registered in the public rule set.
 | --- | --- |
 | `VAL002`, `VAL003` | Resolved expressions, control flow, and storage-write evidence. |
 | `SEM006`, `SEM009`, `SEM010`, `SEM016` | Resolved paths, operators, storage methods, and trait implementations. |
-| `SEC001`-`SEC023` | Resolved types and paths, macro/cfg-expanded code, trait/operator resolution, and control-flow/dataflow evidence as required by each rule. |
+| `SEC001`-`SEC024` | Resolved types and paths, macro/cfg-expanded code, trait/operator resolution, and control-flow/dataflow evidence as required by each rule. |
 
 The focused driver checks in `scripts/check-rustc-*.sh` cover the released
 compiler path. `scripts/check-sdk-benchmarks.sh` maintains pinned SDK

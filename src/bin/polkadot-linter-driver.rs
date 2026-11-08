@@ -347,9 +347,10 @@ impl Callbacks for PolkadotCallbacks {
                 sec021: self.rule_enabled("SEC021"),
                 sec022: self.rule_enabled("SEC022") && !is_test_or_bench_code(tcx, def_id),
                 sec023: self.rule_enabled("SEC023") && is_ensure_origin_method(tcx, root),
+                sec024: self.rule_enabled("SEC024") && !is_test_or_bench_code(tcx, def_id),
                 diagnostics: &mut self.diagnostics,
             };
-            if auth.sec021 || auth.sec022 || auth.sec023 {
+            if auth.sec021 || auth.sec022 || auth.sec023 || auth.sec024 {
                 auth.visit_body(body);
             }
 
@@ -1787,10 +1788,12 @@ enum Followed {
     Verdict,
     /// An origin check's `Err`, which `?` propagates and `ok()`/`map`/`is_ok()` keep.
     OriginError,
+    /// An `Err` holding funds, which `?`, `map_err` and `match` handle.
+    FundsError,
 }
 
 /// Follows the call's value through the adapters that keep it and reports whether it ends in a
-/// statement, a `let _ =` (for origin checks also a never-used `let _name =`), or an adapter
+/// statement, a `let _ =` (for an `Err` also a never-used `let _name =`), or an adapter
 /// that drops it.
 fn result_is_discarded(tcx: TyCtxt<'_>, call: HirId, followed: Followed) -> bool {
     let verdict = followed == Followed::Verdict;
@@ -1809,8 +1812,11 @@ fn result_is_discarded(tcx: TyCtxt<'_>, call: HirId, followed: Followed) -> bool
             ],
             &["is_ok", "is_err", "is_some", "is_none"],
         )
-    } else {
+    } else if followed == Followed::OriginError {
         (&["ok", "err", "map", "map_err", "is_ok", "is_err"], &[])
+    } else {
+        // Not `err`: `.err().map(..)` would act on the funds themselves.
+        (&["ok", "map", "is_ok", "is_err"], &[])
     };
     let mut current = call;
     for (parent_id, node) in tcx.hir_parent_iter(call) {
@@ -1908,8 +1914,9 @@ fn is_test_or_bench_code(tcx: TyCtxt<'_>, def_id: LocalDefId) -> bool {
             })
 }
 
-/// SEC021 (`if verify(..) { reject }`), SEC022 (origin-check `Result` discarded) and SEC023
-/// (`Option != Option` rejecting in an `EnsureOrigin*` impl, so `None == None` is accepted).
+/// SEC021 (`if verify(..) { reject }`), SEC022 (origin-check `Result` discarded), SEC023
+/// (`Option != Option` rejecting in an `EnsureOrigin*` impl, so `None == None` is accepted) and
+/// SEC024 (a `Result` whose `Err` holds funds, e.g. `resolve`'s credit, discarded).
 struct AuthGuardVisitor<'a, 'tcx> {
     tcx: TyCtxt<'tcx>,
     typeck: &'a rustc_middle::ty::TypeckResults<'tcx>,
@@ -1920,6 +1927,8 @@ struct AuthGuardVisitor<'a, 'tcx> {
     sec022: bool,
     /// Only inside an `EnsureOrigin*` method.
     sec023: bool,
+    /// Off in test and benchmark code.
+    sec024: bool,
     diagnostics: &'a mut Vec<RustcDiagnostic>,
 }
 
@@ -1960,6 +1969,18 @@ impl<'tcx> Visitor<'tcx> for AuthGuardVisitor<'_, 'tcx> {
                     _ => {}
                 }
             }
+            ExprKind::Call(..) | ExprKind::MethodCall(..)
+                if self.sec024
+                    && self.err_holds_funds(expr)
+                    // An adapter (`.map(..)`) on such a `Result` is reported at the inner call.
+                    && !matches!(expr.kind, ExprKind::MethodCall(_, receiver, ..)
+                        if self.err_holds_funds(receiver))
+                    && result_is_discarded(self.tcx, expr.hir_id, Followed::FundsError) =>
+            {
+                let name = callee_name(self.tcx, self.typeck, expr)
+                    .map_or_else(|| "call".into(), |(_, name)| format!("`{name}`"));
+                self.report("SEC024", expr.span, format!("the `Result` of {name} is discarded, but its `Err` returns the funds (credit, debt or imbalance) that could not be placed; dropping it silently burns or mints them. Handle the `Err` (e.g. send it to an `OnUnbalanced` handler or `defensive`) or document the drop with `map_err(drop)`"));
+            }
             ExprKind::Call(..) | ExprKind::MethodCall(..) if self.sec022 => {
                 if let Some((_, name)) =
                     callee_name(self.tcx, self.typeck, expr).filter(|&(def_id, name)| {
@@ -1981,6 +2002,7 @@ impl<'tcx> AuthGuardVisitor<'_, 'tcx> {
         let rule_name = match rule_id {
             "SEC021" => "inverted-verification-guard",
             "SEC022" => "discarded-origin-check",
+            "SEC024" => "discarded-funds-in-error",
             _ => "option-equality-authorization",
         };
         let (file, line, column) = span_location(self.tcx.sess.source_map(), span);
@@ -1992,6 +2014,12 @@ impl<'tcx> AuthGuardVisitor<'_, 'tcx> {
             column,
             message,
         });
+    }
+
+    /// `expr` has type `Result<_, E>` where `E` owns an imbalance (`Credit`, `Debt`, ..).
+    fn err_holds_funds(&self, expr: &Expr<'tcx>) -> bool {
+        result_error_type(self.tcx, self.typeck.expr_ty(expr))
+            .is_some_and(|err| type_holds_imbalance(self.tcx, err))
     }
 
     /// An `Option` operand that may be `None` at the comparison at `at`: not a `Some(..)`/`None`
