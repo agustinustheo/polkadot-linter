@@ -50,7 +50,10 @@ use crate::{
         benchmarking::{manifest, workspace_root},
         LintRule,
     },
-    syn_util::{compact_tokens, macro_name, path_attr, path_last_ident, strip_expr_wrappers},
+    syn_util::{
+        compact_tokens, is_construct_runtime, macro_name, path_attr, path_last_ident,
+        strip_expr_wrappers,
+    },
 };
 
 // ---------------------------------------------------------------------------
@@ -343,7 +346,7 @@ impl Finder<'_> {
 
 impl<'ast> Visit<'ast> for Finder<'_> {
     fn visit_item_macro(&mut self, item: &'ast ItemMacro) {
-        if path_last_ident(&item.mac.path).as_deref() == Some("construct_runtime") {
+        if path_last_ident(&item.mac.path).is_some_and(|name| is_construct_runtime(&name)) {
             self.found(&item.attrs);
             for entry in construct_runtime_entries(item.mac.tokens.clone()) {
                 // Attributes are `#[..]` groups; the first ident is the name.
@@ -1907,7 +1910,7 @@ impl LintRule for InsecureRandomnessInRuntime {
             }
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
-                if path_last_ident(&mac.path).as_deref() == Some("construct_runtime") {
+                if path_last_ident(&mac.path).is_some_and(|name| is_construct_runtime(&name)) {
                     for entry in construct_runtime_entries(mac.tokens.clone()) {
                         self.record(entry.into_iter().collect(), INSECURE_RANDOMNESS_PALLETS);
                     }

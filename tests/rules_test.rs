@@ -3197,6 +3197,29 @@ construct_runtime!(
 "#;
 
 #[test]
+fn rtc001_detects_a_runtime_built_with_a_forked_construct_runtime() {
+    // InvArch declares its runtimes with `construct_runtime_modified!`.
+    let fixture = include_str!("fixtures/bad_rtc001.rs");
+    let forked = fixture.replace("construct_runtime!", "construct_runtime_modified!");
+    let diags = check_fixture("runtime/src/lib.rs", &forked);
+    assert_eq!(
+        rtc_lines(&diags, "RTC001"),
+        vec![7, 12, 16, 20],
+        "{diags:?}"
+    );
+    // Recall guard: the stock macro is unchanged, an unrelated name is not a runtime.
+    let diags = check_fixture("runtime/src/lib.rs", fixture);
+    assert_eq!(
+        rtc_lines(&diags, "RTC001"),
+        vec![7, 12, 16, 20],
+        "{diags:?}"
+    );
+    let other = fixture.replace("construct_runtime!", "not_a_runtime!");
+    let diags = check_fixture("runtime/src/lib.rs", &other);
+    assert!(rtc_lines(&diags, "RTC001").is_empty(), "{diags:?}");
+}
+
+#[test]
 fn rtc001_detects_placeholder_weight_info() {
     let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc001.rs"));
     assert_eq!(

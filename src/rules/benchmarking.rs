@@ -18,8 +18,8 @@ use crate::{
     engine::{crate_lib, crate_root, scan_cached, FileContext},
     rules::{runtime_config::construct_runtime_entries, LintRule},
     syn_util::{
-        attr_path_matches, compact_tokens, has_attr, path_attr, path_last_ident, privileged_origin,
-        span_line, test_only,
+        attr_path_matches, compact_tokens, has_attr, is_construct_runtime, path_attr,
+        path_last_ident, privileged_origin, span_line, test_only,
     },
 };
 
@@ -1148,7 +1148,7 @@ fn hosted_benchmarks(root: &Path) -> Rc<Hosted> {
                                 .push((tokens.collect(), aliases));
                         }
                     }
-                    Some("construct_runtime") => {
+                    Some(name) if is_construct_runtime(name) => {
                         // `Name: pallet_x ..`: attributes are groups, so the
                         // first two idents are the name and the crate.
                         for entry in construct_runtime_entries(item.mac.tokens.clone()) {
