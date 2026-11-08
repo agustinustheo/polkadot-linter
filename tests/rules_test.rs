@@ -1343,8 +1343,9 @@ fn authorize_only() -> Result<(), BenchmarkError> {
 
     Ok(())
 }
+// `?` checks the measured call's result.
 #[benchmark]
-fn unchecked() -> Result<(), BenchmarkError> {
+fn result_checked() -> Result<(), BenchmarkError> {
     #[block]
     {
         Pallet::<T>::authorize_call()?;
@@ -1416,12 +1417,7 @@ fn precondition_only() -> Result<(), BenchmarkError> {
     names.sort();
     assert_eq!(
         names,
-        vec![
-            "loop_hides_other",
-            "precondition_only",
-            "read_then_other",
-            "unchecked"
-        ],
+        vec!["loop_hides_other", "precondition_only", "read_then_other",],
         "{diags:?}"
     );
 }
@@ -9968,4 +9964,385 @@ impl pallet_referenda::Config for Runtime {\n    type SubmitOrigin = SubmissionO
 mod nested {\n    type SubmissionOrigin = EnsureRoot<AccountId>;\n}\n";
     let diags = check_fixture("runtime/src/lib.rs", lib);
     assert_eq!(rtc_lines(&diags, "RTC004"), vec![5], "{diags:?}");
+}
+
+// ==========================================================================
+// Noise narrowing (round 2): one negative case per mechanism, plus recall guards
+// ==========================================================================
+
+/// Names (first backticked word of the message) reported for `rule_id`, sorted.
+fn reported_names(
+    diags: &[polkadot_linter::diagnostics::Diagnostic],
+    rule_id: &str,
+) -> Vec<String> {
+    let mut names = diags
+        .iter()
+        .filter(|d| d.rule_id == rule_id)
+        .map(|d| d.message.split('`').nth(1).unwrap().to_string())
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Writes `files` (relative path, content) under a fresh temp dir.
+fn write_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (path, content) in files {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, content).unwrap();
+    }
+    dir
+}
+
+#[test]
+fn ben003_skips_privileged_hand_weighted_reused_and_gas_weighted_calls() {
+    let lib = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    // #1: privileged origin and a hand-written DbWeight weight.
+    #[pallet::call_index(0)]
+    #[pallet::weight(T::DbWeight::get().writes(1))]
+    pub fn root_set(origin: OriginFor<T>) -> DispatchResult { ensure_root(origin)?; Ok(()) }
+    // Recall: privileged, but its WeightInfo fn has no benchmark.
+    #[pallet::call_index(1)]
+    #[pallet::weight(T::WeightInfo::governance_set())]
+    pub fn governance_set(origin: OriginFor<T>) -> DispatchResult {
+        T::AdminOrigin::ensure_origin(origin)?;
+        Ok(())
+    }
+    // Recall: signed with a hand-written weight.
+    #[pallet::call_index(2)]
+    #[pallet::weight(T::DbWeight::get().writes(1))]
+    pub fn signed_set(origin: OriginFor<T>) -> DispatchResult { ensure_signed(origin)?; Ok(()) }
+    // Recall: `ensure_none` is unsigned, not privileged.
+    #[pallet::call_index(3)]
+    #[pallet::weight(Weight::from_parts(10_000, 0))]
+    pub fn report(origin: OriginFor<T>) -> DispatchResult { ensure_none(origin)?; Ok(()) }
+    // #5: reuses the benchmarked `submit` weight.
+    #[pallet::call_index(4)]
+    #[pallet::weight(T::WeightInfo::submit())]
+    pub fn submit_with_limit(origin: OriginFor<T>) -> DispatchResult { ensure_signed(origin)?; Ok(()) }
+    // Recall: privileged and hand-weighted, but loops or calls a helper.
+    #[pallet::call_index(6)]
+    #[pallet::weight(T::DbWeight::get().writes(1))]
+    pub fn root_loop(origin: OriginFor<T>, n: u32) -> DispatchResult {
+        ensure_root(origin)?;
+        for i in 0..n { Value::<T>::insert(i, i); }
+        Ok(())
+    }
+    #[pallet::call_index(7)]
+    #[pallet::weight(T::DbWeight::get().writes(1))]
+    pub fn root_helper(origin: OriginFor<T>) -> DispatchResult {
+        T::ForceOrigin::ensure_origin(origin)?;
+        Self::do_fallback()
+    }
+    #[pallet::call_index(8)]
+    #[pallet::weight(T::DbWeight::get().writes(1))]
+    pub fn root_iter(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        let _ = Value::<T>::iter_keys().count();
+        Ok(())
+    }
+    // Recall: `gas` only as part of a longer token.
+    #[pallet::call_index(9)]
+    #[pallet::weight(T::WeightInfo::pegasus())]
+    pub fn pegasus(origin: OriginFor<T>) -> DispatchResult { ensure_signed(origin)?; Ok(()) }
+    // #10: priced by gas.
+    #[pallet::call_index(5)]
+    #[pallet::weight(T::GasWeightMapping::gas_to_weight(*gas_limit, true))]
+    pub fn call(origin: OriginFor<T>, gas_limit: u64) -> DispatchResult { ensure_signed(origin)?; Ok(()) }
+}
+"#;
+    let bench = r#"
+#[benchmark]
+fn submit() {
+    #[extrinsic_call]
+    submit(RawOrigin::Signed(caller));
+}
+"#;
+    let dir = write_tree(&[
+        ("pallets/foo/src/lib.rs", lib),
+        ("pallets/foo/src/benchmarking.rs", bench),
+    ]);
+    let diags = check_fixture_path(dir.path().join("pallets/foo/src/lib.rs"), lib);
+    assert_eq!(
+        reported_names(&diags, "BEN003"),
+        vec![
+            "governance_set",
+            "pegasus",
+            "report",
+            "root_helper",
+            "root_iter",
+            "root_loop",
+            "signed_set"
+        ],
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn ben003_and_tst006_skip_crates_under_test_runtime_or_tests_only() {
+    let lib = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::call_index(0)]
+    pub fn store(origin: OriginFor<T>, v: u32) -> DispatchResult {
+        ensure_signed(origin)?;
+        Value::<T>::put(v);
+        Ok(())
+    }
+}
+"#;
+    let manifest = |name: &str| format!("[package]\nname = \"{name}\"\nversion = \"0.1.0\"\n");
+    let (test_runtime, example) = (manifest("test-runtime"), manifest("pallet-example"));
+    let dir = write_tree(&[
+        ("Cargo.toml", "[workspace]\nmembers = []\n"),
+        ("runtime/test-runtime/Cargo.toml", &test_runtime),
+        ("runtime/test-runtime/src/lib.rs", lib),
+        // Recall: examples and templates are forked into production.
+        ("examples/basic/Cargo.toml", &example),
+        ("examples/basic/src/lib.rs", lib),
+    ]);
+    let skipped = check_fixture_path(dir.path().join("runtime/test-runtime/src/lib.rs"), lib);
+    assert!(
+        !has_rule(&skipped, "BEN003") && !has_rule(&skipped, "TST006"),
+        "{skipped:?}"
+    );
+    let kept = check_fixture_path(dir.path().join("examples/basic/src/lib.rs"), lib);
+    assert!(
+        has_rule(&kept, "BEN003") && has_rule(&kept, "TST006"),
+        "{kept:?}"
+    );
+}
+
+#[test]
+fn tst006_skips_privileged_single_setters_and_transient_storage() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    // #2: privileged single-item setter.
+    #[pallet::call_index(0)]
+    pub fn set_fee(origin: OriginFor<T>, fee: u32) -> DispatchResult {
+        ensure_root(origin)?;
+        Fee::<T>::put(fee);
+        Ok(())
+    }
+    // Recall: signed single setter.
+    #[pallet::call_index(1)]
+    pub fn set_own_fee(origin: OriginFor<T>, fee: u32) -> DispatchResult {
+        ensure_signed(origin)?;
+        Fee::<T>::put(fee);
+        Ok(())
+    }
+    // Recall: privileged, but two mutations.
+    #[pallet::call_index(2)]
+    pub fn reset(origin: OriginFor<T>) -> DispatchResult {
+        T::AdminOrigin::ensure_origin(origin)?;
+        Fee::<T>::kill();
+        Limit::<T>::kill();
+        Ok(())
+    }
+    // Recall: `ensure_none` is not privileged.
+    #[pallet::call_index(3)]
+    pub fn unsigned_set(origin: OriginFor<T>, fee: u32) -> DispatchResult {
+        ensure_none(origin)?;
+        Fee::<T>::put(fee);
+        Ok(())
+    }
+    // Recall: a bound origin result is an account, not a privileged check.
+    #[pallet::call_index(5)]
+    pub fn bound_origin(origin: OriginFor<T>, fee: u32) -> DispatchResult {
+        let who = T::ManagerOrigin::ensure_origin(origin)?;
+        Fee::<T>::put(fee);
+        Ok(())
+    }
+    // Recall: a root check that falls back to a signed origin.
+    #[pallet::call_index(6)]
+    pub fn root_or_signed(origin: OriginFor<T>, fee: u32) -> DispatchResult {
+        if ensure_root(origin.clone()).is_err() {
+            ensure_signed(origin)?;
+        }
+        Fee::<T>::put(fee);
+        Ok(())
+    }
+    // Recall: `EnsureOriginWithArg` (two arguments).
+    #[pallet::call_index(7)]
+    pub fn with_arg(origin: OriginFor<T>, asset: u32) -> DispatchResult {
+        T::CreateOrigin::ensure_origin(origin, &asset)?;
+        Fee::<T>::put(asset);
+        Ok(())
+    }
+    // #15: transient storage, set and killed in one body.
+    #[pallet::call_index(4)]
+    pub fn with_extra_gas(origin: OriginFor<T>, call: u32) -> DispatchResult {
+        ensure_signed(origin)?;
+        ExtraGas::<T>::set(Some(1));
+        let result = Self::run(call);
+        ExtraGas::<T>::kill();
+        result
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    assert_eq!(
+        reported_names(&diags, "TST006"),
+        vec![
+            "bound_origin",
+            "reset",
+            "root_or_signed",
+            "set_own_fee",
+            "unsigned_set",
+            "with_arg"
+        ],
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn ben002_counts_checked_results_hook_benchmarks_and_missed_assertions() {
+    let code = r#"
+#[benchmark]
+fn expect_checked() {
+    #[block]
+    {
+        Pallet::<T>::internal(1).expect("succeeds");
+    }
+}
+// #6: hook benchmarks.
+#[benchmark]
+fn on_initialize_full() {
+    #[block]
+    {
+        Pallet::<T>::on_initialize(1u32.into());
+    }
+}
+// #7: a bound result of a call the matching misses, asserted afterwards.
+#[benchmark]
+fn bound_result() -> Result<(), BenchmarkError> {
+    #[block]
+    {
+        #[allow(deprecated)]
+        let result = unsigned::Pallet::<T>::validate_unsigned(TransactionSource::Local, &call);
+        assert_ok!(result);
+    }
+    Ok(())
+}
+// #7: assert_matches! after the call.
+#[benchmark]
+fn matched_event() {
+    #[extrinsic_call]
+    claim(RawOrigin::Signed(caller));
+    assert_matches!(events().last(), Some(Event::Claimed { .. }));
+}
+// Recall: the asserted value is derived, not the bound result.
+#[benchmark]
+fn derived_only() {
+    #[block]
+    {
+        let voters = <Pallet<T> as SortedListProvider<T::AccountId>>::iter();
+        let len = voters.count();
+        assert_eq!(len, 1);
+    }
+}
+// Recall: the unwrap is on a setup read, not on the measured call.
+#[benchmark]
+fn unwrap_before_call() {
+    #[block]
+    {
+        let x = Foo::<T>::get().unwrap();
+        let _ = Pallet::<T>::f(x);
+    }
+}
+// Recall: nothing checked.
+#[benchmark]
+fn unchecked_call() {
+    #[block]
+    {
+        let _ = Pallet::<T>::internal(1);
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert_eq!(
+        reported_names(&diags, "BEN002"),
+        vec!["derived_only", "unchecked_call", "unwrap_before_call"],
+        "{diags:?}"
+    );
+}
+
+#[test]
+fn ben002_reads_v1_measured_blocks_like_v2() {
+    let code = r#"
+benchmarks! {
+    pause {
+        let origin = T::UpdateOrigin::try_successful_origin().unwrap();
+    }: {
+        assert_ok!(crate::Pallet::<T>::pause(origin));
+    }
+    revoke {
+        let ac = setup::<T>();
+    }: { ac.can_revoke().expect("allowed") }
+    plain {
+        let caller = whitelisted_caller();
+    }: { crate::Pallet::<T>::plain(caller) }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/benchmarking.rs", code);
+    assert_eq!(reported_names(&diags, "BEN002"), vec!["plain"], "{diags:?}");
+}
+
+#[test]
+fn rtc001_skips_parity_test_networks_only() {
+    for (package, fires) in [
+        ("rococo-runtime", false),
+        ("glutton-westend-runtime", false),
+        ("westend-runtime", true),
+        ("parachain-template-runtime", true),
+    ] {
+        let krate = rtc_runtime_crate(package, &[("src/lib.rs", RTC_RUNTIME_LIB)]);
+        let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
+        assert_eq!(
+            rtc_findings(&diags) == vec!["RTC001:3".to_string()],
+            fires,
+            "{package}: {diags:?}"
+        );
+    }
+}
+
+#[test]
+fn rtc001_skips_pallets_without_calls() {
+    let runtime = r#"
+impl pallet_hooks::Config for Runtime {
+    type WeightInfo = ();
+    type ExtensionsWeightInfo = pallet_hooks::TestWeightInfo;
+}
+impl pallet_calls::Config for Runtime {
+    type WeightInfo = ();
+}
+
+construct_runtime!(
+    pub enum Runtime {
+        Hooks: pallet_hooks = 1,
+        Calls: pallet_calls = 2,
+    }
+);
+"#;
+    let dir = write_tree(&[
+        (
+            "runtime/Cargo.toml",
+            "[package]\nname = \"chain-runtime\"\nversion = \"0.1.0\"\n\n[dependencies]\npallet-hooks = { path = \"../hooks\" }\npallet-calls = { path = \"../calls\" }\n",
+        ),
+        ("runtime/src/lib.rs", runtime),
+        ("hooks/src/lib.rs", "#[pallet::hooks]\nimpl<T: Config> Hooks for Pallet<T> {}\n"),
+        ("calls/src/lib.rs", "#[pallet::call]\nimpl<T: Config> Pallet<T> {}\n"),
+    ]);
+    let diags = rtc_scan(
+        &dir.path().join("runtime"),
+        polkadot_linter::config::Config::default(),
+    );
+    // The no-calls skip covers `()` only, not `TestWeightInfo`.
+    let mut findings = rtc_findings(&diags);
+    findings.sort();
+    assert_eq!(findings, vec!["RTC001:4", "RTC001:7"], "{diags:?}");
 }

@@ -12,10 +12,10 @@ use crate::{
     config::Config,
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::FileContext,
-    rules::LintRule,
+    rules::{benchmarking::in_test_crate, LintRule},
     syn_util::{
         ast_file, compact_tokens, expr_call_name, expr_call_path, has_exact_attr, macro_name,
-        path_last_ident, span_column, span_line, strip_expr_wrappers, test_only,
+        path_last_ident, privileged_origin, span_column, span_line, strip_expr_wrappers, test_only,
     },
 };
 
@@ -631,16 +631,27 @@ impl LintRule for ExtrinsicWithoutEvent {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        if !ctx.is_rust || ctx.is_test_file || ctx.is_benchmark_file {
+        if !ctx.is_rust || ctx.is_test_file || ctx.is_benchmark_file || in_test_crate(&ctx.path) {
             return None;
         }
 
         let ast = ast_file(ctx)?;
+        const MUTATIONS: [&str; 8] = [
+            "put",
+            "insert",
+            "mutate",
+            "remove",
+            "kill",
+            "set",
+            "append",
+            "try_append",
+        ];
 
         #[derive(Default)]
         struct BodyVisitor {
             has_event: bool,
-            has_mutation: bool,
+            /// `(storage item, operation)`; the item is empty for method calls.
+            mutations: Vec<(String, String)>,
             /// Skip closures and nested items (a helper must emit directly).
             direct_only: bool,
         }
@@ -664,19 +675,10 @@ impl LintRule for ExtrinsicWithoutEvent {
                         self.has_event = true;
                     }
                     if let Some(name) = path_last_ident(&expr_path.path) {
-                        if [
-                            "put",
-                            "insert",
-                            "mutate",
-                            "remove",
-                            "kill",
-                            "set",
-                            "append",
-                            "try_append",
-                        ]
-                        .contains(&name.as_str())
-                        {
-                            self.has_mutation = true;
+                        if MUTATIONS.contains(&name.as_str()) {
+                            let func = compact_tokens(&node.func);
+                            let item = func.rsplit_once("::").map_or("", |(item, _)| item);
+                            self.mutations.push((item.to_owned(), name));
                         }
                     }
                 }
@@ -688,19 +690,8 @@ impl LintRule for ExtrinsicWithoutEvent {
                 if method == "deposit_event" {
                     self.has_event = true;
                 }
-                if [
-                    "put",
-                    "insert",
-                    "mutate",
-                    "remove",
-                    "kill",
-                    "set",
-                    "append",
-                    "try_append",
-                ]
-                .contains(&method.as_str())
-                {
-                    self.has_mutation = true;
+                if MUTATIONS.contains(&method.as_str()) {
+                    self.mutations.push((String::new(), method));
                 }
                 visit::visit_expr_method_call(self, node);
             }
@@ -790,13 +781,30 @@ impl LintRule for ExtrinsicWithoutEvent {
                     }
                     let mut body_visitor = BodyVisitor::default();
                     body_visitor.visit_block(&method.block);
+                    let mutations = &body_visitor.mutations;
+                    // Transient storage: an item both set and killed in one body.
+                    let transient = mutations.iter().any(|(item, op)| {
+                        !item.is_empty()
+                            && op == "kill"
+                            && mutations
+                                .iter()
+                                .any(|(i, o)| i == item && (o == "set" || o == "put"))
+                    });
+                    // A privileged (root/governance) setter of one storage item.
+                    let privileged_setter =
+                        mutations.len() == 1 && privileged_origin(&method.block);
                     let helper_event = method
                         .block
                         .stmts
                         .iter()
                         .filter_map(top_level_helper)
                         .any(|helper| self.emitting.contains(&helper));
-                    if body_visitor.has_mutation && !body_visitor.has_event && !helper_event {
+                    if !mutations.is_empty()
+                        && !body_visitor.has_event
+                        && !helper_event
+                        && !transient
+                        && !privileged_setter
+                    {
                         self.diagnostics.push(Diagnostic {
 							rule_id: self.rule_id.to_string(),
 							rule_name: self.rule_name.to_string(),
