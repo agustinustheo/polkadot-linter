@@ -46,7 +46,10 @@ use crate::{
     config::{Config, RuntimeConfigConfig},
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_lib, scan_cached, FileContext},
-    rules::LintRule,
+    rules::{
+        benchmarking::{manifest, workspace_root},
+        LintRule,
+    },
     syn_util::{compact_tokens, macro_name, path_attr, path_last_ident, strip_expr_wrappers},
 };
 
@@ -798,6 +801,10 @@ fn for_each_runtime_impl(file: &SynFile, mut f: impl FnMut(&ItemImpl, &[String])
 // RTC001: placeholder WeightInfo in a runtime Config impl
 // ---------------------------------------------------------------------------
 
+/// RTC001-only dev-runtime name tokens: Parity test networks whose placeholder
+/// weights are not a production risk. The other RTC rules still lint them.
+const PARITY_TEST_NETWORKS: [&str; 2] = ["rococo", "glutton"];
+
 pub struct PlaceholderWeightInfoInRuntime;
 
 impl LintRule for PlaceholderWeightInfoInRuntime {
@@ -813,7 +820,16 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
         let settings = &config.runtime_config;
-        runtime_scope(ctx, settings)?;
+        let krate = runtime_scope(ctx, settings)?;
+        let tokens = PARITY_TEST_NETWORKS.map(String::from);
+        let named = |name: &str| has_name_token(name, &tokens);
+        let dir = krate.root.as_deref().and_then(Path::file_name);
+        if !settings.include_dev_runtimes
+            && (dir.is_some_and(|dir| named(&dir.to_string_lossy()))
+                || krate.package.as_deref().is_some_and(named))
+        {
+            return None;
+        }
         let file = production_ast(ctx.ast.as_ref()?);
         let severity = config.rule_severity(self.id(), Severity::Warning);
         let substrate_weight_severity = config
@@ -830,6 +846,13 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
             let allowlisted = trait_path[..trait_path.len() - 1]
                 .iter()
                 .any(|segment| settings.unit_weight_info_allowlist.contains(segment));
+            // A pallet with no calls (hook- or extension-only) bound to placeholder weights.
+            let no_calls = || {
+                krate
+                    .root
+                    .as_deref()
+                    .is_some_and(|root| pallet_without_calls(root, &trait_path[0]))
+            };
 
             for item_type in impl_types(item_impl) {
                 let ident = item_type.ident.to_string();
@@ -838,7 +861,7 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
                 }
                 let line = line_of(&item_type.ty);
                 if is_unit_type(&item_type.ty) {
-                    if allowlisted {
+                    if allowlisted || no_calls() {
                         continue;
                     }
                     diagnostics.push(diagnostic(
@@ -909,6 +932,45 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
         });
         non_empty(diagnostics)
     }
+}
+
+/// The source of the runtime's path dependency `krate` (direct or through
+/// `[workspace.dependencies]`) declares no `#[pallet::call]`.
+fn pallet_without_calls(runtime_root: &Path, krate: &str) -> bool {
+    scan_cached(
+        (runtime_root.to_path_buf(), krate.to_owned()),
+        |(root, krate)| {
+            let dir = (|| {
+                let cargo = manifest(&root.join("Cargo.toml"))?;
+                let deps = cargo.get("dependencies")?.as_table()?;
+                let (alias, dep) = deps.iter().find(|(a, _)| a.replace('-', "_") == *krate)?;
+                let (declared, base) =
+                    if dep.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                        let workspace = workspace_root(root);
+                        let cargo = manifest(&workspace.join("Cargo.toml"))?;
+                        (
+                            cargo
+                                .get("workspace")?
+                                .get("dependencies")?
+                                .get(alias)?
+                                .clone(),
+                            workspace,
+                        )
+                    } else {
+                        (dep.clone(), root.as_path())
+                    };
+                Some(base.join(declared.get("path")?.as_str()?))
+            })();
+            let mut sources = walkdir::WalkDir::new(dir.unwrap_or_default().join("src"))
+                .into_iter()
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
+                .filter_map(|e| fs::read_to_string(e.path()).ok())
+                .peekable();
+            sources.peek().is_some()
+                && sources.all(|s| !s.contains("pallet::call") && !s.contains("decl_module!"))
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------

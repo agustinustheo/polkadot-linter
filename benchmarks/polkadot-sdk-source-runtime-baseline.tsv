@@ -1,6 +1,6 @@
 rule_id	scan_root	count
-RTC001	polkadot/runtime	3
-RTC001	cumulus/parachains/runtimes	4
+RTC001	polkadot/runtime	0
+RTC001	cumulus/parachains/runtimes	3
 RTC001	templates	11
 RTC001	substrate/bin/node/runtime	0
 RTC001	cumulus/test	0

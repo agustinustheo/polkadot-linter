@@ -17,7 +17,10 @@ use crate::{
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_lib, crate_root, scan_cached, FileContext},
     rules::{runtime_config::construct_runtime_entries, LintRule},
-    syn_util::{has_attr, path_attr, path_last_ident, span_line, test_only},
+    syn_util::{
+        attr_path_matches, compact_tokens, has_attr, path_attr, path_last_ident, privileged_origin,
+        span_line, test_only,
+    },
 };
 
 fn parse_ast(content: &str) -> Option<SynFile> {
@@ -101,10 +104,56 @@ fn collect_weight_function_names(content: &str) -> Vec<(String, usize)> {
     Vec::new()
 }
 
-fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
+/// A `#[pallet::call]` method: name, line, compact `#[pallet::weight(..)]`
+/// argument, and whether it is a privileged bounded setter.
+struct Extrinsic {
+    name: String,
+    line: usize,
+    weight: String,
+    privileged_setter: bool,
+}
+
+/// A privileged call whose body is a bounded setter: no loop, no storage
+/// iteration, and no call on `Self`, `Pallet` or `T` other than origin checks
+/// and `deposit_event`.
+fn privileged_setter(block: &syn::Block) -> bool {
+    struct Bounded(bool);
+    impl<'ast> Visit<'ast> for Bounded {
+        fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+            let unbounded = match expr {
+                syn::Expr::ForLoop(_) | syn::Expr::While(_) | syn::Expr::Loop(_) => true,
+                syn::Expr::MethodCall(call) => iterates(&call.method.to_string()),
+                syn::Expr::Call(call) => match &*call.func {
+                    syn::Expr::Path(path) => {
+                        let name = path_last_ident(&path.path).unwrap_or_default();
+                        let owner = path.path.segments.first().map(|s| s.ident.to_string());
+                        iterates(&name)
+                            || ((path.qself.is_some()
+                                || matches!(owner.as_deref(), Some("Self" | "Pallet" | "T")))
+                                && name != "deposit_event"
+                                && !name.starts_with("ensure_"))
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            self.0 &= !unbounded;
+            visit::visit_expr(self, expr);
+        }
+    }
+    fn iterates(name: &str) -> bool {
+        name.starts_with("iter")
+            || matches!(name, "drain" | "clear_prefix" | "remove_all" | "translate")
+    }
+    let mut bounded = Bounded(true);
+    bounded.visit_block(block);
+    bounded.0 && privileged_origin(block)
+}
+
+fn collect_extrinsics(content: &str) -> Vec<Extrinsic> {
     if let Some(ast) = parse_ast(content) {
         struct ExtrinsicVisitor {
-            names: Vec<(String, usize)>,
+            names: Vec<Extrinsic>,
         }
 
         impl<'ast> Visit<'ast> for ExtrinsicVisitor {
@@ -126,8 +175,19 @@ fn collect_extrinsic_names(content: &str) -> Vec<(String, usize)> {
                             }
                             // FRAME assigns positional call indices when the attribute is
                             // omitted, so every method in a pallet call impl is an extrinsic.
-                            self.names
-                                .push((item_fn.sig.ident.to_string(), span_line(item_fn.span())));
+                            let weight = item_fn
+                                .attrs
+                                .iter()
+                                .filter(|attr| attr_path_matches(attr, &["pallet", "weight"]))
+                                .filter_map(|attr| attr.meta.require_list().ok())
+                                .map(|list| compact_tokens(&list.tokens))
+                                .collect();
+                            self.names.push(Extrinsic {
+                                name: item_fn.sig.ident.to_string(),
+                                line: span_line(item_fn.span()),
+                                weight,
+                                privileged_setter: privileged_setter(&item_fn.block),
+                            });
                         }
                     }
                 }
@@ -158,6 +218,9 @@ struct Benchmark {
     /// v2 `#[block] {}` that returns `Err(BenchmarkError::Override(..))`: the
     /// weight is set by hand and there is nothing to verify.
     overridden: bool,
+    /// The measured block asserts, or checks a result with `?`, `.expect(..)`
+    /// or `.unwrap()`.
+    checked: bool,
 }
 
 fn excluded_context(ctx: &FileContext) -> bool {
@@ -491,6 +554,7 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
             id == "verify" && group.delimiter() == Delimiter::Brace
         });
         let mut calls = HashSet::new();
+        let mut checked = false;
         if let Some(TokenTree::Ident(call)) = measured.first() {
             calls.insert(if call == "_" {
                 name.clone()
@@ -520,6 +584,11 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
                 owners,
                 false,
             ));
+            let stream = block.stream();
+            checked = syn::parse2::<syn::Block>(quote::quote!({ #stream })).is_ok_and(|block| {
+                result_checked(&block, &name, &bindings, owners)
+                    || !block_verification(&block, &name, &bindings, owners).is_empty()
+            });
         }
         let end_line = verify
             .map(|i| measured[i + 1].span().end().line)
@@ -538,6 +607,7 @@ fn legacy_benchmarks(tokens: TokenStream, owners: &Owners) -> Vec<Benchmark> {
             calls,
             name_only: false,
             overridden: false,
+            checked,
             verification: verify
                 .map(|i| match &measured[i + 1] {
                     TokenTree::Group(group) if !group.stream().is_empty() => {
@@ -590,6 +660,7 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                     .any(|s| measured_statement(s).is_some());
                 let mut after_measurement = !has_measured;
                 let mut empty_block = false;
+                let mut checked = false;
                 for stmt in &function.block.stmts {
                     if let Some(extrinsic_marker) = measured_statement(stmt) {
                         calls.extend(called_names(
@@ -602,9 +673,11 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                         after_measurement = true;
                         verification = TokenStream::new();
                         empty_block = false;
+                        checked = false;
                         if let syn::Stmt::Expr(syn::Expr::Block(block), _) = stmt {
                             if !extrinsic_marker {
                                 empty_block = block.block.stmts.is_empty();
+                                checked = result_checked(&block.block, &name, &bindings, &owners);
                                 verification =
                                     block_verification(&block.block, &name, &bindings, &owners);
                             }
@@ -630,6 +703,7 @@ fn collect_benchmarks_ast(ast: &SynFile, owners: &Owners) -> Vec<Benchmark> {
                     verification,
                     name_only: !has_measured,
                     overridden,
+                    checked,
                 });
             }
         }
@@ -694,6 +768,18 @@ fn block_verification(
     if !measured && assertion_only(&block.stmts) {
         return block.to_token_stream();
     }
+    // `let r = other::Pallet::<T>::f(..); assert_ok!(r);` asserts the bound result.
+    if let Some((syn::Stmt::Local(local), rest)) = block.stmts.split_first() {
+        if let (false, syn::Pat::Ident(bound)) = (measured, &local.pat) {
+            let bound = Regex::new(&format!(r"\b{}\b", bound.ident)).unwrap();
+            if rest.iter().any(|stmt| {
+                has_verification(stmt.to_token_stream(), &[])
+                    && bound.is_match(&stmt.to_token_stream().to_string())
+            }) {
+                return rest.iter().map(ToTokens::to_token_stream).collect();
+            }
+        }
+    }
     verification
 }
 
@@ -717,6 +803,37 @@ fn assertion_only(stmts: &[syn::Stmt]) -> bool {
     })
 }
 
+/// The measured statement (the first one calling the owning pallet, else the
+/// first statement) applies `?`, `.expect(..)` or `.unwrap()` directly to its
+/// expression: a failing call aborts the benchmark.
+fn result_checked(
+    block: &syn::Block,
+    benchmark: &str,
+    bindings: &HashMap<String, String>,
+    owners: &Owners,
+) -> bool {
+    let owners = owners.in_block(block);
+    let measured = block
+        .stmts
+        .iter()
+        .find(|stmt| {
+            !called_names(stmt.to_token_stream(), benchmark, bindings, &owners, false).is_empty()
+        })
+        .or(block.stmts.first());
+    let expr = match measured {
+        Some(syn::Stmt::Expr(expr, _)) => expr,
+        Some(syn::Stmt::Local(syn::Local {
+            init: Some(init), ..
+        })) => &init.expr,
+        _ => return false,
+    };
+    match expr {
+        syn::Expr::Try(_) => true,
+        syn::Expr::MethodCall(call) => call.method == "expect" || call.method == "unwrap",
+        _ => false,
+    }
+}
+
 /// The tokens mention `BenchmarkError::Override`, at any depth.
 fn mentions_override(tokens: TokenStream) -> bool {
     tokens.to_string().contains("BenchmarkError :: Override")
@@ -738,6 +855,7 @@ fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
                         | "assert_ok"
                         | "assert_noop"
                         | "assert_err"
+                        | "assert_matches"
                         | "ensure"
                         | "assert_last_event"
                         | "assert_has_event"
@@ -761,7 +879,7 @@ fn has_verification(tokens: TokenStream, patterns: &[String]) -> bool {
     false
 }
 
-fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
+pub(crate) fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
     scan_cached(path.to_path_buf(), |path| {
         std::fs::read_to_string(path)
             .ok()
@@ -912,7 +1030,18 @@ fn discover_benchmarks(path: &Path) -> Discovery {
     discovery
 }
 
-fn workspace_root(crate_root: &Path) -> &Path {
+/// The file's crate lies under a `test-runtime` or `tests` directory of its
+/// workspace (e.g. `polkadot/runtime/test-runtime`).
+pub(crate) fn in_test_crate(path: &Path) -> bool {
+    crate_root(path).is_some_and(|root| {
+        root.strip_prefix(workspace_root(root)).is_ok_and(|rel| {
+            rel.components()
+                .any(|c| matches!(c.as_os_str().to_str(), Some("test-runtime" | "tests")))
+        })
+    })
+}
+
+pub(crate) fn workspace_root(crate_root: &Path) -> &Path {
     crate_root
         .ancestors()
         .find(|dir| {
@@ -1276,7 +1405,18 @@ impl LintRule for BenchmarkVerification {
         }
         let mut diagnostics = Vec::new();
         for benchmark in benchmarks {
+            // Hook benchmarks have no call result or event to assert on.
+            let hook = [
+                "on_initialize",
+                "on_finalize",
+                "on_idle",
+                "on_runtime_upgrade",
+            ]
+            .iter()
+            .any(|hook| benchmark.name.contains(hook));
             if !benchmark.overridden
+                && !benchmark.checked
+                && !hook
                 && !has_verification(
                     benchmark.verification,
                     &config.benchmarking.verification_patterns,
@@ -1337,9 +1477,9 @@ impl LintRule for ExtrinsicWithoutBenchmark {
         if !path_str.ends_with("lib.rs") {
             return None;
         }
-        let extrinsic_fns = collect_extrinsic_names(ctx.content);
+        let extrinsics = collect_extrinsics(ctx.content);
 
-        if extrinsic_fns.is_empty() {
+        if extrinsics.is_empty() || in_test_crate(&ctx.path) {
             return None;
         }
 
@@ -1347,8 +1487,46 @@ impl LintRule for ExtrinsicWithoutBenchmark {
         if crate_root(&ctx.path).is_some() && !discovery.contains_source(&ctx.path) {
             return None;
         }
+        let weight_fn = Regex::new(r"WeightInfo::(\w+)").unwrap();
+        let ident = Regex::new(r"\b[A-Za-z_]\w*").unwrap();
         let mut diagnostics = Vec::new();
-        for (fn_name, line) in &extrinsic_fns {
+        for Extrinsic {
+            name: fn_name,
+            line,
+            weight,
+            privileged_setter,
+        } in &extrinsics
+        {
+            // The weight reuses benchmarked `WeightInfo` fns, is priced by gas,
+            // or is hand-written for a privileged (root/governance) bounded setter.
+            let reused = weight_fn.captures_iter(weight).map(|c| c[1].to_owned());
+            let reused = reused.collect::<Vec<_>>();
+            let hand_written = !weight.contains("WeightInfo")
+                && (weight.contains("DbWeight")
+                    || ident.find_iter(weight).all(|id| {
+                        matches!(
+                            id.as_str(),
+                            "Weight"
+                                | "from_parts"
+                                | "from_ref_time"
+                                | "zero"
+                                | "frame_support"
+                                | "weights"
+                                | "sp_weights"
+                                | "u64"
+                        )
+                    }));
+            if (!reused.is_empty()
+                && reused
+                    .iter()
+                    .all(|f| discovery.benchmarks.iter().any(|b| &b.name == f)))
+                || weight
+                    .split(|c: char| !c.is_ascii_alphanumeric())
+                    .any(|token| token.eq_ignore_ascii_case("gas"))
+                || (*privileged_setter && hand_written && !weight.is_empty())
+            {
+                continue;
+            }
             if !discovery.benchmarks.iter().any(|benchmark| {
                 benchmark.calls.contains(fn_name)
                     || (benchmark.name_only

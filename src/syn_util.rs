@@ -194,3 +194,41 @@ pub(crate) fn test_only(attrs: &[Attribute]) -> bool {
                     .is_some_and(|meta| requires_test(&meta)))
     })
 }
+
+/// The first origin check in `block` (the first call named `ensure_*`) is
+/// privileged and stands alone as `check(origin)?;` with its result
+/// discarded: `ensure_root`, `X::ensure_origin` (one argument),
+/// `ensure_origin_or_root` or `ensure_admin*`. A bound result (`let who =
+/// T::X::ensure_origin(o)?`) is an account, and `ensure_root(o).is_err()`
+/// falls back to another origin, so neither is privileged.
+pub(crate) fn privileged_origin(block: &syn::Block) -> bool {
+    struct First<'ast>(Option<&'ast ExprCall>);
+    impl<'ast> Visit<'ast> for First<'ast> {
+        fn visit_expr_call(&mut self, call: &'ast ExprCall) {
+            if self.0.is_none() {
+                let name = expr_call_path(call).and_then(path_last_ident);
+                if name.is_some_and(|name| name.starts_with("ensure_")) {
+                    self.0 = Some(call);
+                }
+                visit::visit_expr_call(self, call);
+            }
+        }
+    }
+    let mut first = First(None);
+    first.visit_block(block);
+    let Some(call) = first.0 else {
+        return false;
+    };
+    let Some(path) = expr_call_path(call) else {
+        return false;
+    };
+    let name = path_last_ident(path).unwrap_or_default();
+    let privileged = matches!(name.as_str(), "ensure_root" | "ensure_origin_or_root")
+        || name.starts_with("ensure_admin")
+        || (name == "ensure_origin" && path.segments.len() > 1 && call.args.len() == 1);
+    privileged
+        && block.stmts.iter().any(|stmt| {
+            matches!(stmt, syn::Stmt::Expr(Expr::Try(t), Some(_))
+                if matches!(&*t.expr, Expr::Call(c) if std::ptr::eq(c, call)))
+        })
+}
