@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="polkadot-linter: a magnifying glass over a grid of dots, one flagged" width="820">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.png">
+    <img src="assets/logo-light.png" alt="polkadot-linter" width="820">
+  </picture>
 </p>
 
 <p align="center">
