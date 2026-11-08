@@ -15,7 +15,7 @@ Semantic rules catch correct-looking code with wrong or outdated meaning: deprec
 | [`SEM010`](SEM010.md) | XOR Operator Mistaken for Exponentiation | Error | compiler-backed |
 | [`SEM011`](SEM011.md) | Weight::zero() Placeholder in Weight Attributes | Warning | source (syn) |
 | [`SEM012`](SEM012.md) | Suppressed Dead Code in Production Pallet Code | Advisory, off by default | source (syn) |
-| [`SEM013`](SEM013.md) | Custom Invalidity Enum Without `#[repr(u8)]` | Warning | source (syn) |
+| [`SEM013`](SEM013.md) | Custom Invalidity Enum Without `#[repr(u8)]` | Warning, off by default | source (syn) |
 | [`SEM014`](SEM014.md) | Missing Log Target in SubmitTransaction Logging | Advisory | source (syn) |
 | [`SEM015`](SEM015.md) | Missing `#[pallet::weight_of_authorize]` on Authorized Calls | Warning | source (syn) |
 | [`SEM016`](SEM016.md) | Missing `AuthorizeCall` in `CreateAuthorizedTransaction` Extension | Warning | compiler-backed |

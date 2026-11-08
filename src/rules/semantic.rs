@@ -22,10 +22,11 @@ use crate::{
     engine::{crate_root, scan_cached, FileContext},
     frame_model::{active_cfg_attr_args, active_cfg_attr_path_matches},
     project_model::SourceTargetKind,
-    rules::LintRule,
+    rules::{runtime_config::cfg_matches, LintRule},
     syn_util::{
         ast_file, attr_expr, compact_tokens, expr_call_path, is_masked_span, macro_name,
-        path_last_ident, span_column, span_line, strip_expr_wrappers, type_contains_named,
+        path_last_ident, privileged_origin, span_column, span_line, strip_expr_wrappers,
+        type_contains_named,
     },
 };
 
@@ -2675,6 +2676,30 @@ impl LintRule for SpStdDeprecated {
 // SEM011: Weight::zero() placeholder in weight attributes
 // ---------------------------------------------------------------------------
 
+/// A root-only call compiled only for test networks: a `#[cfg(..)]` that
+/// requires a feature whose name contains `testnet`, and a body whose origin
+/// check is `ensure_root(origin)?;`. Its zero weight is reachable only by the
+/// sudo key of a test chain.
+fn testnet_root_only(attrs: &[Attribute], block: &syn::Block) -> bool {
+    let testnet_feature = |meta: &Meta| {
+        matches!(meta, Meta::NameValue(nv) if nv.path.is_ident("feature")
+            && matches!(&nv.value, Expr::Lit(lit)
+                if matches!(&lit.lit, Lit::Str(s) if s.value().contains("testnet"))))
+    };
+    let gated = attrs.iter().any(|attr| {
+        attr.path().is_ident("cfg")
+            && attr
+                .parse_args::<Meta>()
+                .is_ok_and(|meta| cfg_matches(&meta, &testnet_feature))
+    });
+    let root_check = block.stmts.iter().any(|stmt| {
+        matches!(stmt, Stmt::Expr(Expr::Try(t), Some(_))
+            if matches!(&*t.expr, Expr::Call(call)
+                if expr_call_path(call).and_then(path_last_ident).as_deref() == Some("ensure_root")))
+    });
+    gated && root_check && privileged_origin(block)
+}
+
 pub struct WeightZeroPlaceholder;
 
 impl LintRule for WeightZeroPlaceholder {
@@ -2709,7 +2734,10 @@ impl LintRule for WeightZeroPlaceholder {
         }
 
         impl WeightZeroVisitor<'_> {
-            fn inspect_attrs(&mut self, attrs: &[Attribute]) {
+            fn inspect_attrs(&mut self, attrs: &[Attribute], block: &syn::Block) {
+                if testnet_root_only(attrs, block) {
+                    return;
+                }
                 for attr in attrs.iter().filter(|attr| is_weight_attr(attr)) {
                     let Some(expr) = attr_expr_for_path(attr, &["pallet", "weight"])
                         .or_else(|| attr_expr_for_path(attr, &["pallet", "weight_of_authorize"]))
@@ -2753,13 +2781,13 @@ impl LintRule for WeightZeroPlaceholder {
 
         impl<'ast> Visit<'ast> for WeightZeroVisitor<'_> {
             fn visit_item_fn(&mut self, item_fn: &'ast ItemFn) {
-                self.inspect_attrs(&item_fn.attrs);
+                self.inspect_attrs(&item_fn.attrs, &item_fn.block);
                 visit::visit_item_fn(self, item_fn);
             }
 
             fn visit_impl_item(&mut self, item: &'ast ImplItem) {
                 if let ImplItem::Fn(item_fn) = item {
-                    self.inspect_attrs(&item_fn.attrs);
+                    self.inspect_attrs(&item_fn.attrs, &item_fn.block);
                 }
                 visit::visit_impl_item(self, item);
             }

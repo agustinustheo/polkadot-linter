@@ -35,7 +35,7 @@ run with `config/all-rules.toml`.
 | [`SEM010`](rules/SEM010.md) | Semantic | `xor-as-exponentiation` | `error` | `^` is used as if it were exponentiation, even though Rust treats it as bitwise XOR. |
 | [`SEM011`](rules/SEM011.md) | Semantic | `weight-zero-placeholder` | `warning` | A pallet weight attribute is zero (`Weight::zero()`, `0`, `Weight::from_parts(0, 0)`), making the call effectively free. |
 | [`SEM012`](rules/SEM012.md) | Semantic | `allow-dead-code-in-pallet` | `warning` | Production pallet code suppresses dead-code warnings instead of removing unused items. Off by default. |
-| [`SEM013`](rules/SEM013.md) | Semantic | `custom-invalidity-repr-u8` | `warning` | Custom invalidity enums that feed `InvalidTransaction::Custom(u8)` should declare `#[repr(u8)]` so discriminants stay explicit. |
+| [`SEM013`](rules/SEM013.md) | Semantic | `custom-invalidity-repr-u8` | `warning` | Custom invalidity enums that feed `InvalidTransaction::Custom(u8)` should declare `#[repr(u8)]` so discriminants stay explicit. Off by default. |
 | [`SEM014`](rules/SEM014.md) | Semantic | `submit-transaction-log-target` | `advisory` | Nearby `log::...!` calls around `SubmitTransaction::<...>::submit_transaction(...)` should include `target: LOG_TARGET` for traceable OCW submission failures. |
 | [`SEM015`](rules/SEM015.md) | Semantic | `missing-weight-of-authorize` | `warning` | `#[pallet::authorize]` should be paired with `#[pallet::weight_of_authorize(...)]` so authorize-path validation cost is benchmarked separately. |
 | [`SEM016`](rules/SEM016.md) | Semantic | `missing-authorizecall-in-create-authorized-transaction` | `warning` | `CreateAuthorizedTransaction::create_extension()` should include `AuthorizeCall::new()` so authorized transactions do not bypass authorize-stage routing. |
@@ -45,11 +45,11 @@ run with `config/all-rules.toml`.
 | [`TST003`](rules/TST003.md) | Test smell | `imports-inside-closures` | `warning` | `use` imports appear inside functions or closures instead of at module scope. Off by default. |
 | [`TST004`](rules/TST004.md) | Test smell | `pays-yes-error-path` | `warning` | A `Pays::No` success path lacks a companion test proving the failing path still pays fees. Off by default. |
 | [`TST005`](rules/TST005.md) | Test smell | `implementation-detail-assertions` | `warning` | Tests assert on likely internal fields such as `.inner` or `.state` instead of observable behaviour. Off by default. |
-| [`TST006`](rules/TST006.md) | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. |
+| [`TST006`](rules/TST006.md) | Test smell | `extrinsic-without-event` | `warning` | A storage-mutating extrinsic does not emit an event for external observers. Off by default. |
 | [`MOK001`](rules/MOK001.md) | Mock usage | `excessive-mock-setup` | `warning` | Test setup is dominated by mocks and scaffolding relative to actual assertions. Off by default. |
 | [`BEN001`](rules/BEN001.md) | Benchmark | `benchmark-for-weight-function` | `warning` | A weight function exists without a matching benchmark. Off by default. |
-| [`BEN002`](rules/BEN002.md) | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. |
-| [`BEN003`](rules/BEN003.md) | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. |
+| [`BEN002`](rules/BEN002.md) | Benchmark | `benchmark-verification` | `warning` | A benchmark lacks a verification step that proves the benchmarked operation really happened. Off by default. |
+| [`BEN003`](rules/BEN003.md) | Benchmark | `extrinsic-without-benchmark` | `warning` | A dispatchable call has no matching benchmark in the sibling benchmarking file. Off by default. |
 | [`RTC001`](rules/RTC001.md) | Runtime config | `placeholder-weight-info-in-runtime` | `warning` | A production runtime binds `type WeightInfo = ();` or a `TestWeightInfo` in `impl <pallet>::Config for Runtime`. Upstream `SubstrateWeight` is reported as `advisory` only with `flag_substrate_weight = true`. |
 | [`RTC002`](rules/RTC002.md) | Runtime config | `pallet-missing-from-define-benchmarks` | `warning` | A pallet binds runtime-local `weights::<pallet>` but is absent from the runtime's `define_benchmarks!`, so its weights are never regenerated. |
 | [`RTC003`](rules/RTC003.md) | Runtime config | `xcm-fees-waived` | `error` | The XCM executor `FeeManager` is `WaiveDeliveryFees` or `XcmFeeManagerFromComponents<Everything, _>`, or a delivery price is `()`/`NoPriceForMessageDelivery`, so XCM delivery is free. |

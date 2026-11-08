@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Partial.** [BEN002](../../rules/BEN002.md) requires a verification block in each benchmark, a concrete high-signal subset of modern benchmarking practice. Migrating from the deprecated `benchmarks!` macro to the v2 `#[benchmarks]` attribute and keeping syntax current otherwise still requires review.
+> **Linter coverage — Partial.** [BEN002](../../rules/BEN002.md) requires a verification block in each benchmark, a concrete subset of modern benchmarking practice; it is off by default (enable it with `config/all-rules.toml`). Migrating from the deprecated `benchmarks!` macro to the v2 `#[benchmarks]` attribute and keeping syntax current otherwise still requires review.
 
 ## Description
 

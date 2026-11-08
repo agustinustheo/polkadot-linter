@@ -6,7 +6,7 @@ family-specific heuristics:
 
 ```toml
 [rules.enabled]
-BEN002 = false          # disable a noisy rule
+SEM014 = false          # disable a rule
 
 [rules.severity]
 TST002 = "error"        # promote a rule

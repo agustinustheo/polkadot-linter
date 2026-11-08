@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Partial.** The linter checks several test-quality signals — TST001 (prefer `assert_noop`), TST002 (`assert_ok` on `apply_extrinsic`), TST004 (fee error-path companion), and TST006 (observable events) — but it cannot prove that every error case has a test. See [TST001](../../rules/TST001.md), [TST002](../../rules/TST002.md), [TST004](../../rules/TST004.md), [TST006](../../rules/TST006.md).
+> **Linter coverage — Partial.** The linter checks several test-quality signals — TST001 (prefer `assert_noop`), TST002 (`assert_ok` on `apply_extrinsic`), TST004 (fee error-path companion), and TST006 (observable events) — but it cannot prove that every error case has a test. TST001, TST004 and TST006 are off by default (enable them with `config/all-rules.toml`). See [TST001](../../rules/TST001.md), [TST002](../../rules/TST002.md), [TST004](../../rules/TST004.md), [TST006](../../rules/TST006.md).
 
 ## Description
 

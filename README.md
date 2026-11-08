@@ -37,7 +37,7 @@ available, but are off unless you ask for them.
 
 ## Highlights
 
-- **Precision first.** 32 of 64 rules are on by default. The rest were
+- **Precision first.** 28 of 64 rules are on by default. The rest were
   measured, found noisy, and turned off. The numbers are in
   [`benchmarks/precision/`](benchmarks/precision).
 - **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
@@ -141,16 +141,15 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [SEC006](http://agustinustheo.github.io/polkadot-linter/rules/SEC006.html), [SEC010](http://agustinustheo.github.io/polkadot-linter/rules/SEC010.html), [SEC011](http://agustinustheo.github.io/polkadot-linter/rules/SEC011.html), [SEC012](http://agustinustheo.github.io/polkadot-linter/rules/SEC012.html), [SEC015](http://agustinustheo.github.io/polkadot-linter/rules/SEC015.html) | warning | Ignored `repatriate_reserved` remainder, non-transactional hooks, storage iteration in dispatchables, unbounded `clear_prefix`, `dispatch_bypass_filter` | |
 | [SEM010](http://agustinustheo.github.io/polkadot-linter/rules/SEM010.html) | error | `^` used as exponentiation (it is XOR) | |
 | [SEM011](http://agustinustheo.github.io/polkadot-linter/rules/SEM011.html), [SEM015](http://agustinustheo.github.io/polkadot-linter/rules/SEM015.html), [SEM016](http://agustinustheo.github.io/polkadot-linter/rules/SEM016.html) | warning | Zero weights; `authorize` without `weight_of_authorize`; missing `AuthorizeCall` | |
-| [BEN002](http://agustinustheo.github.io/polkadot-linter/rules/BEN002.html), [BEN003](http://agustinustheo.github.io/polkadot-linter/rules/BEN003.html) | warning | Benchmark without verification; extrinsic without benchmark | |
-| [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html), [TST006](http://agustinustheo.github.io/polkadot-linter/rules/TST006.html) | error, warning | `assert_ok!` on `apply_extrinsic`; storage-mutating extrinsic without an event | |
-| SEM009, SEM013, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, `#[repr(u8)]` invalidity enums, OCW log targets, spelling | |
+| [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html) | error | `assert_ok!` on `apply_extrinsic` hides dispatch errors | |
+| SEM009, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, OCW log targets, spelling | |
 
-Every rule, including the 32 that are off by default, is in the
+Every rule, including the 36 that are off by default, is in the
 [rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
 
 ## How rules are measured
 
-Defaults come from two labeled audits:
+Defaults come from three labeled audits:
 
 - **[2026-11-external](benchmarks/precision/2026-11-external/README.md).** 10
   third-party parachain repositories (Moonbeam, Astar, Acala, Hydration, ...).
@@ -162,6 +161,12 @@ Defaults come from two labeled audits:
   polkadot-sdk plus the same repositories, compiler rules on 8 runtimes. It
   turned off 7 more rules, which had produced 313 default findings with 4 true
   positives in 91 labeled samples. Default findings went from 1,534 to 1,221.
+- **[2026-11-individuality-community](benchmarks/precision/2026-11-individuality-community/README.md).**
+  An acceptance test on one serious project, with a stricter standard: a
+  finding counts only if an engineer would fix it at reasonable cost. Three
+  skeptical reviewers found 3 of 39 default findings worth fixing. BEN002,
+  BEN003, SEM013 and TST006 were turned off and SEM011 and RTC001 narrowed;
+  the project now gets 3 findings, all three of them the ones worth fixing.
 
 Rules are also run against auditor-reported bugs at the exact commits that were
 audited. Labels are judgments, not an oracle, and samples are small (12 to 15
@@ -176,7 +181,7 @@ entry.
 ```toml
 [rules.enabled]
 SEC024 = true          # opt in to a default-off rule
-BEN002 = false
+SEM014 = false
 
 [rules.severity]
 TST002 = "error"

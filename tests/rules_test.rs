@@ -1747,6 +1747,66 @@ fn sem011_detects_literal_zero_weights() {
 }
 
 #[test]
+fn sem011_skips_root_only_testnet_calls() {
+    let code = r#"
+#[pallet::call]
+impl<T: Config> Pallet<T> {
+    #[pallet::weight(Weight::zero())]
+    #[cfg(feature = "testnet")]
+    pub fn testnet_force(origin: OriginFor<T>) -> DispatchResult {
+        if !T::TESTNET {
+            return Err(Error::<T>::InvalidState.into());
+        }
+        ensure_root(origin)?;
+        Ok(())
+    }
+
+    #[pallet::weight(Weight::zero())]
+    #[cfg(all(feature = "paseo-testnet", not(feature = "std")))]
+    pub fn gated_all(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        Ok(())
+    }
+
+    #[pallet::weight(Weight::zero())]
+    pub fn root_not_gated(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        Ok(())
+    }
+
+    #[pallet::weight(Weight::zero())]
+    #[cfg(feature = "testnet")]
+    pub fn signed_testnet(origin: OriginFor<T>) -> DispatchResult {
+        let _who = ensure_signed(origin)?;
+        Ok(())
+    }
+
+    #[pallet::weight(Weight::zero())]
+    #[cfg(not(feature = "testnet"))]
+    pub fn not_testnet(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        Ok(())
+    }
+
+    #[pallet::weight(Weight::zero())]
+    #[cfg(any(feature = "testnet", feature = "std"))]
+    pub fn any_testnet(origin: OriginFor<T>) -> DispatchResult {
+        ensure_root(origin)?;
+        Ok(())
+    }
+}
+"#;
+    let diags = check_fixture("pallets/foo/src/lib.rs", code);
+    let lines: Vec<_> = diags
+        .iter()
+        .filter(|d| d.rule_id == "SEM011")
+        .map(|d| d.line)
+        .collect();
+    // Recall guard: ungated, signed-origin, `not(..)` and `any(..)` zero weights still fire.
+    assert_eq!(lines, vec![21, 27, 34, 41], "{diags:?}");
+}
+
+#[test]
 fn sem011_detects_weight_zero_in_qualified_frame_attribute() {
     let code = r#"
 #[frame_support::pallet::weight(Weight::zero())]
@@ -4373,6 +4433,7 @@ fn rtc001_skips_parity_test_networks_only() {
     for (package, fires) in [
         ("rococo-runtime", false),
         ("glutton-westend-runtime", false),
+        ("next-people-paseo-runtime", false),
         ("westend-runtime", true),
         ("parachain-template-runtime", true),
     ] {

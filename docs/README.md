@@ -31,16 +31,19 @@ owns each rule.
 
 ## Precision first
 
-32 of the 64 rules are on by default. The other 32 were measured on real code
+28 of the 64 rules are on by default. The other 36 were measured on real code
 and found too noisy, or are Parity SDK style conventions. They stay available
 through `[rules.enabled]` or `config/all-rules.toml`.
 
-Two labeled audits set the defaults. On 10 third-party parachain repositories,
+Three labeled audits set the defaults. On 10 third-party parachain repositories,
 a rule is off if under 30% of its sampled findings are worth acting on, or 30%
 or more are false positives; default findings dropped from 2,680 to 750 and the
 estimated useful share rose from 18.5% to 58.3%. A second, run-based audit on
 polkadot-sdk and the same repositories turned off 7 more rules (4 true positives
-in 91 labeled samples). Rules are also checked against auditor-reported bugs at
+in 91 labeled samples). An acceptance test on paritytech/individuality-community,
+where a finding counts only if an engineer would fix it at reasonable cost,
+turned off 4 more (3 of its 39 default findings were worth fixing; it now gets
+exactly those 3). Rules are also checked against auditor-reported bugs at
 the commits that were audited. The method, numbers and caveats are in the
 repository's `benchmarks/precision/` directory.
 
