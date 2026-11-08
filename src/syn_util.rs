@@ -33,6 +33,12 @@ pub(crate) fn path_last_ident(path: &syn::Path) -> Option<String> {
         .map(|segment| segment.ident.to_string())
 }
 
+/// `construct_runtime!` or a fork that keeps the prefix
+/// (InvArch's `construct_runtime_modified!`).
+pub(crate) fn is_construct_runtime(name: &str) -> bool {
+    name.starts_with("construct_runtime")
+}
+
 pub(crate) fn macro_name(mac: &Macro) -> Option<String> {
     path_last_ident(&mac.path)
 }
