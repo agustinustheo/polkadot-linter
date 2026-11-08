@@ -80,7 +80,7 @@ run with `config/all-rules.toml`.
 | [`SEC016`](rules/SEC016.md) | Security | `missing-storage-version-check-in-runtime-upgrade` | `warning` | `on_runtime_upgrade` writes storage without guarding on storage version checks. Off by default. |
 | [`SEC017`](rules/SEC017.md) | Security | `vec-in-events` | `warning` | A pallet event carries an unbounded `Vec<>` payload. Off by default. |
 | [`SEC018`](rules/SEC018.md) | Security | `missing-weight-for-unbounded-input` | `warning` | A dispatchable accepts an unbounded `Vec<>` input but its `#[pallet::weight]` does not account for that input length. Off by default. |
-| [`SEC019`](rules/SEC019.md) | Security | `imbalance-escapes-transaction` | `error` | A rollback-capable `with_storage_layer`/`with_transaction`/`ProcessTransaction::process` closure moves a token imbalance into an outer local, so its `Drop` writes issuance after a rollback. Off by default. |
+| [`SEC019`](rules/SEC019.md) | Security | `imbalance-escapes-transaction` | `error` | A rollback-capable `with_storage_layer`/`with_transaction`/`ProcessTransaction::process` closure moves a token imbalance into an outer local, so its `Drop` writes issuance after a rollback. |
 | [`SEC020`](rules/SEC020.md) | Security | `discarded-verification-result` | `error` | A verifier's `bool`/`Result<bool, _>` verdict is discarded, so an invalid proof is accepted. |
 | [`SEC021`](rules/SEC021.md) | Security | `inverted-verification-guard` | `error` | `if verify(..) { reject }`: the rejecting branch runs when the verifier returns `true`. |
 | [`SEC022`](rules/SEC022.md) | Security | `discarded-origin-check` | `error` | The `Result` of `ensure_signed`/`ensure_root`/`EnsureOrigin::ensure_origin` is discarded, so any origin passes. |

@@ -222,6 +222,76 @@ pub fn inner_break_outer_loop_iterates() -> Result<(), ()> {
     })
 }
 
+pub fn break_in_enclosing_block() -> Result<(), ()> {
+    let mut credits: Vec<Credit<u64>> = Vec::new(); // OK SEC019
+    with_storage_layer(|| {
+        loop {
+            {
+                credits.push(withdraw_credit()?);
+            }
+            break;
+        }
+        Ok(())
+    })
+}
+
+pub fn return_in_enclosing_block() -> Result<(), ()> {
+    let mut credits: Vec<Credit<u64>> = Vec::new(); // OK SEC019
+    with_storage_layer(|| {
+        loop {
+            {
+                credits.push(withdraw_credit()?);
+            }
+            return Ok(());
+        }
+    })
+}
+
+pub fn labeled_break_in_enclosing_block() -> Result<(), ()> {
+    let mut credits: Vec<Credit<u64>> = Vec::new(); // OK SEC019
+    with_storage_layer(|| {
+        'outer: loop {
+            loop {
+                {
+                    credits.push(withdraw_credit()?);
+                }
+                break;
+            }
+            break 'outer;
+        }
+        Ok(())
+    })
+}
+
+pub fn move_in_if_then_break(more: bool) -> Result<(), ()> {
+    let mut credits: Vec<Credit<u64>> = Vec::new(); // OK SEC019
+    with_storage_layer(|| {
+        loop {
+            if more {
+                credits.push(withdraw_credit()?);
+            }
+            break;
+        }
+        Ok(())
+    })
+}
+
+pub fn inner_loop_iterates_before_outer_break(more: bool) -> Result<(), ()> {
+    let mut credits: Vec<Credit<u64>> = Vec::new(); // BAD SEC019
+    with_storage_layer(|| {
+        loop {
+            loop {
+                credits.push(withdraw_credit()?);
+                if !more {
+                    break;
+                }
+            }
+            break;
+        }
+        Ok(())
+    })
+}
+
 pub fn discarded_err() -> Result<(), ()> {
     let mut credits: Vec<Credit<u64>> = Vec::new(); // OK SEC019
     with_storage_layer(|| {
