@@ -6084,6 +6084,11 @@ impl<'tcx> Visitor<'tcx> for Sec012Visitor<'_, 'tcx> {
             }
         }
 
+        // `#[pallet::call]` wraps each dispatchable body in a `with_storage_layer` closure.
+        if let ExprKind::Closure(closure) = expr.kind {
+            self.visit_body(self.tcx.hir_body(closure.body));
+        }
+
         if let ExprKind::Call(callee, args) = expr.kind {
             if associated_call_name(callee).is_some_and(|name| name == "clear_prefix")
                 && is_frame_storage_associated_call(self.tcx, self.typeck, callee)

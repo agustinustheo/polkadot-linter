@@ -1010,6 +1010,20 @@ pub fn storage_clear_prefix_bounded() {
     frame_support::storage::types::StorageMap::clear_prefix((), Some(10));
 }
 
+pub fn storage_clear_prefix_in_storage_layer() -> Result<(), ()> {
+    frame_support::storage::with_storage_layer(|| {
+        frame_support::storage::types::StorageMap::clear_prefix((), None);
+        Ok(())
+    })
+}
+
+pub fn storage_clear_prefix_bounded_in_storage_layer() -> Result<(), ()> {
+    frame_support::storage::with_storage_layer(|| {
+        frame_support::storage::types::StorageMap::clear_prefix((), Some(10));
+        Ok(())
+    })
+}
+
 #[allow(dead_code)]
 fn private_storage_iteration() {
     let _ = frame_support::storage::types::StorageMap::iter();
@@ -1943,6 +1957,10 @@ rustc_sec012_conditionally_bounded_count="$(jq --argjson line "$conditionally_bo
 match_overwritten_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_match_overwritten_bounded' "$FIXTURE" | cut -d: -f1)"
 rustc_sec012_match_overwritten_bounded_count="$(jq --argjson line "$match_overwritten_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 match_bounded_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_match_bounded' "$FIXTURE" | cut -d: -f1)"
+storage_layer_clear_prefix_line="$(grep -n 'pub fn storage_clear_prefix_in_storage_layer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_storage_layer_count="$(jq --argjson line "$storage_layer_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line == ($line + 2))] | length' "$RUSTC_JSON")"
+storage_layer_bounded_line="$(grep -n 'pub fn storage_clear_prefix_bounded_in_storage_layer' "$FIXTURE" | cut -d: -f1)"
+rustc_sec012_storage_layer_bounded_count="$(jq --argjson line "$storage_layer_bounded_line" '[.[] | select(.rule_id == "SEC012" and .line > $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
 rustc_sec012_match_bounded_count="$(jq --argjson line "$match_bounded_clear_prefix_line" '[.[] | select(.rule_id == "SEC012" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
 unprotected_transactional_hook_line="$(grep -n 'pub struct UnprotectedTransactionalHook' "$FIXTURE" | cut -d: -f1)"
 layered_transactional_hook_line="$(grep -n 'pub struct LayeredTransactionalHook' "$FIXTURE" | cut -d: -f1)"
@@ -2092,7 +2110,9 @@ test "$rustc_sec011_conditionally_bounded_count" = "0"
 test "$rustc_sec011_match_conditionally_unbounded_count" = "1"
 test "$rustc_sec011_match_bounded_count" = "0"
 test "$syn_sec012_count" = "0"
-test "$rustc_sec012_count" = "6"
+test "$rustc_sec012_count" = "7"
+test "$rustc_sec012_storage_layer_count" = "1"
+test "$rustc_sec012_storage_layer_bounded_count" = "0"
 test "$rustc_sec012_local_unbounded_count" = "1"
 test "$rustc_sec012_overwritten_bounded_count" = "0"
 test "$rustc_sec012_conditionally_bounded_count" = "1"
@@ -2143,7 +2163,7 @@ test "$rustc_sec018_unweighted_after_weighted_count" = "0"
 test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
 test "$rustc_sec018_non_dispatchable_helper_count" = "0"
 test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "78"
+test "$rustc_filtered_count" = "79"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "14"
 test "$rustc_rule_filtered_sec008_count" = "6"
