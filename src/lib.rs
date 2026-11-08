@@ -6,6 +6,5 @@ pub mod project_model;
 pub mod rules;
 pub mod rustc_pipeline;
 #[doc(hidden)]
-pub mod rustdoc_analysis;
 pub mod suppress;
 mod syn_util;

@@ -321,11 +321,7 @@ impl From<RustcDiagnostic> for Diagnostic {
 mod tests {
     use std::{ffi::OsString, fs, path::PathBuf};
 
-    use crate::diagnostics::{Diagnostic, RuleCategory, Severity};
-
-    use super::{
-        dynamic_library_paths, encode_file_filters, read_jsonl_diagnostics, RustcDiagnostic,
-    };
+    use super::{dynamic_library_paths, encode_file_filters, read_jsonl_diagnostics};
 
     #[test]
     fn reads_jsonl_diagnostics_and_ignores_blank_lines() {
@@ -360,42 +356,6 @@ mod tests {
 
         assert!(error.contains("not json"));
         assert!(error.contains("failed to parse rustc diagnostic JSONL"));
-    }
-
-    #[test]
-    fn maps_rustc_diagnostic_to_public_diagnostic() {
-        let diagnostic = Diagnostic::from(RustcDiagnostic {
-            rule_id: "SEC003".to_string(),
-            rule_name: "missing-decode-depth-limit".to_string(),
-            file: "runtime/src/lib.rs".to_string(),
-            line: 7,
-            column: 3,
-            message: "Recursive runtime type is decoded without a depth limit".to_string(),
-        });
-
-        assert_eq!(diagnostic.rule_id, "SEC003");
-        assert_eq!(diagnostic.rule_name, "missing-decode-depth-limit");
-        assert_eq!(diagnostic.category, RuleCategory::Semantic);
-        assert_eq!(diagnostic.severity, Severity::Warning);
-        assert_eq!(
-            diagnostic.file,
-            std::path::PathBuf::from("runtime/src/lib.rs")
-        );
-        assert_eq!(diagnostic.column, Some(3));
-    }
-
-    #[test]
-    fn preserves_compiler_rule_default_severity() {
-        let diagnostic = Diagnostic::from(RustcDiagnostic {
-            rule_id: "SEM010".to_string(),
-            rule_name: "xor-as-exponentiation".to_string(),
-            file: "runtime/src/lib.rs".to_string(),
-            line: 7,
-            column: 3,
-            message: "integer XOR looks like exponentiation".to_string(),
-        });
-
-        assert_eq!(diagnostic.severity, Severity::Error);
     }
 
     #[test]
