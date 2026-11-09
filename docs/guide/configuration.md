@@ -31,8 +31,8 @@ TST002 = "error"        # promote a rule
   set to `true` under `[rules.enabled]`.
 - `[test_smells]` sets the family-wide `severity` of the `TST` rules. The
   `[validation_order]`, `[mock_usage]` and `[benchmarking]` sections were
-  removed with their rules; a config that still has them fails to load with an
-  "unknown field" error, so delete them.
+  removed with their rules; a config that still has them loads, prints one
+  warning per section, and ignores it. Delete them to silence the warning.
 - `[runtime_config]` sets which runtimes the `RTC` rules inspect
   (`include_dev_runtimes`, `dev_runtime_packages`, `dev_runtime_tokens`,
   `test_runtime_tokens`), an optional family-wide `severity` (unset by

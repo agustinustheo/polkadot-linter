@@ -11,6 +11,13 @@ pub struct Config {
     pub test_smells: TestSmellsConfig,
     pub terminology: TerminologyConfig,
     pub runtime_config: RuntimeConfigConfig,
+    /// Sections of retired rule families, accepted so 0.1.0 configs still load.
+    #[serde(skip_serializing)]
+    validation_order: Option<toml::Value>,
+    #[serde(skip_serializing)]
+    mock_usage: Option<toml::Value>,
+    #[serde(skip_serializing)]
+    benchmarking: Option<toml::Value>,
 }
 
 /// Mirrors the complete bundled TOML schema without invoking `Config::default`
@@ -159,6 +166,15 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let mut config: Config = toml::from_str(&content)?;
+        for (section, value) in [
+            ("validation_order", &config.validation_order),
+            ("mock_usage", &config.mock_usage),
+            ("benchmarking", &config.benchmarking),
+        ] {
+            if value.is_some() {
+                eprintln!("warning: config section [{section}] is no longer used: its rules were retired, see docs/retired-rules.md");
+            }
+        }
         // A `[rules]` table overrides the bundled per-rule entries instead of
         // replacing them, so default-off rules stay off unless re-enabled.
         let defaults = Config::default().rules;
@@ -241,6 +257,9 @@ impl Default for Config {
             test_smells: defaults.test_smells,
             terminology: defaults.terminology,
             runtime_config: defaults.runtime_config,
+            validation_order: None,
+            mock_usage: None,
+            benchmarking: None,
         }
     }
 }
@@ -269,6 +288,21 @@ mod tests {
             config.rules.severity.get("SEC011"),
             Some(&"error".to_string())
         );
+    }
+
+    #[test]
+    fn retired_family_sections_from_older_configs_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("polkadot-linter.toml");
+        std::fs::write(
+            &path,
+            "[validation_order]\nseverity = \"warning\"\nheavy_operations = [\"::get(\"]\n\n\
+             [mock_usage]\nmax_mock_ratio = 3.0\n\n\
+             [benchmarking]\nverification_patterns = [\"verify\"]\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).expect("retired sections are ignored, not rejected");
+        assert!(config.rule_enabled("SEC011"));
     }
 
     #[test]
