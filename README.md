@@ -37,7 +37,7 @@ available, but are off unless you ask for them.
 
 ## Highlights
 
-- **Precision first.** 31 of 64 rules are on by default. The rest were
+- **Precision first.** 32 of 64 rules are on by default. The rest were
   measured, found noisy, and turned off. The numbers are in
   [`benchmarks/precision/`](benchmarks/precision).
 - **From incidents.** Rules encode real fixes: polkadot-sdk #7200, #11738,
@@ -132,6 +132,7 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [RTC010](http://agustinustheo.github.io/polkadot-linter/rules/RTC010.html) | warning | `AuthorizedAliasers` on the unpaid-execution barrier: unmetered storage reads | fellows runtimes #1237 |
 | [RTC001](http://agustinustheo.github.io/polkadot-linter/rules/RTC001.html), [RTC002](http://agustinustheo.github.io/polkadot-linter/rules/RTC002.html) | warning | Placeholder `WeightInfo` in a runtime; pallet missing from `define_benchmarks!` | |
 | [RTC005](http://agustinustheo.github.io/polkadot-linter/rules/RTC005.html) | warning | Runtime uses collective-flip randomness | |
+| [SEC019](http://agustinustheo.github.io/polkadot-linter/rules/SEC019.html) | error | A token imbalance moved into a local outside a storage-layer closure burns issuance after a rollback | dotUSD exploit (polkadot-sdk #10384, #11910) |
 | [SEC020](http://agustinustheo.github.io/polkadot-linter/rules/SEC020.html) | error | A verifier's `bool` verdict is discarded, so bad proofs pass | polkadot-sdk #11738 |
 | [SEC021](http://agustinustheo.github.io/polkadot-linter/rules/SEC021.html) | error | Inverted verify guard: `if verify(..) { reject }` rejects valid proofs and accepts bad ones | GHSA-wwx5 (grandpa-verifier-primitives) |
 | [SEC022](http://agustinustheo.github.io/polkadot-linter/rules/SEC022.html) | error | Discarded origin check: `let _ = T::AdminOrigin::ensure_origin(origin);` lets any origin through | polkadot-sdk #10248 (runtime 2.0.1 EPMB) |
@@ -144,7 +145,7 @@ If the driver is missing, the CLI says so and emits syntax findings only.
 | [TST002](http://agustinustheo.github.io/polkadot-linter/rules/TST002.html), [TST006](http://agustinustheo.github.io/polkadot-linter/rules/TST006.html) | error, warning | `assert_ok!` on `apply_extrinsic`; storage-mutating extrinsic without an event | |
 | SEM009, SEM013, SEM014, TRM001 | advisory, warning | Redundant `contains_key`, `#[repr(u8)]` invalidity enums, OCW log targets, spelling | |
 
-Every rule, including the 33 that are off by default, is in the
+Every rule, including the 32 that are off by default, is in the
 [rule reference](http://agustinustheo.github.io/polkadot-linter/rule-index.html).
 
 ## How rules are measured
@@ -174,7 +175,7 @@ entry.
 
 ```toml
 [rules.enabled]
-SEC019 = true          # opt in to a default-off rule
+SEC024 = true          # opt in to a default-off rule
 BEN002 = false
 
 [rules.severity]

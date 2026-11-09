@@ -48,10 +48,6 @@ SEM005 = false
 SEM006 = false
 SEM008 = false
 VAL003 = false
-# 2026-11 pre-merge review: SEC019 catches the dotUSD incident shape, but
-# reviewers reproduced rare false positives (a move inside a nested block before
-# a loop exit), so it stays opt-in until those are fixed.
-SEC019 = false
 # 2026-11 round 2 (benchmarks/precision/2026-11-run-audit: polkadot-sdk plus
 # the 10 repositories above, compiler rules on 8 runtimes). No rule below
 # caught any of 56 auditor-reported bugs in an audited-commit benchmark.

@@ -1654,24 +1654,39 @@ impl EscapeScan<'_, '_> {
         self.last_exit = self.last_exit.max(Some(span.source_callsite().lo()));
     }
 
-    /// Whether the statements after the one holding `expr`, in its block, include a `return`
-    /// or a `break` out of `outer_loop`, so the loop can't iterate again after `expr`.
+    /// Whether, after `expr`, control unconditionally leaves `outer_loop`: some enclosing block,
+    /// below that loop, ends with a `return` or a `break` out of it after the statement holding
+    /// `expr`. A `break` out of an inner loop or labelled block continues the search past it;
+    /// reaching any loop without such an exit means `expr` may run again.
     fn leaves_loop_after(&self, expr: HirId, outer_loop: HirId) -> bool {
-        let mut current = expr;
+        let (mut current, mut skip_to) = (expr, None);
         for (parent_id, node) in self.tcx.hir_parent_iter(expr) {
-            if let rustc_hir::Node::Block(block) = node {
-                let rest = block.stmts.iter().skip_while(|stmt| stmt.hir_id != current);
-                return rest
-                    .filter_map(|stmt| match stmt.kind {
+            match node {
+                _ if skip_to.is_some() => skip_to = skip_to.filter(|&to| to != parent_id),
+                rustc_hir::Node::Block(block) => {
+                    let rest = block.stmts.iter().skip_while(|stmt| stmt.hir_id != current);
+                    let rest = rest.filter_map(|stmt| match stmt.kind {
                         StmtKind::Expr(e) | StmtKind::Semi(e) => Some(e),
                         _ => None,
-                    })
-                    .chain(block.expr)
-                    .any(|e| match e.kind {
-                        ExprKind::Ret(_) => true,
-                        ExprKind::Break(dest, _) => dest.target_id == Ok(outer_loop),
-                        _ => false,
                     });
+                    for e in rest.chain(block.expr) {
+                        match e.kind {
+                            ExprKind::Ret(_) => return true,
+                            ExprKind::Break(dest, _) => match dest.target_id {
+                                Ok(target) if target == outer_loop => return true,
+                                Ok(target) => skip_to = Some(target),
+                                Err(_) => continue,
+                            },
+                            _ => continue,
+                        }
+                        break;
+                    }
+                }
+                rustc_hir::Node::Expr(Expr {
+                    kind: ExprKind::Loop(..),
+                    ..
+                }) => return false,
+                _ => {}
             }
             current = parent_id;
         }
