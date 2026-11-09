@@ -1,46 +1,55 @@
-# Quick Start
+# Quick start
 
-Scan one or more directories:
-
-```bash
-# Scan a single directory
-cargo run -- ../pallets
-
-# Scan several paths at once
-cargo run -- ../pallets ../runtimes ../support
-
-# Scan the current directory (the default when no path is given)
-cargo run --
-```
-
-Point the tool at your project configuration and tighten CI behaviour:
+## 1. Run a scan
 
 ```bash
-# Use a project-level configuration file
-cargo run -- -c ../polkadot-linter.toml ../pallets
-
-# Treat warnings as failures (non-zero exit) for CI gating
-cargo run -- ../pallets -s warning --fail-on-warning
+polkadot-linter ./runtime ./pallets
 ```
 
-Emit machine-readable output for tooling and code scanning:
+With no path, the linter scans the current directory. Use `--syntax-only` to
+skip the build that the compiler rules need.
 
-```bash
-cargo run -- ../pallets -f json
-cargo run -- ../pallets -f sarif > polkadot-linter.sarif
-```
+## 2. Read the findings
 
-Route a specific compiler-backed rule through the rustc pipeline for one Cargo
-package (the manifest is discovered from the scan path):
+Each finding shows a file location, a rule ID, a severity, an explanation and
+a suggested fix. To learn more, open the rule page from [All rules](../rule-index.md).
 
-```bash
-cargo run -- \
-  --rules SEC011 \
-  --package pallet-xcm \
-  --lib \
-  ../polkadot-sdk/polkadot/xcm/pallet-xcm
-```
+There are three severities:
 
-From here, the [Command-Line Reference](cli-reference.md) documents every flag,
-and [Output & Exit Codes](output-and-exit-codes.md) explains how to read and gate
-on the results.
+| Severity | Meaning |
+| --- | --- |
+| `error` | Very likely a bug. Fix it. |
+| `warning` | Probably a problem. Review it. |
+| `advisory` | A hint. Fix it when it is easy. |
+
+`-s warning` hides advisories. `-s error` shows errors only.
+
+## 3. Act on each finding
+
+- If the finding is correct, fix the code.
+- If the code is correct on purpose, add an allow comment with a reason. See
+  [Suppress findings and baselines](suppressing-findings.md).
+- On an existing codebase, record today's findings in a baseline. Then only
+  new findings are reported.
+
+## Output formats
+
+| Flag | Output |
+| --- | --- |
+| `-f human` | Colored text for a terminal (default) |
+| `-f json` | A JSON array of findings |
+| `-f sarif` | SARIF 2.1.0, for GitHub code scanning |
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | No error. With `--fail-on-warning`, also no warning. |
+| `1` | At least one error. With `--fail-on-warning`, at least one warning or error. |
+| `2` | The run failed: bad configuration or flags, a missing config file that you named, a baseline that cannot be read or written, or a compiler run that failed. |
+
+## Next steps
+
+- Change rules and severities: [Configuration](configuration.md).
+- See every flag: [Command-line options](cli-reference.md).
+- Run the linter in CI: [CI and AI agents](ci-integration.md).

@@ -1,9 +1,9 @@
-# Test Quality Rules (TST)
+# Test rules (TST)
 
-Test-quality rules flag test-suite patterns that weaken confidence, such as assertions that hide dispatch errors.
+TST rules find tests that can pass when the code under test fails.
 
-| Rule | Title | Default severity | Engine |
-| --- | --- | --- | --- |
-| [`TST002`](TST002.md) | assert_ok! on apply_extrinsic Hides Dispatch Errors | Error | source (syn) |
+| Rule | Finds | Severity |
+| --- | --- | --- |
+| [TST002](TST002.md) | `assert_ok!` on `apply_extrinsic` hides dispatch errors | error |
 
-Retired rules of this family are listed in [What we tried and removed](../retired-rules.md).
+Set one severity for all TST rules with `severity` under `[test_smells]`.
