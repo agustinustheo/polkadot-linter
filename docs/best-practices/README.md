@@ -39,7 +39,8 @@ three labels:
 
 Rule codes marked \* are off by default because the 2026-11 precision audits
 ([external repositories](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-external),
-[polkadot-sdk run audit](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-run-audit))
+[polkadot-sdk run audit](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-run-audit),
+[individuality-community](https://github.com/agustinustheo/polkadot-linter/tree/main/benchmarks/precision/2026-11-individuality-community))
 found them mostly noisy or wrong on real parachain code; enable them with
 `config/all-rules.toml`. A practice whose only rules are off by default is
 labeled Partial.
@@ -59,7 +60,7 @@ Rule codes in the callouts link to the corresponding page in the
 | [Avoid unbounded iteration](critical/Avoid_Unbounded_Iteration.md) | Partial | SEC011, SEC012 |
 | [Validate input parameters](critical/Unchecked_Input_Parameters.md) | Partial | VAL001\*–003\*, SEC001\*, SEC003\*, SEC018\* |
 | [Avoid `unwrap` inside the runtime](critical/Avoid_Unwrap_Usage_Inside_Runtime.md) | Partial | SEC002\*, SEC008\* |
-| [Benchmark dynamic weights](critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.md) | Enforced | BEN001\*, BEN003, SEM005\*, SEM006\*, SEM011, SEC004\*, SEC005\*, SEC018\* |
+| [Benchmark dynamic weights](critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.md) | Enforced | BEN001\*, BEN003\*, SEM005\*, SEM006\*, SEM011, SEC004\*, SEC005\*, SEC018\* |
 | [Prefer reserve transfers over teleports](critical/Prioritize_Reserve_Asset_Transfer_Over_Teleport.md) | Review gate | — |
 
 ### High
@@ -93,7 +94,7 @@ Rule codes in the callouts link to the corresponding page in the
 | [Efficient data structures](medium/Enhance_Performance_with_Efficient_Data_Structures.md) | Review gate | — |
 | [Interface segregation](medium/Implement_Proper_Interface_Segregation.md) | Review gate | — |
 | [XCM fee management](medium/Implement_Proper_XCM_Fee_Management.md) | Review gate | — |
-| [Test all error cases](medium/Implement_Tests_For_All_Error_Cases.md) | Partial | TST001\*, TST002, TST004\*, TST006 |
+| [Test all error cases](medium/Implement_Tests_For_All_Error_Cases.md) | Partial | TST001\*, TST002, TST004\*, TST006\* |
 | [Include error documentation](medium/Include_Error_Documentation.md) | Review gate | — |
 | [Include extrinsic documentation](medium/Include_Extrinsic_Documentation.md) | Review gate | — |
 | [Include tests for edge cases](medium/Include_Tests_for_Edge_Cases.md) | Partial | TST004\*, TST005\*, MOK001\* |
@@ -116,7 +117,7 @@ Rule codes in the callouts link to the corresponding page in the
 | [Implement descriptive logging](low/Implement_Descriptive_Logging.md) | Review gate | — (SEM014 related) |
 | [Remove unnecessary return values](low/Remove_Unnecessary_Return_Values.md) | Review gate | — (SEC007\* related) |
 | [Remove unused code](low/Remove_Unused_Code.md) | Partial | SEM012\* |
-| [Update benchmarks with latest syntax](low/Update_Benchmarks_With_Latest_Syntax.md) | Partial | BEN002 |
+| [Update benchmarks with latest syntax](low/Update_Benchmarks_With_Latest_Syntax.md) | Partial | BEN002\* |
 | [Use appropriate naming conventions](low/Use_Appropriate_Naming_Conventions.md) | Partial | TRM001 |
 
 ### Informational

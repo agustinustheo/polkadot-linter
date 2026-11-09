@@ -5,11 +5,12 @@ This matrix is derived from the public rule registry in
 than planned or experimental rules.
 
 Authority is separate from default enablement: `config/default.toml` turns off
-`VAL001`-`VAL003`, `SEM002`-`SEM008`, `SEM012`, `TST001`, `TST003`-`TST005`,
-`MOK001`, `BEN001`, `RTC004`, `SEC001`-`SEC005`, `SEC007`-`SEC009`, `SEC013`,
+`VAL001`-`VAL003`, `SEM002`-`SEM008`, `SEM012`, `SEM013`, `TST001`, `TST003`-`TST006`,
+`MOK001`, `BEN001`-`BEN003`, `RTC004`, `SEC001`-`SEC005`, `SEC007`-`SEC009`, `SEC013`,
 `SEC014` and `SEC016`-`SEC018` on precision and review evidence
 (`benchmarks/precision/2026-11-external`,
-`benchmarks/precision/2026-11-run-audit`). The pinned-SDK
+`benchmarks/precision/2026-11-run-audit`,
+`benchmarks/precision/2026-11-individuality-community`). The pinned-SDK
 checks below run with `config/all-rules.toml`, so every rule stays covered.
 
 ## Rustc-backed authority

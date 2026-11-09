@@ -502,7 +502,7 @@ const NON_PRODUCTION_FEATURES: &[&str] = &["runtime-benchmarks", "try-runtime", 
 
 /// `leaf` holds for the cfg predicate: for `all(..)` some operand matches, for
 /// `any(..)` every operand does.
-fn cfg_matches(meta: &Meta, leaf: &dyn Fn(&Meta) -> bool) -> bool {
+pub(crate) fn cfg_matches(meta: &Meta, leaf: &dyn Fn(&Meta) -> bool) -> bool {
     let Meta::List(list) = meta else {
         return leaf(meta);
     };
@@ -804,9 +804,9 @@ fn for_each_runtime_impl(file: &SynFile, mut f: impl FnMut(&ItemImpl, &[String])
 // RTC001: placeholder WeightInfo in a runtime Config impl
 // ---------------------------------------------------------------------------
 
-/// RTC001-only dev-runtime name tokens: Parity test networks whose placeholder
+/// RTC001-only dev-runtime name tokens: test networks whose placeholder
 /// weights are not a production risk. The other RTC rules still lint them.
-const PARITY_TEST_NETWORKS: [&str; 2] = ["rococo", "glutton"];
+const PARITY_TEST_NETWORKS: [&str; 3] = ["rococo", "glutton", "paseo"];
 
 pub struct PlaceholderWeightInfoInRuntime;
 

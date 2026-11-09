@@ -391,6 +391,9 @@ mod tests {
         let config = Config::load(&path).unwrap();
         assert!(config.rule_enabled("SEM003"));
         assert!(!config.rule_enabled("SEM002"));
+        for rule in ["BEN002", "BEN003", "SEM013", "TST006"] {
+            assert!(!config.rule_enabled(rule), "{rule} is off by default");
+        }
         assert_eq!(
             config.rules.severity.get("TST002"),
             Some(&"error".to_string())

@@ -6,6 +6,8 @@
 
 [rules.enabled]
 BEN001 = true
+BEN002 = true
+BEN003 = true
 MOK001 = true
 RTC004 = true
 SEC001 = true
@@ -33,10 +35,12 @@ SEM006 = true
 SEM007 = true
 SEM008 = true
 SEM012 = true
+SEM013 = true
 TST001 = true
 TST003 = true
 TST004 = true
 TST005 = true
+TST006 = true
 VAL001 = true
 VAL002 = true
 VAL003 = true

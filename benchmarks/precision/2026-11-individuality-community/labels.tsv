@@ -1,0 +1,40 @@
+rule	location	label	votes_opus_fable_sol	reason
+TST006	pallets/airdrop/src/lib.rs:707	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Off-chain-worker winner-drawing step; phase events DrawingWinners/ClaimingStarted bracket it
+BEN002	pallets/alias-accounts/src/benchmarking.rs:472	wrong	wrong/wrong/wrong	Block already verifies: `if !matched { return Err(..) }`
+BEN002	pallets/coinage/src/benchmarking.rs:1551	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Pure storage-read microbenchmark; nothing to verify
+BEN002	pallets/coinage/src/benchmarking.rs:4611	not-worth-fixing	not-worth-fixing/fix/wrong	Split vote; block already returns Skip on failed checks, only one `let _ =` result is unchecked
+SEM013	pallets/coinage/src/lib.rs:297	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Every discriminant explicit and below 256, so `e as u8` is well-defined
+BEN003	pallets/coinage/src/lib.rs:2873	wrong	wrong/wrong/wrong	Weight helper selects benchmarked WeightInfo fns; benchmarks call the extrinsic via a setup closure
+BEN003	pallets/coinage/src/lib.rs:2952	wrong	wrong/wrong/wrong	Same: weight helper plus closure-based benchmarks
+BEN003	pallets/coinage/src/lib.rs:3260	wrong	wrong/wrong/wrong	Same: weight helper plus closure-based benchmarks
+BEN003	pallets/coinage/src/lib.rs:3417	wrong	wrong/wrong/wrong	Same: weight helper plus closure-based benchmarks
+BEN003	pallets/coinage/src/lib.rs:3677	wrong	wrong/wrong/wrong	Same: weight helper plus closure-based benchmarks
+BEN003	pallets/game/src/lib.rs:1783	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	cfg(feature = "testnet") root-only test helper; benchmark buys nothing
+SEM011	pallets/game/src/lib.rs:1787	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Same call: zero weight reachable only by a testnet sudo key
+BEN003	pallets/game/src/lib.rs:1807	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	cfg(feature = "testnet") root-only test helper
+SEM011	pallets/game/src/lib.rs:1811	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Same call: zero weight reachable only by a testnet sudo key
+BEN003	pallets/game/src/lib.rs:1930	wrong	wrong/wrong/wrong	Metered call: step budget, WeightMeter consumes benchmarked step weights and refunds
+BEN003	pallets/game/src/lib.rs:1973	wrong	wrong/wrong/wrong	Metered call; player_process_step* benchmarks exist
+BEN003	pallets/game/src/lib.rs:2004	wrong	wrong/wrong/wrong	Metered call; process_cancelling* benchmarks exist
+BEN002	pallets/members/src/benchmarking.rs:519	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Read-only view fn; preconditions asserted before the block
+BEN002	pallets/members/src/benchmarking.rs:920	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Pure iteration-cost read; no state change to verify
+BEN003	pallets/members/src/lib.rs:867	wrong	wrong/wrong/wrong	build_ring_weight dispatches to benchmarked build_ring_r2e{9,10,14}
+TST006	pallets/members/src/lib.rs:1017	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Off-chain-worker page deletion; process bracketed by CollectionMarkedForDeletion/CollectionDeleted
+TST006	pallets/members/src/lib.rs:1169	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Recovery marker insert; the rebuild emits RingBuilt
+TST006	pallets/members-notifier/src/lib.rs:587	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Off-chain-worker batch sealing; delivery emits UpdatesSent/UpdateSendFailed
+TST006	pallets/members-notifier/src/lib.rs:783	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Off-chain-worker paginated init send; per-page event would be noise
+SEM013	pallets/members-notifier/src/types.rs:79	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Explicit discriminants 200..=210, so `e as u8` is well-defined
+TST006	pallets/members-subscriber/src/lib.rs:635	wrong	wrong/wrong/wrong	Helper called in an `if` condition emits ReplayRequestSent
+TST006	pallets/members-subscriber/src/lib.rs:663	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Off-chain-worker garbage collection of stale generations
+BEN002	pallets/mob-rule/src/benchmarking.rs:611	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Microbenchmark of one StorageValue::put
+BEN002	pallets/mob-rule/src/benchmarking.rs:623	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Microbenchmark of one StorageValue::kill
+BEN002	pallets/nft-credits/src/benchmarking.rs:155	not-worth-fixing	not-worth-fixing/fix/not-worth-fixing	#[extrinsic_call] already propagates errors; event assert optional
+BEN003	pallets/nft-credits/src/lib.rs:834	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	cfg(feature = "testnet") root-only grant; root can write storage directly
+SEM011	pallets/nft-credits/src/lib.rs:858	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Same call: zero weight reachable only by a testnet sudo key
+BEN002	pallets/people-lite/src/benchmarking.rs:458	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Dispatches stateless system::remark; errors already propagate
+TST006	pallets/proof-of-ink/src/lib.rs:1479	not-worth-fixing	fix/not-worth-fixing/not-worth-fixing	Governance setter of two values; storage is observable (one reviewer would add an event)
+RTC008	runtimes/next-asset-hub-paseo/src/lib.rs:832	fix	not-worth-fixing/fix/fix	NonTransfer `_ => true` superset lets a NonTransfer proxy add a Collator delegate
+RTC001	runtimes/next-asset-hub-paseo/src/staking/nom_pools.rs:46	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Inline comment: nom-pools not benchmarkable with staking-async; same in fellows runtimes
+RTC007	runtimes/next-asset-hub-paseo/src/xcm_config.rs:340	fix	fix/fix/fix	DenyReserveTransferToRelayChain not wrapped in DenyRecursively; sibling runtime does it
+RTC001	runtimes/next-people-paseo/src/lib.rs:490	not-worth-fixing	not-worth-fixing/not-worth-fixing/not-worth-fixing	Testnet sudo pallet; `()` already carries SDK reference weights
+RTC003	runtimes/next-people-paseo/src/xcm_config.rs:424	fix	fix/fix/fix	ParentAsUmp price is `()` although PriceForParentDelivery is defined and unused

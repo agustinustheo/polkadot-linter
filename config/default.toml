@@ -69,6 +69,19 @@ VAL002 = false
 # refund, delegated-staking reporter reward, xcm-executor best-effort return).
 # See docs/rules/SEC024.md.
 SEC024 = false
+# 2026-11 individuality-community acceptance test
+# (benchmarks/precision/2026-11-individuality-community): 39 default findings,
+# three skeptical reviewers, and a finding counts only if an engineer would fix
+# it at reasonable cost. BEN002 0/9 (pure-read and single-op microbenchmarks;
+# `#[extrinsic_call]` already propagates errors), TST006 0/8 (off-chain worker
+# maintenance steps; helpers that emit from an `if` condition), SEM013 0/2
+# (explicit discriminants below 256 already make `as u8` well-defined), BEN003
+# 0/12 with 9 wrong: it does not follow weight helpers, closure-based benchmark
+# setup or metered step budgets. A wrong finding costs more than a missed one.
+BEN002 = false
+BEN003 = false
+SEM013 = false
+TST006 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]

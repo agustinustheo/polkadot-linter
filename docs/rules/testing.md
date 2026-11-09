@@ -9,4 +9,4 @@ Test-quality rules flag test-suite patterns that weaken confidence: assertions t
 | [`TST003`](TST003.md) | Imports Inside Test Closures and Function Bodies | Advisory, off by default | source (syn) |
 | [`TST004`](TST004.md) | Missing Pays::Yes Error-Path Test for Fee-Refunding Extrinsics | Warning, off by default | source (syn) |
 | [`TST005`](TST005.md) | Assertions on Implementation Details | Advisory, off by default | source (syn) |
-| [`TST006`](TST006.md) | Storage-Mutating Extrinsic Without an Event | Advisory | source (syn) |
+| [`TST006`](TST006.md) | Storage-Mutating Extrinsic Without an Event | Advisory, off by default | source (syn) |
