@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:green;">Low</span>
 
-> **Linter coverage — Review gate.** No shipping rule flags unnecessary `.clone()` calls; judging whether a clone is redundant needs ownership and allocation context that only a reviewer can supply. [SEM003](../../rules/SEM003.md) (prefer reference iteration over `.iter()`) is a related idiom, not a substitute.
+> **Linter coverage — Review gate.** No shipping rule flags unnecessary `.clone()` calls; judging whether a clone is redundant needs ownership and allocation context that only a reviewer can supply. `clippy::redundant_clone` catches the mechanical cases.
 
 ## Description
 

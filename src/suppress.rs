@@ -340,7 +340,7 @@ mod tests {
             .iter()
             .map(|&(rule, line)| diag(&file, rule, line))
             .collect::<Vec<_>>();
-        let known = rules(&["RTC004", "SEC020", "SEC008"]);
+        let known = rules(&["RTC004", "SEC020", "SEC011"]);
         let lnt = apply_allow_comments(
             &mut diagnostics,
             std::slice::from_ref(&file),
@@ -416,12 +416,12 @@ mod tests {
     #[test]
     fn unused_allow_is_reported_per_rule() {
         let source =
-            "// polkadot-linter: allow(RTC004, SEC008, reason = \"dev\")\nconst A: u32 = 0;\n";
+            "// polkadot-linter: allow(RTC004, SEC011, reason = \"dev\")\nconst A: u32 = 0;\n";
         let (kept, lnt) = run(source, &[("RTC004", 2)]);
         assert!(kept.is_empty());
         assert_eq!(
             lnt,
-            vec!["1:unused allow for SEC008: no finding on the covered lines; remove the comment"]
+            vec!["1:unused allow for SEC011: no finding on the covered lines; remove the comment"]
         );
     }
 

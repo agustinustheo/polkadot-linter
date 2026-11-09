@@ -29,6 +29,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
+    rc::Rc,
     sync::Arc,
 };
 
@@ -46,15 +47,30 @@ use crate::{
     config::{Config, RuntimeConfigConfig},
     diagnostics::{Diagnostic, RuleCategory, Severity},
     engine::{crate_lib, scan_cached, FileContext},
-    rules::{
-        benchmarking::{manifest, workspace_root},
-        LintRule,
-    },
+    rules::LintRule,
     syn_util::{
         compact_tokens, is_construct_runtime, macro_name, path_attr, path_last_ident,
         strip_expr_wrappers,
     },
 };
+
+fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
+    scan_cached(path.to_path_buf(), |path| {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .map(Rc::new)
+    })
+}
+
+fn workspace_root(crate_root: &Path) -> &Path {
+    crate_root
+        .ancestors()
+        .find(|dir| {
+            manifest(&dir.join("Cargo.toml")).is_some_and(|cargo| cargo.get("workspace").is_some())
+        })
+        .unwrap_or(crate_root)
+}
 
 // ---------------------------------------------------------------------------
 // Runtime crate discovery and scope

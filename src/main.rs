@@ -517,7 +517,7 @@ mod tests {
 
     #[test]
     fn cli_family_prefix_selects_every_matching_compiler_backed_rule() {
-        for family in ["SEC", "SEM", "VAL"] {
+        for family in ["SEC", "SEM"] {
             let expected = COMPILER_BACKED_RULE_IDS
                 .iter()
                 .filter(|id| id.starts_with(family))
@@ -533,33 +533,33 @@ mod tests {
 
     #[test]
     fn cli_specific_rules_select_only_migrated_matches() {
-        let cli_rules = strings(&["SEC003", "SEC014", "VAL", "SEM010"]);
+        let cli_rules = strings(&["SEC011", "SEC015", "SEM01", "RTC001"]);
 
         assert_eq!(
             selected_compiler_backed_rules(Some(&cli_rules), &[], &all_rules_config()),
-            strings(&["VAL002", "VAL003", "SEM010", "SEC003", "SEC014"])
+            strings(&["SEM010", "SEM016", "SEC011", "SEC015"])
         );
     }
 
     #[test]
     fn explicit_compiler_rules_override_cli_rule_filter() {
-        let cli_rules = strings(&["VAL"]);
-        let compiler_rules = strings(&["SEC009"]);
+        let cli_rules = strings(&["SEM"]);
+        let compiler_rules = strings(&["SEC011"]);
 
         assert_eq!(
             selected_compiler_backed_rules(Some(&cli_rules), &compiler_rules, &all_rules_config()),
-            strings(&["SEC009"])
+            strings(&["SEC011"])
         );
     }
 
     #[test]
     fn disabled_compiler_backed_rules_are_not_sent_to_the_driver() {
         let mut config = Config::default();
-        config.rules.enabled.insert("SEC009".to_string(), false);
+        config.rules.enabled.insert("SEC011".to_string(), false);
 
         assert!(!selected_compiler_backed_rules(None, &[], &config)
             .iter()
-            .any(|rule| rule == "SEC009"));
+            .any(|rule| rule == "SEC011"));
     }
 
     #[test]
@@ -633,15 +633,15 @@ mod tests {
             suggestion: None,
         };
         let mut diagnostics = vec![
-            diagnostic("SEC002", 3),
-            diagnostic("SEC001", 2),
-            diagnostic("SEC002", 3),
+            diagnostic("SEC012", 3),
+            diagnostic("SEC011", 2),
+            diagnostic("SEC012", 3),
         ];
 
         normalize_diagnostics(&mut diagnostics);
 
         assert_eq!(diagnostics.len(), 2);
-        assert_eq!(diagnostics[0].rule_id, "SEC001");
-        assert_eq!(diagnostics[1].rule_id, "SEC002");
+        assert_eq!(diagnostics[0].rule_id, "SEC011");
+        assert_eq!(diagnostics[1].rule_id, "SEC012");
     }
 }

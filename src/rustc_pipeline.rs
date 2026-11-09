@@ -330,7 +330,7 @@ mod tests {
         fs::write(
             &path,
             r#"
-{"rule_id":"SEC009","rule_name":"raw-arithmetic-in-fallible","file":"src/lib.rs","line":42,"column":9,"message":"raw arithmetic"}
+{"rule_id":"SEC011","rule_name":"unbounded-storage-iteration","file":"src/lib.rs","line":42,"column":9,"message":"storage iteration"}
 
 "#,
         )
@@ -339,7 +339,7 @@ mod tests {
         let diagnostics = read_jsonl_diagnostics(&path).expect("jsonl should parse");
 
         assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].rule_id, "SEC009");
+        assert_eq!(diagnostics[0].rule_id, "SEC011");
         assert_eq!(diagnostics[0].file, "src/lib.rs");
         assert_eq!(diagnostics[0].line, 42);
     }

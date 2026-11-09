@@ -26,21 +26,7 @@ edition = "2021"
 TOML
 
 cat > "$FIXTURE_DIR/src/lib.rs" <<'RS'
-#![feature(register_tool)]
-#![register_tool(pallet)]
-
-pub type Payload = Vec<u8>;
-
-pub mod frame_support {
-    pub mod storage {
-        pub mod types {
-            pub struct StorageValue<K, V>(K, V);
-        }
-    }
-}
-
-#[pallet::storage]
-pub type AliasedStorage = frame_support::storage::types::StorageValue<(), Payload>;
+pub const DECIMALS: u128 = 10 ^ 18;
 RS
 
 cargo +nightly-2025-09-01 build \
@@ -51,24 +37,24 @@ cargo +nightly-2025-09-01 build \
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/all-rules.toml" \
   --format json \
-  --rules SEC013 \
+  --rules SEM010 \
   --syntax-only \
   "$FIXTURE_DIR" > "$SYNTAX_JSON"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   --config "$ROOT_DIR/config/all-rules.toml" \
   --format json \
-  --rules SEC013 \
+  --rules SEM010 \
   --driver-path "$DRIVER" \
-  "$FIXTURE_DIR" > "$DEFAULT_JSON"
+  "$FIXTURE_DIR" > "$DEFAULT_JSON" || test "$?" -eq 1 # SEM010 is error-level, so the CLI exits 1
 
-syntax_findings="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYNTAX_JSON")"
-default_findings="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$DEFAULT_JSON")"
-default_file="$(jq -r '[.[] | select(.rule_id == "SEC013")][0].file' "$DEFAULT_JSON")"
+syntax_findings="$(jq '[.[] | select(.rule_id == "SEM010")] | length' "$SYNTAX_JSON")"
+default_findings="$(jq '[.[] | select(.rule_id == "SEM010")] | length' "$DEFAULT_JSON")"
+default_file="$(jq -r '[.[] | select(.rule_id == "SEM010")][0].file' "$DEFAULT_JSON")"
 
-echo "SEC013 syntax findings: $syntax_findings"
-echo "SEC013 default CLI findings: $default_findings"
-echo "SEC013 default CLI file: $default_file"
+echo "SEM010 syntax findings: $syntax_findings"
+echo "SEM010 default CLI findings: $default_findings"
+echo "SEM010 default CLI file: $default_file"
 
 test "$syntax_findings" -eq 0
 test "$default_findings" -eq 1
@@ -80,4 +66,4 @@ case "$default_file" in
     ;;
 esac
 
-echo "default CLI routing uses the rustc-backed SEC013 rule"
+echo "default CLI routing uses the rustc-backed SEM010 rule"

@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Partial (opt-in).** These rules are off by default: on polkadot-sdk and third-party parachains their findings were deliberate `without_storage_info` opt-outs or values bounded elsewhere. With `config/all-rules.toml` several rules flag unbounded storage shapes: SEC013 for unbounded storage collections, SEC001 for unbounded `Vec` inputs in extrinsics, SEC017 for unbounded `Vec` in events, and SEC018 for missing input-length weight accounting. SEC014 (Identity hasher on common keys) is also related. See [SEC013](../../rules/SEC013.md), [SEC001](../../rules/SEC001.md), [SEC017](../../rules/SEC017.md), [SEC018](../../rules/SEC018.md), and [SEC014](../../rules/SEC014.md).
+> **Linter coverage — Review gate.** No shipping rule covers this. The rules that tried (SEC001, SEC013, SEC014, SEC017 and SEC018) were deleted: their findings were deliberate `without_storage_info` opt-outs or values bounded elsewhere; see [What we tried and removed](../../retired-rules.md). FRAME's `MaxEncodedLen` requirement is the mechanical guard; review every `without_storage_info` and `#[pallet::unbounded]`.
 
 ## Description
 

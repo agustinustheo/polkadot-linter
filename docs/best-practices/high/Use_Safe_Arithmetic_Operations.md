@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:orange;">High</span>
 
-> **Linter coverage — Partial.** SEM010 flags `^` mistaken as exponentiation by default. SEC009 for raw arithmetic in fallible code, SEC004 for unsafe weight arithmetic and VAL002 for unguarded division are off by default (enable them with `config/all-rules.toml`). See [SEC009](../../rules/SEC009.md), [SEC004](../../rules/SEC004.md), [VAL002](../../rules/VAL002.md), and [SEM010](../../rules/SEM010.md).
+> **Linter coverage — Partial.** [SEM010](../../rules/SEM010.md) flags `^` mistaken as exponentiation by default, and [SEC004](../../rules/SEC004.md) (off by default) flags non-saturating arithmetic in weight attributes. Raw arithmetic in runtime logic is not checked: the rules that tried (SEC009 and VAL002) could not tell bounded sums or config-constant divisors from risky ones and were deleted; see [What we tried and removed](../../retired-rules.md). Use `clippy::arithmetic_side_effects` on math-heavy pallets, `overflow-checks = true` and fuzzing instead.
 
 ## Description
 

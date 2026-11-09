@@ -39,8 +39,6 @@ pub enum RuleCategory {
     Semantic,
     /// Test smell rules
     TestSmell,
-    /// Benchmarking compliance rules
-    Benchmark,
     /// Text and terminology rules
     Terminology,
     /// Runtime configuration rules
@@ -52,7 +50,6 @@ impl fmt::Display for RuleCategory {
         match self {
             RuleCategory::Semantic => write!(f, "semantic"),
             RuleCategory::TestSmell => write!(f, "test-smell"),
-            RuleCategory::Benchmark => write!(f, "benchmark"),
             RuleCategory::Terminology => write!(f, "terminology"),
             RuleCategory::RuntimeConfig => write!(f, "runtime-config"),
         }
@@ -174,7 +171,7 @@ mod tests {
     #[test]
     fn sarif_preserves_end_line_when_available() {
         let diagnostic = Diagnostic {
-            rule_id: "SEC001".to_string(),
+            rule_id: "SEC011".to_string(),
             rule_name: "unbounded-input".to_string(),
             category: RuleCategory::Semantic,
             severity: Severity::Warning,

@@ -4,80 +4,11 @@
 exclude = [".git/**", "target/**"]
 include = []
 
-# Parity SDK style conventions, off by default because code outside the SDK
-# does not follow them. Uncomment to enforce them:
-# [rules.enabled]
-# SEM002 = true
-# SEM003 = true
-# SEM004 = true
-# SEM007 = true  # only if you depend on sp-debug-derive >= 15
-# SEM012 = true
-# TST003 = true
-
 [rules.severity]
 TST002 = "error"
 
-[validation_order]
-severity = "warning"
-heavy_operations = [
-	"::contains_key(",
-	"::count(",
-	"::decode_len(",
-	"::get(",
-	"::iter(",
-	"::iter_keys(",
-	"::iter_prefix(",
-	"::try_get(",
-	"CountedStorageMap::get",
-	"StorageDoubleMap::get",
-	"StorageMap::get",
-	"StorageNMap::get",
-	"StorageValue::get",
-	"T::DbWeight::get()",
-]
-cheap_validations = [
-	".is_empty()",
-	".is_none()",
-	".is_some()",
-	".is_zero()",
-	"ensure!",
-	"ensure_none",
-	"ensure_root",
-	"ensure_signed",
-]
-
 [test_smells]
 severity = "warning"
-internal_field_patterns = [
-	'\._\w+',
-	'\.buffer\b',
-	'\.cache\b',
-	'\.counter\b',
-	'\.flag\b',
-	'\.inner\b',
-	'\.state\b',
-]
-
-[mock_usage]
-severity = "warning"
-max_mock_expectations = 10
-max_mock_ratio = 3.0
-mock_patterns = [
-	"MOCK",
-	"Mock",
-	"MockBuilder",
-	"mock",
-	"new_test_ext",
-	"with_mock",
-]
-
-[benchmarking]
-severity = "warning"
-verification_patterns = [
-	"assert_has_event",
-	"assert_last_event",
-	"verify",
-]
 
 [runtime_config]
 include_dev_runtimes = false

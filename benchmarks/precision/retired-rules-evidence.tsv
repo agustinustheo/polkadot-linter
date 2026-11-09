@@ -1,0 +1,34 @@
+rule	external_TP/n	run_audit_TP/n	IC_worth/n	auditor_bug_catch	reason
+BEN001	4/12	-	-	no (1 related hit, wrong reason)	Benchmark discovery misses runtime-hosted and helper-built benchmarks; flags dead weight fns.
+BEN002	10/12	15/23	0/9	no	True "no postcondition" is common but rarely worth fixing; benchmark tests already run the call.
+BEN003	6/12	9/15	0/12 (9 wrong)	no (3 related hits, wrong reason)	Misses weight helpers, closure-built and metered benchmarks; root-only calls dominate the rest.
+TST001	0/12	-	-	no	Reads validity and XCM errors as dispatch results; assert_noop! is a style choice.
+TST004	6/7	0/15	-	no	Asks for a Pays::Yes error-path test that no SDK pallet writes; errors already pay.
+TST005	- (Oct: 0/10)	-	-	no	Field-name regex flags assertions on public state and .inner() results.
+TST006	5/12	17/23	0/8	no	Events emitted in helpers; privileged single-value setters; missing event rarely worth fixing.
+MOK001	- (Oct: 0/10)	-	-	no	Counts test-harness assertions as mock setup; mock ratio is not a defect signal.
+SEC001	1/4	-	-	no	Unbounded Vec params are already priced by length fees or gated by privileged origins.
+SEC002	1/12	-	-	no	debug_assert! in math helpers is an intended debug-only precondition check.
+SEC003	0/10 (4 unsure)	-	-	no (missed 1; 1 not buildable)	Read Ethereum ABI decode as SCALE; taint starts at call params, real cases decode stored bytes.
+SEC005	0/8	-	-	no	Fires on the canonical call.get_dispatch_info() wrapper weight used by utility/proxy/sudo.
+SEC007	5/12	2/15	-	no	let _ = is already explicit; most discards are documented best-effort; closures (dispatchables) unseen.
+SEC008	0/12	-	-	no (2 expected cases not buildable)	Fires on genesis presets and qed-proved unwraps; safe and unsafe unwraps look the same.
+SEC009	2/12	-	-	no (missed 1; 5 not buildable)	Bounded small arithmetic looks like overflow-prone arithmetic; the real bugs were on Weight or in infallible fns.
+SEC013	-	0/15	-	no	All findings are in #[pallet::without_storage_info] pallets; FRAME already enforces MaxEncodedLen elsewhere.
+SEC014	-	0/6	-	no	Every key was an internal sequential index, not attacker-chosen.
+SEC016	0/9	-	-	no	Migrations use done-flags, state checks or idempotent writes instead of StorageVersion.
+SEC017	3/8	0/15	-	no	Every Vec in an event was bounded elsewhere (config max, BoundedVec input, validator set).
+SEC018	1/1	2/15	-	no	Length fees already price input; rule cannot see O(n) work in the body.
+SEM005	1/12	-	-	no	Per-item weight times count is a valid linear over-estimate; constants misread as components.
+SEM006	3/12	-	-	no	Hand-written DbWeight often sits beside an explicit proof-size budget, or in demo/template code.
+SEM008	0/12	-	-	no	sp_std paths are a dependency cleanup, not a defect; 58% of all output before it was turned off.
+SEM013	-	-	0/2	no	repr(u8) is cosmetic when discriminants are explicit and in range; the cast compiles the same.
+VAL001	2/5	-	-	no	Text match: cheap guard often reads storage too, or the read picks a branch that returns early.
+VAL002	-	0/10	-	no	Every divisor was a Get config constant; zero there is a misconfiguration, not runtime input.
+VAL003	1/12	-	-	no	FRAME dispatchables are transactional, so writes before ? are rolled back.
+SEM002	0/10 (2026-10)	-	-	no	Style: annotation and turbofish compile to the same code.
+SEM003	0/10 (2026-10)	-	-	no	Style: `for x in v.iter()` and `for x in &v` desugar to the same code; clippy::explicit_iter_loop covers it.
+SEM004	0/10 (2026-10)	-	-	no	Style: glob imports cost readability, not correctness; clippy::wildcard_imports covers it.
+SEM007	0/10 (2026-10, 10 wrong)	-	-	no (1 related hit, wrong reason)	RuntimeDebug is deprecated only from sp-debug-derive 15; every flagged repository locked 14.
+SEM012	0/10 (2026-10)	-	-	no	allow(dead_code) is already a visible, deliberate choice; deleting the code is a reviewer's call.
+TST003	0/10 (2026-10)	-	-	no	Style: import placement in tests does not change what the test checks.

@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:red;">Critical</span>
 
-> **Linter coverage — Partial (opt-in).** Both rules are off by default: on real parachain code most findings were genesis/preset code, documented infallible `expect`s, or debug-only assertions. With `config/all-rules.toml` the linter reports panic-inducing paths in production code — `unwrap`, `expect`, `panic!`, and `todo!` — as well as reachable `debug_assert!` calls that panic when compiled with debug assertions. See [SEC008](../../rules/SEC008.md) and [SEC002](../../rules/SEC002.md).
+> **Linter coverage — Review gate.** No shipping rule covers this. SEC002 and SEC008 tried and were deleted: a safe `unwrap` and an unsafe one look the same, and most findings were genesis code or documented `qed` proofs; see [What we tried and removed](../../retired-rules.md). Teams that want a hard ban can enable `clippy::unwrap_used` and `clippy::expect_used` per pallet crate; prefer `defensive_unwrap_or` and fuzz the runtime.
 
 ## Description
 

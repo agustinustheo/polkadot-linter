@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Review gate.** No shipping rule checks migration logging; SEM014 (log target on off-chain-worker `SubmitTransaction`) is a related logging-target convention, not a substitute, and SEC016 (unguarded migration) addresses a different concern. See [SEM014](../../rules/SEM014.md), [SEC016](../../rules/SEC016.md).
+> **Linter coverage — Review gate.** No shipping rule checks migration logging; [SEM014](../../rules/SEM014.md) (log target on off-chain-worker `SubmitTransaction`) is a related logging-target convention, not a substitute.
 
 ## Description
 

@@ -4,10 +4,10 @@ use proc_macro2::Span;
 use quote::ToTokens;
 use syn::{
     visit::{self, Visit},
-    Attribute, Expr, ExprCall, File as SynFile, Macro, Type,
+    Attribute, Expr, ExprCall, File as SynFile, Macro,
 };
 
-use crate::{engine::FileContext, frame_model::active_cfg_attr_path_matches};
+use crate::engine::FileContext;
 
 pub(crate) fn ast_file<'a>(ctx: &'a FileContext<'a>) -> Option<&'a SynFile> {
     ctx.ast.as_ref()
@@ -41,44 +41,6 @@ pub(crate) fn is_construct_runtime(name: &str) -> bool {
 
 pub(crate) fn macro_name(mac: &Macro) -> Option<String> {
     path_last_ident(&mac.path)
-}
-
-/// Matches `segments` exactly, as a path suffix, or through an always-active
-/// `cfg_attr`.
-pub(crate) fn attr_path_matches(attr: &Attribute, segments: &[&str]) -> bool {
-    let attr_segments = attr
-        .path()
-        .segments
-        .iter()
-        .map(|segment| segment.ident.to_string())
-        .collect::<Vec<_>>();
-    attr_segments
-        .iter()
-        .map(String::as_str)
-        .eq(segments.iter().copied())
-        || attr_segments
-            .iter()
-            .map(String::as_str)
-            .rev()
-            .zip(segments.iter().rev().copied())
-            .all(|(actual, expected)| actual == expected)
-            && attr_segments.len() >= segments.len()
-        || active_cfg_attr_path_matches(attr, segments)
-}
-
-pub(crate) fn has_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| attr_path_matches(attr, segments))
-}
-
-/// Like [`has_attr`], but only an attribute path equal to `segments` matches.
-pub(crate) fn has_exact_attr(attrs: &[Attribute], segments: &[&str]) -> bool {
-    attrs.iter().any(|attr| {
-        attr.path()
-            .segments
-            .iter()
-            .map(|segment| segment.ident.to_string())
-            .eq(segments.iter().copied())
-    })
 }
 
 /// `#[path = "..."]` on a module declaration.
@@ -141,64 +103,6 @@ pub(crate) fn expr_call_name(expr_call: &ExprCall) -> Option<String> {
 
 pub(crate) fn expr_call_path(expr_call: &ExprCall) -> Option<&syn::Path> {
     expr_path(&expr_call.func)
-}
-
-pub(crate) fn type_contains_named(ty: &Type, names: &[&str]) -> bool {
-    struct TypeNameVisitor<'a> {
-        names: &'a [&'a str],
-        found: bool,
-    }
-
-    impl<'ast> Visit<'ast> for TypeNameVisitor<'_> {
-        fn visit_type_path(&mut self, type_path: &'ast syn::TypePath) {
-            if type_path
-                .path
-                .segments
-                .last()
-                .map(|segment| self.names.iter().any(|name| segment.ident == *name))
-                .unwrap_or(false)
-            {
-                self.found = true;
-            }
-            visit::visit_type_path(self, type_path);
-        }
-    }
-
-    let mut visitor = TypeNameVisitor {
-        names,
-        found: false,
-    };
-    visitor.visit_type(ty);
-    visitor.found
-}
-
-/// `#[test]`, or a `cfg` that requires `test` (`all(test, ..)`, `any(test, doctest)`).
-pub(crate) fn test_only(attrs: &[Attribute]) -> bool {
-    fn requires_test(meta: &syn::Meta) -> bool {
-        match meta {
-            syn::Meta::Path(path) => path.is_ident("test") || path.is_ident("doctest"),
-            syn::Meta::List(list) => {
-                let Ok(predicates) = list.parse_args_with(
-                    syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
-                ) else {
-                    return false;
-                };
-                (list.path.is_ident("all") && predicates.iter().any(requires_test))
-                    || (list.path.is_ident("any")
-                        && !predicates.is_empty()
-                        && predicates.iter().all(requires_test))
-            }
-            _ => false,
-        }
-    }
-    attrs.iter().any(|attr| {
-        attr.path().is_ident("test")
-            || (attr.path().is_ident("cfg")
-                && attr
-                    .parse_args::<syn::Meta>()
-                    .ok()
-                    .is_some_and(|meta| requires_test(&meta)))
-    })
 }
 
 /// The first origin check in `block` (the first call named `ensure_*`) is

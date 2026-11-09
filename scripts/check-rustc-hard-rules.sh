@@ -14,7 +14,7 @@ RUSTC_TARGET_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR" "$RUSTC_TARGET_DIR"; rm -f "$CONFIG_FILE"' EXIT
 
 FIXTURE="$WORK_DIR/substrate/frame/hard-rules-fixture/src/lib.rs"
-SYNTAX_FIXTURE="$WORK_DIR/substrate/frame/sec001-syntax-fixture/src/lib.rs"
+SYNTAX_FIXTURE="$WORK_DIR/substrate/frame/syntax-fixture/src/lib.rs"
 mkdir -p "$(dirname "$FIXTURE")"
 mkdir -p "$(dirname "$SYNTAX_FIXTURE")"
 
@@ -191,17 +191,8 @@ pub mod unrelated_currency_result {
     }
 }
 
-pub fn discarded_fallible_result() {
-    let _ = result_currency::Currency::transfer();
-}
 
-pub fn discarded_unit_error_result() {
-    let _ = result_currency::Currency::try_mutate();
-}
 
-pub fn discarded_non_result() {
-    let _ = unrelated_currency_result::Currency::transfer();
-}
 
 pub fn discarded_repatriate_reserved() {
     let _ = frame_support::traits::Currency::repatriate_reserved();
@@ -250,21 +241,11 @@ fn emit_weight_accounted_helper_event(payload: Payload) {
     let _ = WeightAccountedHelperPayloadEvent::WeightAccountedHelperPayload { payload };
 }
 
-#[pallet::call_index(30)]
-#[pallet::weight(WeightInfo::emit_weight_accounted_helper(payload.len() as u32))]
-pub fn emit_weight_accounted_helper(payload: Payload) {
-    emit_weight_accounted_helper_event(payload);
-}
 
 fn emit_mixed_weight_helper_event(payload: Payload) {
     let _ = MixedWeightHelperPayloadEvent::MixedWeightHelperPayload { payload };
 }
 
-#[pallet::call_index(31)]
-#[pallet::weight(WeightInfo::emit_mixed_weight_helper(payload.len() as u32))]
-pub fn emit_mixed_weight_helper(payload: Payload) {
-    emit_mixed_weight_helper_event(payload);
-}
 
 pub fn emit_mixed_weight_helper_unaccounted(payload: Payload) {
     emit_mixed_weight_helper_event(payload);
@@ -495,45 +476,16 @@ pub mod xcm_executor {
     }
 }
 
-#[pallet::storage]
-pub type AliasedStorage = frame_support::storage::types::StorageValue<(), Payload>;
 
 #[pallet::storage]
 pub type BoundedStorage = frame_support::storage::types::StorageValue<(), BoundedPayload>;
 
-#[pallet :: storage]
-pub type WhitespaceStorage = frame_support::storage::types::StorageValue<(), Payload>;
 
-pub type UnrelatedStorage = frame_support::storage::types::StorageValue<(), Payload>;
 
 pub type AliasIndex = u32;
 
-#[pallet::storage]
-pub type AliasIdentityKey = frame_support::storage::types::StorageMap<
-    (),
-    frame_support::Identity,
-    AliasIndex,
-    (),
->;
 
-/// Ring buffer holding imported block positions.
-#[pallet::storage]
-pub type DocumentedIdentityIndex = frame_support::storage::types::StorageMap<
-    (),
-    frame_support::Identity,
-    u32,
-    (),
->;
 
-#[pallet::storage]
-pub type DoubleIdentityKey = frame_support::storage::types::StorageDoubleMap<
-    (),
-    frame_support::Blake2_128Concat,
-    u32,
-    frame_support::Identity,
-    u64,
-    (),
->;
 
 pub struct Domain;
 
@@ -598,107 +550,28 @@ impl RecursivePayload {
     }
 }
 
-#[pallet::call_index(0)] #[pallet::weight(WeightInfo::submit_missing())]
-pub fn submit_alias(payload: Payload) {
-    let _ = payload;
-    helper_vec(Vec::new());
-}
 
-#[pallet :: call_index(8)]
-#[pallet :: weight(WeightInfo::submit_with_whitespace())]
-pub fn whitespace_weight_attribute(payload: Payload) {
-    let _ = payload;
-}
 
-#[pallet::weight(WeightInfo::helper())]
-pub fn weighted_non_dispatchable_helper(payload: Payload) {
-    let _ = payload;
-}
 
-#[pallet :: call_index(7)]
-#[pallet :: weight(WeightInfo::submit_with_whitespace(payload.len() as u32))]
-pub fn whitespace_dispatchable_attribute(payload: Payload) {
-    let _ = payload;
-}
 
-#[pallet::call_index(6)] #[pallet::weight(WeightInfo::submit_bounded(payload.len() as u32))]
-pub fn bounded_input_vec(payload: Payload) {
-    if payload.len() > 32 {
-        return;
-    }
-    let _ = payload;
-}
 
-#[pallet::call_index(28)] #[pallet::weight(WeightInfo::submit_bounded(payload.len() as u32))]
-pub fn literal_bound_input_vec(payload: Payload) {
-    let max_payload_len = 32;
-    if payload.len() > max_payload_len {
-        return;
-    }
-    let _ = payload;
-}
 
-#[pallet::call_index(9)] #[pallet::weight(WeightInfo::fixed_bound())]
-pub fn fixed_bound_weight(payload: Payload) {
-    if payload.len() > 32 {
-        return;
-    }
-    let _ = payload;
-}
 
 pub fn submit_bounded(payload: BoundedVec<u8, 32>) {
     let _ = payload;
 }
 
-#[pallet::call_index(2)] #[pallet::weight(WeightInfo::privileged_root())]
-pub fn privileged_root_vec(origin: Origin, payload: Payload) -> Result<(), ()> {
-    frame_system::ensure_root(origin)?;
-    let _ = payload;
-    Ok(())
-}
 
-#[pallet::call_index(3)] #[pallet::weight(WeightInfo::privileged_config())]
-pub fn privileged_config_vec<T: Config>(origin: Origin, payload: Payload) -> Result<(), ()> {
-    T::AdminOrigin::ensure_origin(origin)?;
-    let _ = payload;
-    Ok(())
-}
 
-#[pallet::call_index(5)] #[pallet::weight(WeightInfo::unknown_origin())]
-pub fn unknown_config_origin_vec<T: Config>(origin: Origin, payload: Payload) {
-    let _ = T::AnyOrigin::ensure_origin(origin);
-    let _ = payload;
-}
 
-#[pallet::call_index(10)] #[pallet::weight(WeightInfo::unknown_origin())]
-pub fn conditionally_privileged_vec(origin: Origin, payload: Payload, enforce: bool) -> Result<(), ()> {
-    if enforce {
-        frame_system::ensure_root(origin)?;
-    }
-    let _ = payload;
-    Ok(())
-}
 
-#[pallet::call_index(4)]
-#[pallet::weight(WeightInfo::comment_only(/* commented_weight_input.len() */))]
-pub fn comment_only_weight_input(origin: Origin, commented_weight_input: Payload) {
-    let _ = frame_system::ensure_root(origin);
-    let _ = commented_weight_input;
-}
 
 #[pallet::weight(WeightInfo::submit_bounded())]
 pub fn weighted_bounded(payload: BoundedPayload) {
     let _ = payload;
 }
 
-#[pallet::weight(WeightInfo::submit_tuple(payload.0.len() as u32))]
-pub fn weighted_tuple(payload: TuplePayload) {
-    let _ = payload;
-}
 
-pub fn unweighted_after_weighted(payload: Payload) {
-    let _ = payload;
-}
 
 fn helper_vec(payload: Vec<u8>) {
     let _ = payload;
@@ -877,13 +750,7 @@ impl frame_support::traits::UncheckedOnRuntimeUpgrade for UncheckedMigration {
     }
 }
 
-pub struct UnguardedStorageMigration;
 
-impl frame_support::traits::OnRuntimeUpgrade for UnguardedStorageMigration {
-    fn on_runtime_upgrade() {
-        frame_support::storage::types::StorageMap::put();
-    }
-}
 
 pub struct VersionGuardedStorageMigration;
 
@@ -894,13 +761,7 @@ impl frame_support::traits::OnRuntimeUpgrade for VersionGuardedStorageMigration 
     }
 }
 
-pub struct HookStorageMigration;
 
-impl frame_support::traits::Hooks for HookStorageMigration {
-    fn on_runtime_upgrade() {
-        frame_support::storage::types::StorageMap::put();
-    }
-}
 
 pub struct UncheckedStorageMigration;
 
@@ -1029,31 +890,12 @@ fn private_storage_iteration() {
     let _ = frame_support::storage::types::StorageMap::iter();
 }
 
-pub fn decode_alias_call(mut data: &[u8]) -> Result<RuntimeCall, ()> {
-    AliasCall::decode(&mut data)
-}
 
-pub fn decode_structural_recursive(mut data: &[u8]) -> Result<RecursivePayload, ()> {
-    RecursivePayload::decode(&mut data)
-}
 
-pub fn decode_alias_in_encoded(payload: EncodedInput) -> Result<RuntimeCall, ()> {
-    payload.using_encoded(|mut encoded| AliasCall::decode(&mut encoded))
-}
 
-pub fn decode_alias_from_match(data: &[u8]) -> Result<RuntimeCall, ()> {
-    match (data, ()) {
-        (mut data, ()) => AliasCall::decode(&mut data),
-    }
-}
 
 pub struct ResponseHandler;
 
-impl crate::xcm_executor::traits::OnResponse for ResponseHandler {
-    fn on_response(mut data: &[u8]) {
-        let _ = RuntimeCall::decode(&mut data);
-    }
-}
 
 pub fn decode_via_private_helper(data: &[u8]) -> Result<RuntimeCall, ()> {
     decode_private(data)
@@ -1070,10 +912,6 @@ pub fn decode_via_private_helper_assignment(data: &[u8]) -> Result<RuntimeCall, 
     decode_private_assignment(forwarded)
 }
 
-pub fn decode_via_private_helper_function_value(data: &[u8]) -> Result<RuntimeCall, ()> {
-    let decode = decode_private;
-    decode(data)
-}
 
 pub fn decode_via_match_helper(
     data: &[u8],
@@ -1085,55 +923,10 @@ pub fn decode_via_match_helper(
     }
 }
 
-pub fn decode_after_clean_assignment(mut data: &[u8]) -> Result<RuntimeCall, ()> {
-    let _was_empty = data.is_empty();
-    data = &[];
-    RuntimeCall::decode(&mut data)
-}
 
-pub fn decode_after_conditional_clean_assignment(
-    mut data: &[u8],
-    clear: bool,
-) -> Result<RuntimeCall, ()> {
-    if clear {
-        data = &[];
-    }
-    let decoded_after_conditional = RuntimeCall::decode(&mut data);
-    decoded_after_conditional
-}
 
-pub fn decode_after_branch_selected_input(
-    data: &[u8],
-    select_input: bool,
-) -> Result<RuntimeCall, ()> {
-    let mut selected = if select_input { data } else { &[][..] };
-    let decoded_after_branch_selected_input = RuntimeCall::decode(&mut selected);
-    decoded_after_branch_selected_input
-}
 
-pub fn decode_after_match_selected_input(
-    data: &[u8],
-    select_input: bool,
-) -> Result<RuntimeCall, ()> {
-    let mut selected = match (data, select_input) {
-        (data, true) => data,
-        _ => &[][..],
-    };
-    let decoded_after_match_selected_input = RuntimeCall::decode(&mut selected);
-    decoded_after_match_selected_input
-}
 
-pub fn decode_after_match_conditional_clean_assignment(
-    mut data: &[u8],
-    clear: bool,
-) -> Result<RuntimeCall, ()> {
-    match clear {
-        true => data = &[][..],
-        false => {}
-    }
-    let decoded_after_match_conditional = RuntimeCall::decode(&mut data);
-    decoded_after_match_conditional
-}
 
 pub fn decode_via_private_helper_after_match_conditional_clean_assignment(
     mut data: &[u8],
@@ -1204,21 +997,8 @@ macro_rules! ensure {
     };
 }
 
-pub fn active_debug_assert(value: u32) {
-    let note = "debug_assert! in a string is not an assertion";
-    let _ = note;
-    // debug_assert! in a comment is not an assertion.
-    debug_assert!(value > 0, "active debug assertion should be linted");
-}
 
-pub fn raw_string_debug_assert_text() {
-    let note = r#"the embedded quote: "debug_assert!(false)" remains text"#;
-    let _ = note;
-}
 
-pub fn nested_debug_assert(value: u32) {
-    nested_debug_assert!(value > 0);
-}
 
 pub fn debug_assert_via_private_helper(value: u32) {
     reachable_private_debug_assert(value);
@@ -1249,9 +1029,6 @@ pub fn unwrap_infallible_result() -> u32 {
     infallible_result().unwrap()
 }
 
-pub fn unwrap_fallible_result(flag: bool) -> u32 {
-    fallible_result(flag).expect("flag controls the error path")
-}
 
 pub fn unwrap_known_ok() -> u32 {
     let known_ok: Result<u32, ()> = Ok(7);
@@ -1263,12 +1040,6 @@ pub fn expect_known_some() -> u32 {
     known_some.expect("constructed as Some")
 }
 
-pub fn unwrap_after_unknown_overwrite() -> u32 {
-    let mut value: Result<u32, ()> = Ok(7);
-    let _was_ok = value.is_ok();
-    value = fallible_result(false);
-    value.expect("unknown overwrite can fail")
-}
 
 pub fn unwrap_after_option_guard(value: Option<u32>) -> Result<u32, ()> {
     ensure!(value.is_some(), ());
@@ -1282,13 +1053,6 @@ pub fn unwrap_after_result_guard(value: Result<u32, ()>) -> Result<u32, ()> {
     Ok(value.expect("the error path returned early"))
 }
 
-pub fn unwrap_inside_some_branch(value: Option<u32>) -> u32 {
-    if value.is_some() {
-        value.unwrap()
-    } else {
-        0
-    }
-}
 
 pub fn unwrap_inside_some_match(value: Option<u32>) -> u32 {
     match value {
@@ -1297,66 +1061,13 @@ pub fn unwrap_inside_some_match(value: Option<u32>) -> u32 {
     }
 }
 
-pub fn unwrap_inside_some_let(value: Option<u32>) -> u32 {
-    if let Some(_) = value {
-        value.unwrap()
-    } else {
-        0
-    }
-}
 
-pub fn expect_inside_ok_let(value: Result<u32, ()>) -> u32 {
-    if let Ok(_) = value {
-        value.expect("the matching branch proves success")
-    } else {
-        0
-    }
-}
 
-pub fn unwrap_after_some_let_else(value: Option<u32>) -> Result<u32, ()> {
-    let Some(_) = value else {
-        return Err(());
-    };
-    Ok(value.unwrap())
-}
 
-pub fn expect_after_ok_let_else(value: Result<u32, ()>) -> Result<u32, ()> {
-    let Ok(_) = value else {
-        return Err(());
-    };
-    Ok(value.expect("the let-else failure path returned early"))
-}
 
-pub fn unwrap_after_guarded_overwrite(mut value: Option<u32>) -> Result<u32, ()> {
-    ensure!(value.is_some(), ());
-    value = None;
-    Ok(value.unwrap())
-}
 
-pub fn unwrap_after_conditional_known_assignment(flag: bool, mut value: Option<u32>) -> u32 {
-    if flag {
-        value = Some(7);
-    }
-    value.unwrap()
-}
 
-pub fn unwrap_after_match_known_assignment(flag: bool, mut value: Option<u32>) -> u32 {
-    match flag {
-        true => value = Some(7),
-        false => {}
-    }
-    value.unwrap()
-}
 
-#[allow(unused_assignments)]
-pub fn unwrap_after_all_branches_known_assignment(flag: bool, mut value: Option<u32>) -> u32 {
-    if flag {
-        value = Some(7);
-    } else {
-        value = Some(8);
-    }
-    value.unwrap()
-}
 
 pub fn unwrap_via_private_helper(flag: bool) -> u32 {
     reachable_private_unwrap_fallible_result(flag)
@@ -1371,9 +1082,6 @@ fn private_unwrap_fallible_result(flag: bool) -> u32 {
     fallible_result(flag).expect("private helper is not a callable entry point")
 }
 
-pub fn raw_integer(a: u32, b: u32, c: u32) -> Result<u32, ()> {
-    Ok((a + b) - c)
-}
 
 pub fn guarded_subtraction(a: u32, b: u32) -> Result<u32, ()> {
     if a >= b {
@@ -1401,13 +1109,7 @@ pub fn guarded_subtraction_with_early_return(a: u32, b: u32) -> Result<u32, ()> 
     Ok(a - b)
 }
 
-pub fn guarded_subtraction_in_else(a: u32, b: u32) -> Result<u32, ()> {
-    if a < b { Err(()) } else { Ok(a - b) }
-}
 
-pub fn raw_division(a: u32, b: u32) -> Result<u32, ()> {
-    Ok(a / b)
-}
 
 pub fn guarded_division(a: u32, b: u32) -> Result<u32, ()> {
     if b != 0 {
@@ -1423,14 +1125,7 @@ pub fn conjunction_guarded_division(a: u32, b: u32, enabled: bool) -> Result<u32
     Err(())
 }
 
-pub fn guarded_division_with_ensure(a: u32, b: u32) -> Result<u32, ()> {
-    ensure!(b != 0, ());
-    Ok(a / b)
-}
 
-pub fn guarded_division_in_else(a: u32, b: u32) -> Result<u32, ()> {
-    if b == 0 { Err(()) } else { Ok(a / b) }
-}
 
 pub fn guarded_positive_division(a: i32, b: i32) -> Result<i32, ()> {
     if b > 0 {
@@ -1439,66 +1134,19 @@ pub fn guarded_positive_division(a: i32, b: i32) -> Result<i32, ()> {
     Err(())
 }
 
-pub fn match_nonzero_division(a: u32, b: u32) -> Result<u32, ()> {
-    match b {
-        1 => Ok(a / b),
-        _ => Err(()),
-    }
-}
 
-pub fn match_zero_division(a: u32, b: u32) -> Result<u32, ()> {
-    match b {
-        0 => Ok(a / b),
-        _ => Err(()),
-    }
-}
 
-pub fn nonzero_division(a: u32, b: std::num::NonZeroU32) -> Result<u32, ()> {
-    Ok(a / b.get())
-}
 
-pub fn nonzero_remainder(a: u32, b: std::num::NonZeroU32) -> Result<u32, ()> {
-    Ok(a % b.get())
-}
 
-pub fn generic_get_divisor<Period: frame_support::traits::Get<u32>>(value: u32) -> u32 {
-    value / Period::get()
-}
 
 pub trait GetConfig {
     type Period: frame_support::traits::Get<u32>;
 }
 
-pub fn associated_get_divisor<T: GetConfig>(value: u32) -> u32 {
-    value / T::Period::get()
-}
 
-pub fn guarded_get_divisor<Period: frame_support::traits::Get<u32>>(value: u32) -> u32 {
-    let period = Period::get();
-    if period == 0 {
-        return 0;
-    }
-    value / period
-}
 
-pub fn collection_length_divisor(values: Vec<u32>, value: u32) -> u32 {
-    value / values.len() as u32
-}
 
-pub fn nonempty_collection_length_divisor(values: Vec<u32>, value: u32) -> Option<u32> {
-    if values.is_empty() {
-        return None;
-    }
-    Some(value / values.len() as u32)
-}
 
-pub fn else_nonempty_collection_length_divisor(values: Vec<u32>, value: u32) -> Option<u32> {
-    if values.is_empty() {
-        None
-    } else {
-        Some(value / values.len() as u32)
-    }
-}
 
 pub fn raw_integer_via_private_helper(a: u32, b: u32) -> Result<u32, ()> {
     Ok(reachable_private_raw_integer(a, b))
@@ -1626,22 +1274,11 @@ RS
 
 cat > "$CONFIG_FILE" <<'TOML'
 [rules.enabled]
-SEC001 = true
-SEC002 = true
-SEC003 = true
 SEC006 = true
-SEC007 = true
-SEC008 = true
-SEC009 = true
 SEC010 = true
 SEC011 = true
 SEC012 = true
-SEC013 = true
-SEC014 = true
 SEC015 = true
-SEC016 = true
-SEC017 = true
-SEC018 = true
 TOML
 
 SYN_JSON="$WORK_DIR/syn-hard-rules.json"
@@ -1649,12 +1286,11 @@ RUSTC_JSON="$WORK_DIR/rustc-hard-rules.json"
 RUSTC_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-filtered.json"
 RUSTC_FILTERED_EMPTY_JSON="$WORK_DIR/rustc-hard-rules-filtered-empty.json"
 RUSTC_RULE_FILTERED_JSON="$WORK_DIR/rustc-hard-rules-rule-filtered.json"
-RUSTC_VAL002_JSON="$WORK_DIR/rustc-hard-rules-val002.json"
 
 cargo +1.93.0 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" --bin polkadot-linter -- \
   -c "$CONFIG_FILE" \
   "$WORK_DIR" \
-  --rules SEC001,SEC002,SEC003,SEC006,SEC007,SEC008,SEC009,SEC010,SEC011,SEC012,SEC013,SEC014,SEC015,SEC016,SEC017,SEC018 \
+  --rules SEC006,SEC010,SEC011,SEC012,SEC015 \
   -f json > "$SYN_JSON"
 
 cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
@@ -1686,7 +1322,7 @@ POLKADOT_LINTER_DRIVER_FILE_FILTERS_JSON='["does-not-match.rs"]' \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_FILTERED_EMPTY_JSON"
 
-POLKADOT_LINTER_DRIVER_RULES="SEC008,SEC009" \
+POLKADOT_LINTER_DRIVER_RULES="SEC011,SEC012" \
   cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
     --features rustc-driver \
     --bin polkadot-linter-driver -- \
@@ -1696,146 +1332,16 @@ POLKADOT_LINTER_DRIVER_RULES="SEC008,SEC009" \
     --emit metadata \
     --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_RULE_FILTERED_JSON"
 
-POLKADOT_LINTER_DRIVER_RULES="VAL002" \
-  cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
-    --features rustc-driver \
-    --bin polkadot-linter-driver -- \
-    "$FIXTURE" \
-    --crate-type lib \
-    --edition 2021 \
-    --emit metadata \
-    --out-dir "$RUSTC_TARGET_DIR" > "$RUSTC_VAL002_JSON"
-
-syn_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$SYN_JSON")"
-syn_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$SYN_JSON")"
-syn_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$SYN_JSON")"
 syn_sec006_count="$(jq '[.[] | select(.rule_id == "SEC006")] | length' "$SYN_JSON")"
-syn_sec007_count="$(jq '[.[] | select(.rule_id == "SEC007")] | length' "$SYN_JSON")"
-syn_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$SYN_JSON")"
-syn_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$SYN_JSON")"
 syn_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$SYN_JSON")"
 syn_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$SYN_JSON")"
 syn_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$SYN_JSON")"
-syn_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$SYN_JSON")"
-syn_sec014_count="$(jq '[.[] | select(.rule_id == "SEC014")] | length' "$SYN_JSON")"
 syn_sec015_count="$(jq '[.[] | select(.rule_id == "SEC015")] | length' "$SYN_JSON")"
-syn_sec016_count="$(jq '[.[] | select(.rule_id == "SEC016")] | length' "$SYN_JSON")"
-syn_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$SYN_JSON")"
-syn_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$SYN_JSON")"
-rustc_sec001_count="$(jq '[.[] | select(.rule_id == "SEC001")] | length' "$RUSTC_JSON")"
-rustc_sec002_count="$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$RUSTC_JSON")"
-rustc_sec003_count="$(jq '[.[] | select(.rule_id == "SEC003")] | length' "$RUSTC_JSON")"
 rustc_sec006_count="$(jq '[.[] | select(.rule_id == "SEC006")] | length' "$RUSTC_JSON")"
-rustc_sec007_count="$(jq '[.[] | select(.rule_id == "SEC007")] | length' "$RUSTC_JSON")"
-rustc_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_JSON")"
-rustc_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_JSON")"
 rustc_sec010_count="$(jq '[.[] | select(.rule_id == "SEC010")] | length' "$RUSTC_JSON")"
 rustc_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC_JSON")"
 rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_JSON")"
-rustc_sec013_count="$(jq '[.[] | select(.rule_id == "SEC013")] | length' "$RUSTC_JSON")"
-rustc_sec014_count="$(jq '[.[] | select(.rule_id == "SEC014")] | length' "$RUSTC_JSON")"
 rustc_sec015_count="$(jq '[.[] | select(.rule_id == "SEC015")] | length' "$RUSTC_JSON")"
-rustc_sec016_count="$(jq '[.[] | select(.rule_id == "SEC016")] | length' "$RUSTC_JSON")"
-rustc_sec017_count="$(jq '[.[] | select(.rule_id == "SEC017")] | length' "$RUSTC_JSON")"
-rustc_sec018_count="$(jq '[.[] | select(.rule_id == "SEC018")] | length' "$RUSTC_JSON")"
-guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
-rustc_sec009_guarded_subtraction_count="$(jq --argjson line "$guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-conjunction_guarded_subtraction_line="$(grep -n 'return Ok(a - b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
-rustc_sec009_conjunction_guarded_subtraction_count="$(jq --argjson line "$conjunction_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-ensure_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
-rustc_sec009_ensure_guarded_subtraction_count="$(jq --argjson line "$ensure_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-early_return_guarded_subtraction_line="$(grep -n 'Ok(a - b)' "$FIXTURE" | tail -n1 | cut -d: -f1)"
-rustc_sec009_early_return_guarded_subtraction_count="$(jq --argjson line "$early_return_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-else_guarded_subtraction_line="$(grep -n 'pub fn guarded_subtraction_in_else' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_else_guarded_subtraction_count="$(jq --argjson line "$else_guarded_subtraction_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-raw_division_line="$(grep -n 'Ok(a / b)' "$FIXTURE" | head -n1 | cut -d: -f1)"
-function_value_raw_line="$(grep -n 'fn function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_raw_division_count="$(jq --argjson line "$raw_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec009_function_value_raw_count="$(jq --argjson line "$function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-function_value_alias_raw_line="$(grep -n 'fn function_value_alias_raw_integer' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_function_value_alias_raw_count="$(jq --argjson line "$function_value_alias_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-conditional_function_value_raw_line="$(grep -n 'fn conditional_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_conditional_function_value_raw_count="$(jq --argjson line "$conditional_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-match_function_value_raw_line="$(grep -n 'fn match_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_match_function_value_raw_count="$(jq --argjson line "$match_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-overwritten_function_value_raw_line="$(grep -n 'fn overwritten_function_value_raw_integer' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_overwritten_function_value_raw_count="$(jq --argjson line "$overwritten_function_value_raw_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | head -n1 | cut -d: -f1)"
-rustc_sec009_guarded_division_count="$(jq --argjson line "$guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-conjunction_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n2 | head -n1 | cut -d: -f1)"
-rustc_sec009_conjunction_guarded_division_count="$(jq --argjson line "$conjunction_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-ensure_guarded_division_line="$(grep -n 'pub fn guarded_division_with_ensure' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_ensure_guarded_division_count="$(jq --argjson line "$ensure_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-else_guarded_division_line="$(grep -n 'pub fn guarded_division_in_else' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_else_guarded_division_count="$(jq --argjson line "$else_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-positive_guarded_division_line="$(grep -n 'return Ok(a / b);' "$FIXTURE" | tail -n1 | cut -d: -f1)"
-rustc_sec009_positive_guarded_division_count="$(jq --argjson line "$positive_guarded_division_line" '[.[] | select(.rule_id == "SEC009" and .line == $line)] | length' "$RUSTC_JSON")"
-match_nonzero_division_line="$(grep -n 'pub fn match_nonzero_division' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_match_nonzero_division_count="$(jq --argjson line "$match_nonzero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
-match_zero_division_line="$(grep -n 'pub fn match_zero_division' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_match_zero_division_count="$(jq --argjson line "$match_zero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
-nonzero_division_line="$(grep -n 'pub fn nonzero_division' "$FIXTURE" | cut -d: -f1)"
-nonzero_remainder_line="$(grep -n 'pub fn nonzero_remainder' "$FIXTURE" | cut -d: -f1)"
-rustc_sec009_nonzero_division_count="$(jq --argjson line "$nonzero_division_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-rustc_sec009_nonzero_remainder_count="$(jq --argjson line "$nonzero_remainder_line" '[.[] | select(.rule_id == "SEC009" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-generic_get_divisor_line="$(grep -n 'pub fn generic_get_divisor' "$FIXTURE" | cut -d: -f1)"
-associated_get_divisor_line="$(grep -n 'pub fn associated_get_divisor' "$FIXTURE" | cut -d: -f1)"
-guarded_get_divisor_line="$(grep -n 'pub fn guarded_get_divisor' "$FIXTURE" | cut -d: -f1)"
-collection_length_divisor_line="$(grep -n 'pub fn collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
-nonempty_collection_length_divisor_line="$(grep -n 'pub fn nonempty_collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
-else_nonempty_collection_length_divisor_line="$(grep -n 'pub fn else_nonempty_collection_length_divisor' "$FIXTURE" | cut -d: -f1)"
-rustc_val002_generic_get_count="$(jq --argjson line "$generic_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
-rustc_val002_associated_get_count="$(jq --argjson line "$associated_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
-rustc_val002_guarded_get_count="$(jq --argjson line "$guarded_get_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
-rustc_val002_collection_length_count="$(jq --argjson line "$collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_VAL002_JSON")"
-rustc_val002_nonempty_collection_length_count="$(jq --argjson line "$nonempty_collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
-rustc_val002_else_nonempty_collection_length_count="$(jq --argjson line "$else_nonempty_collection_length_divisor_line" '[.[] | select(.rule_id == "VAL002" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_VAL002_JSON")"
-known_ok_line="$(grep -n 'known_ok.unwrap' "$FIXTURE" | cut -d: -f1)"
-known_some_line="$(grep -n 'known_some.expect' "$FIXTURE" | cut -d: -f1)"
-unknown_overwrite_line="$(grep -n 'value.expect("unknown overwrite can fail")' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_known_ok_count="$(jq --argjson line "$known_ok_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec008_known_some_count="$(jq --argjson line "$known_some_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec008_unknown_overwrite_count="$(jq --argjson line "$unknown_overwrite_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-option_guarded_unwrap_line="$(grep -n 'Ok(value.unwrap())' "$FIXTURE" | head -n1 | cut -d: -f1)"
-rustc_sec008_option_guarded_unwrap_count="$(jq --argjson line "$option_guarded_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-result_guarded_expect_line="$(grep -n 'value.expect("the error path returned early")' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_result_guarded_expect_count="$(jq --argjson line "$result_guarded_expect_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-some_branch_unwrap_line="$(grep -n 'pub fn unwrap_inside_some_branch' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_some_branch_unwrap_count="$(jq --argjson line "$some_branch_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-some_match_unwrap_line="$(grep -n 'Some(_) => value.unwrap()' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_some_match_unwrap_count="$(jq --argjson line "$some_match_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line == $line)] | length' "$RUSTC_JSON")"
-some_let_unwrap_line="$(grep -n 'pub fn unwrap_inside_some_let' "$FIXTURE" | cut -d: -f1)"
-ok_let_expect_line="$(grep -n 'pub fn expect_inside_ok_let' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_some_let_unwrap_count="$(jq --argjson line "$some_let_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-rustc_sec008_ok_let_expect_count="$(jq --argjson line "$ok_let_expect_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-some_let_else_unwrap_line="$(grep -n 'pub fn unwrap_after_some_let_else' "$FIXTURE" | cut -d: -f1)"
-ok_let_else_expect_line="$(grep -n 'pub fn expect_after_ok_let_else' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_some_let_else_unwrap_count="$(jq --argjson line "$some_let_else_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-rustc_sec008_ok_let_else_expect_count="$(jq --argjson line "$ok_let_else_expect_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-guarded_overwrite_unwrap_line="$(grep -n 'pub fn unwrap_after_guarded_overwrite' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_guarded_overwrite_unwrap_count="$(jq --argjson line "$guarded_overwrite_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-conditional_known_assignment_unwrap_line="$(grep -n 'pub fn unwrap_after_conditional_known_assignment' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_conditional_known_assignment_count="$(jq --argjson line "$conditional_known_assignment_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
-match_known_assignment_unwrap_line="$(grep -n 'pub fn unwrap_after_match_known_assignment' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_match_known_assignment_count="$(jq --argjson line "$match_known_assignment_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-all_branches_known_assignment_unwrap_line="$(grep -n 'pub fn unwrap_after_all_branches_known_assignment' "$FIXTURE" | cut -d: -f1)"
-rustc_sec008_all_branches_known_assignment_count="$(jq --argjson line "$all_branches_known_assignment_unwrap_line" '[.[] | select(.rule_id == "SEC008" and .line >= $line and .line <= ($line + 7))] | length' "$RUSTC_JSON")"
-clean_assignment_line="$(grep -n 'pub fn decode_after_clean_assignment' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_clean_assignment_count="$(jq --argjson line "$clean_assignment_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-conditional_clean_assignment_decode_line="$(grep -n 'decoded_after_conditional = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_conditional_clean_assignment_count="$(jq --argjson line "$conditional_clean_assignment_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-branch_selected_input_decode_line="$(grep -n 'decoded_after_branch_selected_input = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_branch_selected_input_count="$(jq --argjson line "$branch_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-match_selected_input_decode_line="$(grep -n 'decoded_after_match_selected_input = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_match_selected_input_count="$(jq --argjson line "$match_selected_input_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-match_conditional_clean_decode_line="$(grep -n 'decoded_after_match_conditional = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_match_conditional_clean_count="$(jq --argjson line "$match_conditional_clean_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-match_helper_decode_line="$(grep -n 'decoded_from_match_helper = RuntimeCall::decode' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_match_helper_count="$(jq --argjson line "$match_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line == $line)] | length' "$RUSTC_JSON")"
-match_conditional_helper_decode_line="$(grep -n 'fn decode_private_after_match_conditional' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_match_conditional_helper_count="$(jq --argjson line "$match_conditional_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-function_value_helper_decode_line="$(grep -n 'pub fn decode_via_private_helper_function_value' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_function_value_helper_count="$(jq --argjson line "$function_value_helper_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
 discarded_repatriate_line="$(grep -n 'pub fn discarded_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 standalone_discarded_repatriate_line="$(grep -n 'pub fn standalone_discarded_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 checked_repatriate_line="$(grep -n 'pub fn checked_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
@@ -1844,96 +1350,12 @@ rustc_sec006_discarded_count="$(jq --argjson line "$discarded_repatriate_line" '
 rustc_sec006_standalone_discarded_count="$(jq --argjson line "$standalone_discarded_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec006_checked_count="$(jq --argjson line "$checked_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
 rustc_sec006_unrelated_count="$(jq --argjson line "$unrelated_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-discarded_fallible_result_line="$(grep -n 'pub fn discarded_fallible_result' "$FIXTURE" | cut -d: -f1)"
-discarded_unit_error_result_line="$(grep -n 'pub fn discarded_unit_error_result' "$FIXTURE" | cut -d: -f1)"
-discarded_non_result_line="$(grep -n 'pub fn discarded_non_result' "$FIXTURE" | cut -d: -f1)"
-rustc_sec007_fallible_count="$(jq --argjson line "$discarded_fallible_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-rustc_sec007_unit_error_count="$(jq --argjson line "$discarded_unit_error_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-rustc_sec007_non_result_count="$(jq --argjson line "$discarded_non_result_line" '[.[] | select(.rule_id == "SEC007" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 unguarded_dispatch_bypass_line="$(grep -n 'pub fn unguarded_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
 root_guarded_dispatch_bypass_line="$(grep -n 'pub fn root_guarded_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
 unrelated_dispatch_bypass_line="$(grep -n 'pub fn unrelated_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
 rustc_sec015_unguarded_count="$(jq --argjson line "$unguarded_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec015_root_guarded_count="$(jq --argjson line "$root_guarded_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 4))] | length' "$RUSTC_JSON")"
 rustc_sec015_unrelated_count="$(jq --argjson line "$unrelated_dispatch_bypass_line" '[.[] | select(.rule_id == "SEC015" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-unguarded_storage_migration_line="$(grep -n 'pub struct UnguardedStorageMigration' "$FIXTURE" | cut -d: -f1)"
-version_guarded_storage_migration_line="$(grep -n 'pub struct VersionGuardedStorageMigration' "$FIXTURE" | cut -d: -f1)"
-hook_storage_migration_line="$(grep -n 'pub struct HookStorageMigration' "$FIXTURE" | cut -d: -f1)"
-unchecked_storage_migration_line="$(grep -n 'pub struct UncheckedStorageMigration' "$FIXTURE" | cut -d: -f1)"
-unrelated_storage_migration_line="$(grep -n 'pub struct UnrelatedStorageMigration' "$FIXTURE" | cut -d: -f1)"
-rustc_sec016_unguarded_count="$(jq --argjson line "$unguarded_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-rustc_sec016_version_guarded_count="$(jq --argjson line "$version_guarded_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-rustc_sec016_hook_count="$(jq --argjson line "$hook_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-rustc_sec016_unchecked_count="$(jq --argjson line "$unchecked_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-rustc_sec016_unrelated_count="$(jq --argjson line "$unrelated_storage_migration_line" '[.[] | select(.rule_id == "SEC016" and .line >= $line and .line <= ($line + 5))] | length' "$RUSTC_JSON")"
-structural_recursive_decode_line="$(grep -n 'pub fn decode_structural_recursive' "$FIXTURE" | cut -d: -f1)"
-rustc_sec003_structural_recursive_count="$(jq --argjson line "$structural_recursive_decode_line" '[.[] | select(.rule_id == "SEC003" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
-privileged_root_line="$(grep -n 'pub fn privileged_root_vec' "$FIXTURE" | cut -d: -f1)"
-privileged_config_line="$(grep -n 'pub fn privileged_config_vec' "$FIXTURE" | cut -d: -f1)"
-unknown_config_origin_line="$(grep -n 'pub fn unknown_config_origin_vec' "$FIXTURE" | cut -d: -f1)"
-conditionally_privileged_line="$(grep -n 'pub fn conditionally_privileged_vec' "$FIXTURE" | cut -d: -f1)"
-bounded_input_line="$(grep -n 'pub fn bounded_input_vec' "$FIXTURE" | cut -d: -f1)"
-literal_bound_input_line="$(grep -n 'pub fn literal_bound_input_vec' "$FIXTURE" | cut -d: -f1)"
-fixed_bound_weight_line="$(grep -n 'pub fn fixed_bound_weight' "$FIXTURE" | cut -d: -f1)"
-unrelated_storage_line="$(grep -n 'pub type UnrelatedStorage' "$FIXTURE" | cut -d: -f1)"
-whitespace_storage_line="$(grep -n 'pub type WhitespaceStorage' "$FIXTURE" | cut -d: -f1)"
-alias_identity_key_line="$(grep -n 'pub type AliasIdentityKey' "$FIXTURE" | cut -d: -f1)"
-documented_identity_index_line="$(grep -n 'pub type DocumentedIdentityIndex' "$FIXTURE" | cut -d: -f1)"
-double_identity_key_line="$(grep -n 'pub type DoubleIdentityKey' "$FIXTURE" | cut -d: -f1)"
-whitespace_event_field_line="$(grep -n 'WhitespaceSubmitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
-unemitted_event_field_line="$(grep -n 'Unemitted { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
-internal_payload_event_field_line="$(grep -n 'InternalPayload { payload: Payload }' "$FIXTURE" | cut -d: -f1)"
-helper_payload_event_field_line="$(grep -n '^    HelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-aliased_helper_payload_event_field_line="$(grep -n '^    AliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-overwritten_aliased_helper_payload_event_field_line="$(grep -n '^    OverwrittenAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-conditional_aliased_helper_payload_event_field_line="$(grep -n '^    ConditionalAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-match_aliased_helper_payload_event_field_line="$(grep -n '^    MatchAliasedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-weight_accounted_payload_event_field_line="$(grep -n '^    WeightAccountedPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-weight_accounted_helper_payload_event_field_line="$(grep -n '^    WeightAccountedHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-mixed_weight_helper_payload_event_field_line="$(grep -n '^    MixedWeightHelperPayload { payload: Payload },$' "$FIXTURE" | cut -d: -f1)"
-raw_string_debug_assert_line="$(grep -n 'pub fn raw_string_debug_assert_text' "$FIXTURE" | cut -d: -f1)"
-comment_only_weight_input_line="$(grep -n 'pub fn comment_only_weight_input' "$FIXTURE" | cut -d: -f1)"
-weighted_tuple_line="$(grep -n 'pub fn weighted_tuple' "$FIXTURE" | cut -d: -f1)"
-unweighted_after_weighted_line="$(grep -n 'pub fn unweighted_after_weighted' "$FIXTURE" | cut -d: -f1)"
-whitespace_weight_attribute_line="$(grep -n 'pub fn whitespace_weight_attribute' "$FIXTURE" | cut -d: -f1)"
-weighted_non_dispatchable_helper_line="$(grep -n 'pub fn weighted_non_dispatchable_helper' "$FIXTURE" | cut -d: -f1)"
-whitespace_dispatchable_attribute_line="$(grep -n 'pub fn whitespace_dispatchable_attribute' "$FIXTURE" | cut -d: -f1)"
-rustc_sec001_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_conditionally_privileged_count="$(jq --argjson line "$conditionally_privileged_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_bounded_input_count="$(jq --argjson line "$bounded_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_literal_bound_input_count="$(jq --argjson line "$literal_bound_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_fixed_bound_weight_count="$(jq --argjson line "$fixed_bound_weight_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_whitespace_dispatchable_count="$(jq --argjson line "$whitespace_dispatchable_attribute_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec013_unrelated_storage_count="$(jq --argjson line "$unrelated_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec013_whitespace_storage_count="$(jq --argjson line "$whitespace_storage_line" '[.[] | select(.rule_id == "SEC013" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec014_alias_count="$(jq --argjson line "$alias_identity_key_line" '[.[] | select(.rule_id == "SEC014" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-rustc_sec014_documented_count="$(jq --argjson line "$documented_identity_index_line" '[.[] | select(.rule_id == "SEC014" and .line >= ($line - 1) and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
-rustc_sec014_double_count="$(jq --argjson line "$double_identity_key_line" '[.[] | select(.rule_id == "SEC014" and .line >= $line and .line <= ($line + 8))] | length' "$RUSTC_JSON")"
-rustc_sec017_whitespace_event_count="$(jq --argjson line "$whitespace_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_unemitted_event_count="$(jq --argjson line "$unemitted_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_internal_payload_event_count="$(jq --argjson line "$internal_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_helper_payload_event_count="$(jq --argjson line "$helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_aliased_helper_payload_event_count="$(jq --argjson line "$aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_overwritten_aliased_helper_payload_event_count="$(jq --argjson line "$overwritten_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_conditional_aliased_helper_payload_event_count="$(jq --argjson line "$conditional_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_match_aliased_helper_payload_event_count="$(jq --argjson line "$match_aliased_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_weight_accounted_payload_event_count="$(jq --argjson line "$weight_accounted_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_weight_accounted_helper_payload_event_count="$(jq --argjson line "$weight_accounted_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec017_mixed_weight_helper_payload_event_count="$(jq --argjson line "$mixed_weight_helper_payload_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec002_raw_string_count="$(jq --argjson line "$raw_string_debug_assert_line" '[.[] | select(.rule_id == "SEC002" and .line >= $line and .line <= ($line + 3))] | length' "$RUSTC_JSON")"
-rustc_sec018_privileged_root_count="$(jq --argjson line "$privileged_root_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_privileged_config_count="$(jq --argjson line "$privileged_config_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_unknown_config_origin_count="$(jq --argjson line "$unknown_config_origin_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_comment_only_weight_input_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec001_ignored_root_count="$(jq --argjson line "$comment_only_weight_input_line" '[.[] | select(.rule_id == "SEC001" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_weighted_tuple_count="$(jq --argjson line "$weighted_tuple_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_unweighted_after_weighted_count="$(jq --argjson line "$unweighted_after_weighted_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_whitespace_weight_attribute_count="$(jq --argjson line "$whitespace_weight_attribute_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-rustc_sec018_non_dispatchable_helper_count="$(jq --argjson line "$weighted_non_dispatchable_helper_line" '[.[] | select(.rule_id == "SEC018" and .line == $line)] | length' "$RUSTC_JSON")"
-unrelated_event_field_line="$(grep -n 'Raw(crate::Payload)' "$FIXTURE" | cut -d: -f1)"
-rustc_sec017_unrelated_event_count="$(jq --argjson line "$unrelated_event_field_line" '[.[] | select(.rule_id == "SEC017" and .line == $line)] | length' "$RUSTC_JSON")"
 bounded_storage_iteration_line="$(grep -n 'let bounded_storage_iteration =' "$FIXTURE" | cut -d: -f1)"
 rustc_sec011_bounded_iteration_count="$(jq --argjson line "$bounded_storage_iteration_line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$RUSTC_JSON")"
 literal_bound_storage_iteration_line="$(grep -n 'let literal_bound_storage_iteration =' "$FIXTURE" | cut -d: -f1)"
@@ -1973,126 +1395,29 @@ rustc_sec010_local_hook_count="$(jq --argjson line "$local_transactional_hook_li
 rustc_filtered_count="$(jq 'length' "$RUSTC_FILTERED_JSON")"
 rustc_filtered_empty_count="$(jq 'length' "$RUSTC_FILTERED_EMPTY_JSON")"
 rustc_rule_filtered_count="$(jq 'length' "$RUSTC_RULE_FILTERED_JSON")"
-rustc_rule_filtered_sec008_count="$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$RUSTC_RULE_FILTERED_JSON")"
-rustc_rule_filtered_sec009_count="$(jq '[.[] | select(.rule_id == "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
-rustc_rule_filtered_other_count="$(jq '[.[] | select(.rule_id != "SEC008" and .rule_id != "SEC009")] | length' "$RUSTC_RULE_FILTERED_JSON")"
-echo "syntax SEC001 findings: $syn_sec001_count"
-echo "rustc SEC001 findings: $rustc_sec001_count"
-echo "syntax SEC002 findings: $syn_sec002_count"
-echo "rustc SEC002 findings: $rustc_sec002_count"
-echo "syntax SEC003 findings: $syn_sec003_count"
-echo "rustc SEC003 findings: $rustc_sec003_count"
+rustc_rule_filtered_sec011_count="$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$RUSTC_RULE_FILTERED_JSON")"
+rustc_rule_filtered_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC_RULE_FILTERED_JSON")"
+rustc_rule_filtered_other_count="$(jq '[.[] | select(.rule_id != "SEC011" and .rule_id != "SEC012")] | length' "$RUSTC_RULE_FILTERED_JSON")"
 echo "syntax SEC006 findings: $syn_sec006_count"
 echo "rustc SEC006 findings: $rustc_sec006_count"
-echo "syntax SEC007 findings: $syn_sec007_count"
-echo "rustc SEC007 findings: $rustc_sec007_count"
-echo "syntax SEC008 findings: $syn_sec008_count"
-echo "rustc SEC008 findings: $rustc_sec008_count"
-echo "syntax SEC009 findings: $syn_sec009_count"
-echo "rustc SEC009 findings: $rustc_sec009_count"
 echo "syntax SEC010 findings: $syn_sec010_count"
 echo "rustc SEC010 findings: $rustc_sec010_count"
 echo "syntax SEC011 findings: $syn_sec011_count"
 echo "rustc SEC011 findings: $rustc_sec011_count"
 echo "syntax SEC012 findings: $syn_sec012_count"
 echo "rustc SEC012 findings: $rustc_sec012_count"
-echo "syntax SEC013 findings: $syn_sec013_count"
-echo "rustc SEC013 findings: $rustc_sec013_count"
-echo "syntax SEC014 findings: $syn_sec014_count"
-echo "rustc SEC014 findings: $rustc_sec014_count"
 echo "syntax SEC015 findings: $syn_sec015_count"
 echo "rustc SEC015 findings: $rustc_sec015_count"
-echo "syntax SEC016 findings: $syn_sec016_count"
-echo "rustc SEC016 findings: $rustc_sec016_count"
-echo "syntax SEC017 findings: $syn_sec017_count"
-echo "rustc SEC017 findings: $rustc_sec017_count"
-echo "syntax SEC018 findings: $syn_sec018_count"
-echo "rustc SEC018 findings: $rustc_sec018_count"
 echo "rustc filtered findings: $rustc_filtered_count"
 echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
-test "$syn_sec001_count" = "0"
-test "$rustc_sec001_count" = "8"
-test "$rustc_sec001_privileged_root_count" = "0"
-test "$rustc_sec001_privileged_config_count" = "0"
-test "$rustc_sec001_unknown_config_origin_count" = "1"
-test "$rustc_sec001_conditionally_privileged_count" = "1"
-test "$rustc_sec001_bounded_input_count" = "0"
-test "$rustc_sec001_literal_bound_input_count" = "0"
-test "$rustc_sec018_fixed_bound_weight_count" = "0"
-test "$rustc_sec001_whitespace_dispatchable_count" = "1"
-test "$rustc_sec013_unrelated_storage_count" = "0"
-test "$rustc_sec002_raw_string_count" = "0"
-test "$syn_sec002_count" = "0"
-test "$rustc_sec002_count" = "3"
-test "$syn_sec003_count" = "0"
-test "$rustc_sec003_count" = "15"
-test "$rustc_sec003_clean_assignment_count" = "0"
-test "$rustc_sec003_conditional_clean_assignment_count" = "1"
-test "$rustc_sec003_branch_selected_input_count" = "1"
-test "$rustc_sec003_match_selected_input_count" = "1"
-test "$rustc_sec003_match_conditional_clean_count" = "1"
-test "$rustc_sec003_match_helper_count" = "1"
-test "$rustc_sec003_match_conditional_helper_count" = "1"
-test "$rustc_sec003_function_value_helper_count" = "1"
-test "$rustc_sec003_structural_recursive_count" = "1"
 test "$syn_sec006_count" = "0"
 test "$rustc_sec006_count" = "2"
 test "$rustc_sec006_discarded_count" = "1"
 test "$rustc_sec006_standalone_discarded_count" = "1"
 test "$rustc_sec006_checked_count" = "0"
 test "$rustc_sec006_unrelated_count" = "0"
-test "$syn_sec007_count" = "0"
-test "$rustc_sec007_count" = "1"
-test "$rustc_sec007_fallible_count" = "1"
-test "$rustc_sec007_unit_error_count" = "0"
-test "$rustc_sec007_non_result_count" = "0"
-test "$syn_sec008_count" = "0"
-test "$rustc_sec008_count" = "6"
-test "$rustc_sec008_known_ok_count" = "0"
-test "$rustc_sec008_known_some_count" = "0"
-test "$rustc_sec008_unknown_overwrite_count" = "1"
-test "$rustc_sec008_option_guarded_unwrap_count" = "0"
-test "$rustc_sec008_result_guarded_expect_count" = "0"
-test "$rustc_sec008_some_branch_unwrap_count" = "0"
-test "$rustc_sec008_some_match_unwrap_count" = "0"
-test "$rustc_sec008_some_let_unwrap_count" = "0"
-test "$rustc_sec008_ok_let_expect_count" = "0"
-test "$rustc_sec008_some_let_else_unwrap_count" = "0"
-test "$rustc_sec008_ok_let_else_expect_count" = "0"
-test "$rustc_sec008_guarded_overwrite_unwrap_count" = "1"
-test "$rustc_sec008_conditional_known_assignment_count" = "1"
-test "$rustc_sec008_match_known_assignment_count" = "1"
-test "$rustc_sec008_all_branches_known_assignment_count" = "0"
-test "$syn_sec009_count" = "0"
-test "$rustc_sec009_count" = "8"
-test "$rustc_sec009_guarded_subtraction_count" = "0"
-test "$rustc_sec009_conjunction_guarded_subtraction_count" = "0"
-test "$rustc_sec009_ensure_guarded_subtraction_count" = "0"
-test "$rustc_sec009_early_return_guarded_subtraction_count" = "0"
-test "$rustc_sec009_else_guarded_subtraction_count" = "0"
-test "$rustc_sec009_raw_division_count" = "1"
-test "$rustc_sec009_function_value_raw_count" = "1"
-test "$rustc_sec009_function_value_alias_raw_count" = "1"
-test "$rustc_sec009_conditional_function_value_raw_count" = "1"
-test "$rustc_sec009_match_function_value_raw_count" = "1"
-test "$rustc_sec009_overwritten_function_value_raw_count" = "0"
-test "$rustc_sec009_guarded_division_count" = "0"
-test "$rustc_sec009_conjunction_guarded_division_count" = "0"
-test "$rustc_sec009_ensure_guarded_division_count" = "0"
-test "$rustc_sec009_else_guarded_division_count" = "0"
-test "$rustc_sec009_positive_guarded_division_count" = "0"
-test "$rustc_sec009_match_nonzero_division_count" = "0"
-test "$rustc_sec009_match_zero_division_count" = "1"
-test "$rustc_sec009_nonzero_division_count" = "0"
-test "$rustc_sec009_nonzero_remainder_count" = "0"
-test "$rustc_val002_generic_get_count" = "1"
-test "$rustc_val002_associated_get_count" = "1"
-test "$rustc_val002_guarded_get_count" = "0"
-test "$rustc_val002_collection_length_count" = "1"
-test "$rustc_val002_nonempty_collection_length_count" = "0"
-test "$rustc_val002_else_nonempty_collection_length_count" = "0"
 test "$syn_sec010_count" = "0"
 test "$rustc_sec010_count" = "1"
 test "$rustc_sec010_unprotected_count" = "1"
@@ -2118,56 +1443,16 @@ test "$rustc_sec012_overwritten_bounded_count" = "0"
 test "$rustc_sec012_conditionally_bounded_count" = "1"
 test "$rustc_sec012_match_overwritten_bounded_count" = "1"
 test "$rustc_sec012_match_bounded_count" = "0"
-test "$syn_sec013_count" = "0"
-test "$rustc_sec013_count" = "2"
-test "$rustc_sec013_whitespace_storage_count" = "1"
-test "$syn_sec014_count" = "0"
-test "$rustc_sec014_count" = "2"
-test "$rustc_sec014_alias_count" = "1"
-test "$rustc_sec014_documented_count" = "0"
-test "$rustc_sec014_double_count" = "1"
 test "$syn_sec015_count" = "0"
 test "$rustc_sec015_count" = "1"
 test "$rustc_sec015_unguarded_count" = "1"
 test "$rustc_sec015_root_guarded_count" = "0"
 test "$rustc_sec015_unrelated_count" = "0"
-test "$syn_sec016_count" = "0"
-test "$rustc_sec016_count" = "2"
-test "$rustc_sec016_unguarded_count" = "1"
-test "$rustc_sec016_version_guarded_count" = "0"
-test "$rustc_sec016_hook_count" = "1"
-test "$rustc_sec016_unchecked_count" = "0"
-test "$rustc_sec016_unrelated_count" = "0"
-test "$syn_sec017_count" = "0"
-test "$rustc_sec017_count" = "7"
-test "$rustc_sec017_whitespace_event_count" = "1"
-test "$rustc_sec017_unemitted_event_count" = "0"
-test "$rustc_sec017_internal_payload_event_count" = "0"
-test "$rustc_sec017_helper_payload_event_count" = "1"
-test "$rustc_sec017_aliased_helper_payload_event_count" = "1"
-test "$rustc_sec017_overwritten_aliased_helper_payload_event_count" = "0"
-test "$rustc_sec017_conditional_aliased_helper_payload_event_count" = "1"
-test "$rustc_sec017_match_aliased_helper_payload_event_count" = "1"
-test "$rustc_sec017_weight_accounted_payload_event_count" = "0"
-test "$rustc_sec017_weight_accounted_helper_payload_event_count" = "0"
-test "$rustc_sec017_mixed_weight_helper_payload_event_count" = "1"
-test "$syn_sec018_count" = "0"
-test "$rustc_sec018_count" = "5"
-test "$rustc_sec018_privileged_root_count" = "0"
-test "$rustc_sec018_privileged_config_count" = "0"
-test "$rustc_sec018_unknown_config_origin_count" = "1"
-test "$rustc_sec018_comment_only_weight_input_count" = "1"
-test "$rustc_sec001_ignored_root_count" = "1"
-test "$rustc_sec018_weighted_tuple_count" = "0"
-test "$rustc_sec018_unweighted_after_weighted_count" = "0"
-test "$rustc_sec018_whitespace_weight_attribute_count" = "1"
-test "$rustc_sec018_non_dispatchable_helper_count" = "0"
-test "$rustc_sec017_unrelated_event_count" = "0"
-test "$rustc_filtered_count" = "79"
+test "$rustc_filtered_count" = "17"
 test "$rustc_filtered_empty_count" = "0"
-test "$rustc_rule_filtered_count" = "14"
-test "$rustc_rule_filtered_sec008_count" = "6"
-test "$rustc_rule_filtered_sec009_count" = "8"
+test "$rustc_rule_filtered_count" = "13"
+test "$rustc_rule_filtered_sec011_count" = "6"
+test "$rustc_rule_filtered_sec012_count" = "7"
 test "$rustc_rule_filtered_other_count" = "0"
 
 # Run additional context regressions independently so existing positive counts stay explicit.
@@ -2209,24 +1494,6 @@ pub fn wrapped_helper(values: Vec<u8>) -> Result<(), ()> {
         Ok(())
     })
 }
-#[pallet::call_index(1)] #[pallet::weight(1)]
-pub fn ignored_helper(values: Vec<u8>) -> Result<(), ()> {
-    let _ = check_len(&values);
-    for _ in values {}
-    Ok(())
-}
-#[pallet::call_index(2)] #[pallet::weight(1)]
-pub fn late_bound(values: Vec<u8>) -> Result<(), ()> {
-    for _ in &values {}
-    if values.len() > 32 { return Err(()); }
-    Ok(())
-}
-#[pallet::call_index(3)] #[pallet::weight(1)]
-pub fn conditional_bound(values: Vec<u8>, check: bool) -> Result<(), ()> {
-    if check { check_len(&values)?; }
-    for _ in values {}
-    Ok(())
-}
 #[pallet::call_index(4)] #[pallet::weight(1)]
 pub fn aliased_length(values: Vec<u8>) -> Result<(), ()> {
     let count = values.len();
@@ -2237,18 +1504,6 @@ pub fn aliased_length(values: Vec<u8>) -> Result<(), ()> {
 }
 fn successful_early_exit(values: &Vec<u8>) -> Result<(), ()> {
     if values.len() > 32 { return Ok(()); }
-    Ok(())
-}
-#[pallet::call_index(6)] #[pallet::weight(1)]
-pub fn helper_returns_success(values: Vec<u8>) -> Result<(), ()> {
-    successful_early_exit(&values)?;
-    for _ in values {}
-    Ok(())
-}
-#[pallet::call_index(5)] #[pallet::weight(1)]
-pub fn conditional_use_before_bound(values: Vec<u8>, use_values: bool) -> Result<(), ()> {
-    if use_values { for _ in &values {} }
-    if values.len() > 32 { return Err(()); }
     Ok(())
 }
 pub trait Get { fn get() -> usize; }
@@ -2266,37 +1521,18 @@ pub fn spare_capacity(values: &mut BoundedVec<u8, Limit>) {
         let _ = values.try_push(1);
     }
 }
-pub fn capacity_reused(values: &mut BoundedVec<u8, Limit>) {
-    if values.len() < Limit::get() {
-        let _ = values.try_push(1);
-        let _ = values.try_push(2); // SEC007-positive
-    }
-}
-pub fn non_strict_capacity(values: &mut BoundedVec<u8, Limit>) {
-    if values.len() <= Limit::get() {
-        let _ = values.try_push(1); // SEC007-positive
-    }
-}
-pub fn unrelated_capacity(values: &mut BoundedVec<u8, Limit>) {
-    if values.len() < OtherLimit::get() {
-        let _ = values.try_push(1); // SEC007-positive
-    }
-}
 
 pub struct Genesis;
 impl frame_support::traits::BuildGenesisConfig for Genesis {
     fn build(&self) { genesis_only(); shared_with_runtime(); exported_api(None); }
 }
 fn genesis_only() -> u8 { None::<u8>.unwrap() }
-pub(crate) fn shared_with_runtime() -> u8 { None::<u8>.unwrap() } // SEC008-positive
+pub(crate) fn shared_with_runtime() -> u8 { None::<u8>.unwrap() }
 #[pallet::call_index(20)] #[pallet::weight(1)]
 pub fn runtime_path() { shared_with_runtime(); }
-pub fn exported_api(value: Option<u8>) -> u8 { value.unwrap() } // SEC008-positive
+pub fn exported_api(value: Option<u8>) -> u8 { value.unwrap() }
 pub fn documented_proof(value: Result<u8, u8>) -> u8 {
     value.expect("the input invariant is established; qed")
-}
-pub fn debug_only_panic(value: Option<u8>) {
-    debug_assert!(value.unwrap() == 1);
 }
 
 fn ensure_signed(_: ()) -> Result<(), ()> { Ok(()) }
@@ -2315,7 +1551,7 @@ pub fn call_migration(origin: ()) -> Result<(), ()> {
 pub mod migration {
     pub fn shared() {
         for _ in super::frame_support::storage::types::StorageMap::iter() {} // SEC011-positive
-        let _ = super::frame_support::weights::RuntimeDbWeight.reads(1); // SEM006-positive
+        let _ = super::frame_support::weights::RuntimeDbWeight.reads(1);
     }
 }
 pub struct Upgrade;
@@ -2344,32 +1580,6 @@ pub mod inspection {
 }
 use frame_support::traits::EnsureOrigin;
 pub trait Config { type CreateOrigin: EnsureOrigin; type UserOrigin: EnsureOrigin; }
-#[pallet::call_index(23)] #[pallet::weight(1)]
-pub fn create_origin<T: Config>(values: Vec<u8>) -> Result<(), ()> {
-    T::CreateOrigin::ensure_origin(())?;
-    for _ in values {}
-    Ok(())
-}
-#[pallet::call_index(24)] #[pallet::weight(1)]
-pub fn user_origin<T: Config>(values: Vec<u8>) -> Result<(), ()> {
-    T::UserOrigin::ensure_origin(())?;
-    for _ in values {}
-    Ok(())
-}
-#[pallet::call_index(25)] #[pallet::weight(1)]
-pub fn truncated_length(values: Vec<u8>) -> Result<(), ()> {
-    let n = values.len() as u8;
-    if n > 32 { return Err(()); }
-    for _ in values {}
-    Ok(())
-}
-#[pallet::call_index(26)] #[pallet::weight(1)]
-pub fn truncated_u16(values: Vec<u8>) -> Result<(), ()> {
-    let n = values.len() as u16;
-    if n > 32 { return Err(()); }
-    for _ in values {}
-    Ok(())
-}
 #[pallet::call_index(27)] #[pallet::weight(1)]
 pub fn wide_length(values: Vec<u8>) -> Result<(), ()> {
     let n = values.len() as u64;
@@ -2382,41 +1592,14 @@ fn bypass_check(values: &Vec<u8>, bypass: bool) -> Result<(), ()> {
     if values.len() > 32 { return Err(()); }
     Ok(())
 }
-#[pallet::call_index(28)] #[pallet::weight(1)]
-pub fn bypass_helper(values: Vec<u8>, bypass: bool) -> Result<(), ()> {
-    bypass_check(&values, bypass)?;
-    for _ in values {}
-    Ok(())
-}
 macro_rules! defensive_user { ($value:expr) => { debug_assert!($value) }; }
-pub fn local_defensive_macro(flag: bool) { defensive_user!(flag); } // SEC002-positive
 
 RS
 CONTEXT_JSON="$WORK_DIR/context.json"
 cargo +nightly-2025-09-01 run --quiet --manifest-path "$ROOT_DIR/Cargo.toml" \
   --features rustc-driver --bin polkadot-linter-driver -- \
   '--cfg=feature="try-runtime"' "$NOISE_FIXTURE" --crate-type lib --edition 2021 --emit metadata --out-dir "$RUSTC_TARGET_DIR" > "$CONTEXT_JSON"
-for name in wrapped_helper aliased_length wide_length; do
-  line="$(grep -n "pub fn $name" "$NOISE_FIXTURE" | cut -d: -f1)"
-  test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 0
-done
-for name in ignored_helper late_bound conditional_bound conditional_use_before_bound helper_returns_success create_origin user_origin truncated_length truncated_u16 bypass_helper; do
-  line="$(grep -n "pub fn $name" "$NOISE_FIXTURE" | cut -d: -f1)"
-  test "$(jq --argjson line "$line" '[.[] | select((.rule_id == "SEC001" or .rule_id == "SEC018") and .line == $line)] | length' "$CONTEXT_JSON")" -eq 2
-done
-
-# Capacity is proven once, strictly, against the vector's actual type bound.
-test "$(jq '[.[] | select(.rule_id == "SEC007")] | length' "$CONTEXT_JSON")" -eq 3
 while IFS=: read -r line _; do
-  test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC007" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
-done < <(grep -n 'SEC007-positive' "$NOISE_FIXTURE")
-
-test "$(jq '[.[] | select(.rule_id == "SEC008")] | length' "$CONTEXT_JSON")" -eq 2
-for rule in SEC008 SEC011 SEM006 SEC002; do
-  while IFS=: read -r line _; do
-    test "$(jq --arg rule "$rule" --argjson line "$line" '[.[] | select(.rule_id == $rule and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
-  done < <(grep -n "$rule-positive" "$NOISE_FIXTURE")
-done
+  test "$(jq --argjson line "$line" '[.[] | select(.rule_id == "SEC011" and .line == $line)] | length' "$CONTEXT_JSON")" -eq 1
+done < <(grep -n "SEC011-positive" "$NOISE_FIXTURE")
 test "$(jq '[.[] | select(.rule_id == "SEC011")] | length' "$CONTEXT_JSON")" -eq 2
-test "$(jq '[.[] | select(.rule_id == "SEM006")] | length' "$CONTEXT_JSON")" -eq 1
-test "$(jq '[.[] | select(.rule_id == "SEC002")] | length' "$CONTEXT_JSON")" -eq 2

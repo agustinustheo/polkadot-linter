@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Review gate.** No shipping rule targets deprecated `#[pallet::getter]` storage getters; SEM007 (deprecated `RuntimeDebug`) and SEM008 (deprecated `sp_std`) enforce other deprecations and are not substitutes. See [SEM007](../../rules/SEM007.md), [SEM008](../../rules/SEM008.md).
+> **Linter coverage — Review gate.** No shipping rule targets deprecated `#[pallet::getter]` storage getters; the compiler's deprecation warnings are the mechanical check.
 
 ## Description
 

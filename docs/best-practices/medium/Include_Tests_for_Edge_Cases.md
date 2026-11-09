@@ -2,7 +2,7 @@
 
 **Severity**: <span style="color:gold;">Medium</span>
 
-> **Linter coverage — Partial.** Rules like TST004 (fee error-path companion), TST005 (implementation-detail assertions), and MOK001 (excessive mock setup) touch test quality, but edge-case completeness remains a human-review judgement. See [TST004](../../rules/TST004.md), [TST005](../../rules/TST005.md), [MOK001](../../rules/MOK001.md).
+> **Linter coverage — Review gate.** No shipping rule covers this; edge-case completeness is a human-review judgment. TST004, TST005 and MOK001 touched test quality and were deleted; see [What we tried and removed](../../retired-rules.md).
 
 ## Description
 
