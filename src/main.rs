@@ -93,12 +93,9 @@ struct Cli {
     #[arg(long = "toolchain", default_value = "nightly-2025-09-01")]
     toolchain: String,
 
-    /// Path to the polkadot-linter-driver binary
-    #[arg(
-        long = "driver-path",
-        default_value = "target/debug/polkadot-linter-driver"
-    )]
-    driver_path: PathBuf,
+    /// Path to the polkadot-linter-driver binary (default: next to this binary, then target/debug)
+    #[arg(long = "driver-path")]
+    driver_path: Option<PathBuf>,
 
     /// Rule IDs to run through the compiler-backed rustc driver
     #[arg(long = "compiler-backed-rules", value_delimiter = ',')]
@@ -115,6 +112,15 @@ struct Cli {
     /// Write the current findings to this baseline file and exit
     #[arg(long = "write-baseline", value_name = "PATH")]
     write_baseline: Option<PathBuf>,
+}
+
+/// The driver installed next to this binary (e.g. by `cargo install`), else the dev build.
+fn default_driver_path() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("polkadot-linter-driver")))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("target/debug/polkadot-linter-driver"))
 }
 
 fn main() {
@@ -178,10 +184,11 @@ fn main() {
     let mut results = Vec::new();
     let compiler_backed_rules =
         selected_compiler_backed_rules(cli.rules.as_deref(), &cli.compiler_backed_rules, &config);
+    let driver_path = cli.driver_path.clone().unwrap_or_else(default_driver_path);
     let compiler_driver_available = cli.syntax_only
         || compiler_backed_rules.is_empty()
         || manifest_path.is_none()
-        || cli.driver_path.is_file();
+        || driver_path.is_file();
     if !cli.syntax_only
         && !compiler_backed_rules.is_empty()
         && manifest_path.is_none()
@@ -194,13 +201,13 @@ fn main() {
         if cli.no_syntax {
             eprintln!(
                 "Compiler-backed analysis requires {}. Build it with `cargo +nightly-2025-09-01 build --features rustc-driver --bin polkadot-linter-driver`.",
-                cli.driver_path.display()
+                driver_path.display()
             );
             process::exit(2);
         }
         eprintln!(
             "Compiler-backed analysis skipped because {} is unavailable; emitting syntax diagnostics only.",
-            cli.driver_path.display()
+            driver_path.display()
         );
     }
     if !cli.no_syntax {
@@ -218,7 +225,7 @@ fn main() {
             let options = rustc_pipeline::RustcPipelineOptions {
                 manifest_path: manifest_path.clone(),
                 packages: cli.packages.clone(),
-                driver_path: cli.driver_path.clone(),
+                driver_path: driver_path.clone(),
                 toolchain: cli.toolchain.clone(),
                 target_dir: cli.target_dir.clone(),
                 rules: compiler_backed_rules.clone(),
