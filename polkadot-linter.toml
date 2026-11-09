@@ -22,13 +22,6 @@ dev_runtime_packages = [
 ]
 dev_runtime_tokens = ["dev", "development"]
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]
-unit_weight_info_allowlist = [
-	"pallet_babe",
-	"pallet_beefy",
-	"pallet_grandpa",
-]
-flag_substrate_weight = false
-substrate_weight_severity = "advisory"
 
 [terminology]
 severity = "advisory"

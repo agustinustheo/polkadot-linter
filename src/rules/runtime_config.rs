@@ -29,7 +29,6 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    rc::Rc,
     sync::Arc,
 };
 
@@ -53,24 +52,6 @@ use crate::{
         strip_expr_wrappers,
     },
 };
-
-fn manifest(path: &Path) -> Option<Rc<toml::Value>> {
-    scan_cached(path.to_path_buf(), |path| {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .map(Rc::new)
-    })
-}
-
-fn workspace_root(crate_root: &Path) -> &Path {
-    crate_root
-        .ancestors()
-        .find(|dir| {
-            manifest(&dir.join("Cargo.toml")).is_some_and(|cargo| cargo.get("workspace").is_some())
-        })
-        .unwrap_or(crate_root)
-}
 
 // ---------------------------------------------------------------------------
 // Runtime crate discovery and scope
@@ -98,10 +79,6 @@ struct RuntimeCrate {
     /// The library target and the production modules reachable from it declare
     /// exactly one FRAME runtime.
     is_runtime: bool,
-    /// Benchmark entry paths (`::` segments) collected from every non-test
-    /// `define_benchmarks!` reachable from the library target. `None` when the
-    /// runtime has no `define_benchmarks!` at all.
-    benchmarks: Option<HashSet<Vec<String>>>,
     /// Gate of every source file reachable from the library target through
     /// `mod` declarations, keyed by canonical path.
     modules: HashMap<PathBuf, Gate>,
@@ -130,13 +107,8 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
         if let Some(file) = ast {
             declarations.count(&production_ast(file), false);
         }
-        let benchmarks = ast.and_then(|file| {
-            let mut keys = HashSet::new();
-            collect_define_benchmarks(&strip_ast(file, Gate::Test), &mut keys).then_some(keys)
-        });
         return Arc::new(RuntimeCrate {
             is_runtime: declarations.is_runtime(),
-            benchmarks,
             pallets: declarations.pallets,
             ..RuntimeCrate::default()
         });
@@ -179,24 +151,10 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
     }
     let is_runtime = declarations.is_runtime();
 
-    let benchmarks = if is_runtime {
-        let mut keys = HashSet::new();
-        let mut found = false;
-        for module in modules.files.values() {
-            if module.gate != Gate::Test {
-                found |= collect_define_benchmarks(&strip_ast(&module.file, Gate::Test), &mut keys);
-            }
-        }
-        found.then_some(keys)
-    } else {
-        None
-    };
-
     RuntimeCrate {
         package,
         root: Some(root.to_path_buf()),
         is_runtime,
-        benchmarks,
         pallets: declarations.pallets,
         modules: modules
             .files
@@ -817,12 +775,8 @@ fn for_each_runtime_impl(file: &SynFile, mut f: impl FnMut(&ItemImpl, &[String])
 }
 
 // ---------------------------------------------------------------------------
-// RTC001: placeholder WeightInfo in a runtime Config impl
+// RTC001: test WeightInfo in a runtime Config impl
 // ---------------------------------------------------------------------------
-
-/// RTC001-only dev-runtime name tokens: test networks whose placeholder
-/// weights are not a production risk. The other RTC rules still lint them.
-const PARITY_TEST_NETWORKS: [&str; 3] = ["rococo", "glutton", "paseo"];
 
 pub struct PlaceholderWeightInfoInRuntime;
 
@@ -838,263 +792,24 @@ impl LintRule for PlaceholderWeightInfoInRuntime {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        let settings = &config.runtime_config;
-        let krate = runtime_scope(ctx, settings)?;
-        let tokens = PARITY_TEST_NETWORKS.map(String::from);
-        let named = |name: &str| has_name_token(name, &tokens);
-        let dir = krate.root.as_deref().and_then(Path::file_name);
-        if !settings.include_dev_runtimes
-            && (dir.is_some_and(|dir| named(&dir.to_string_lossy()))
-                || krate.package.as_deref().is_some_and(named))
-        {
-            return None;
-        }
+        runtime_scope(ctx, &config.runtime_config)?;
         let file = production_ast(ctx.ast.as_ref()?);
         let severity = config.rule_severity(self.id(), Severity::Warning);
-        let substrate_weight_severity = config
-            .rules
-            .severity
-            .get(self.id())
-            .and_then(|severity| severity.parse().ok())
-            .or_else(|| settings.substrate_weight_severity.parse().ok())
-            .unwrap_or(Severity::Advisory);
 
         let mut diagnostics = Vec::new();
         for_each_runtime_impl(&file, |item_impl, trait_path| {
             let pallet = trait_path[..trait_path.len() - 1].join("::");
-            let allowlisted = trait_path[..trait_path.len() - 1]
-                .iter()
-                .any(|segment| settings.unit_weight_info_allowlist.contains(segment));
-            // A pallet with no calls (hook- or extension-only) bound to placeholder weights.
-            let no_calls = || {
-                krate
-                    .root
-                    .as_deref()
-                    .is_some_and(|root| pallet_without_calls(root, &trait_path[0]))
-            };
-
             for item_type in impl_types(item_impl) {
-                let ident = item_type.ident.to_string();
-                if !is_weight_info_ident(&ident) {
-                    continue;
-                }
-                let line = line_of(&item_type.ty);
-                if is_unit_type(&item_type.ty) {
-                    if allowlisted || no_calls() {
-                        continue;
-                    }
-                    diagnostics.push(diagnostic(
-                        self,
-                        ctx,
-                        severity,
-                        line,
-                        format!("`{pallet}::Config for Runtime` sets `type {ident} = ();`"),
-                        "The unit `()` implementation of a pallet's `WeightInfo` exists for tests and \
-                         backwards compatibility. For most FRAME pallets it carries the SDK's reference \
-                         weights (benchmarked on reference hardware with `RocksDbWeight`), not weights \
-                         benchmarked for this runtime's configuration and storage; a few pallets return \
-                         zero or flat weights there. Extrinsics can therefore be mis-weighted and \
-                         under-charged.",
-                        "Add the pallet to `define_benchmarks!`, generate runtime weights with \
-                         frame-omni-bencher, and bind `type WeightInfo = weights::<pallet>::WeightInfo<Runtime>;`.",
-                    ));
+                if !is_weight_info_ident(&item_type.ident.to_string()) {
                     continue;
                 }
                 let Some(path) = type_path(&item_type.ty) else {
                     continue;
                 };
-                let idents = path_idents(path);
-                if idents
+                if !path_idents(path)
                     .iter()
                     .any(|segment| segment.starts_with("TestWeightInfo"))
                 {
-                    diagnostics.push(diagnostic(
-                        self,
-                        ctx,
-                        severity,
-                        line,
-                        format!(
-                            "`{pallet}::Config for Runtime` uses test weights `{}`",
-                            path.to_token_stream().to_string().replace(' ', "")
-                        ),
-                        "`TestWeightInfo` types are placeholders for mocks and unit tests; they are \
-                         not benchmarked and return zero or flat, arbitrary weights.",
-                        "Benchmark the pallet in this runtime via `define_benchmarks!` and bind the \
-                         generated `weights::<pallet>::WeightInfo<Runtime>`.",
-                    ));
-                    continue;
-                }
-                let upstream = !matches!(
-                    idents.first().map(String::as_str),
-                    Some("crate" | "self" | "super" | "weights")
-                );
-                if settings.flag_substrate_weight
-                    && upstream
-                    && idents.iter().any(|segment| segment == "SubstrateWeight")
-                {
-                    diagnostics.push(diagnostic(
-                        self,
-                        ctx,
-                        substrate_weight_severity,
-                        line,
-                        format!(
-                            "`{pallet}::Config for Runtime` uses upstream reference weights `{}`",
-                            path.to_token_stream().to_string().replace(' ', "")
-                        ),
-                        "A pallet's `SubstrateWeight` was benchmarked on the SDK's reference runtime, \
-                         not on this runtime's configuration, storage layout, or hardware profile.",
-                        "Benchmark the pallet in this runtime and bind the generated weights, or \
-                         document why the reference weights are acceptable.",
-                    ));
-                }
-            }
-        });
-        non_empty(diagnostics)
-    }
-}
-
-/// The source of the runtime's path dependency `krate` (direct or through
-/// `[workspace.dependencies]`) declares no `#[pallet::call]`.
-fn pallet_without_calls(runtime_root: &Path, krate: &str) -> bool {
-    scan_cached(
-        (runtime_root.to_path_buf(), krate.to_owned()),
-        |(root, krate)| {
-            let dir = (|| {
-                let cargo = manifest(&root.join("Cargo.toml"))?;
-                let deps = cargo.get("dependencies")?.as_table()?;
-                let (alias, dep) = deps.iter().find(|(a, _)| a.replace('-', "_") == *krate)?;
-                let (declared, base) =
-                    if dep.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
-                        let workspace = workspace_root(root);
-                        let cargo = manifest(&workspace.join("Cargo.toml"))?;
-                        (
-                            cargo
-                                .get("workspace")?
-                                .get("dependencies")?
-                                .get(alias)?
-                                .clone(),
-                            workspace,
-                        )
-                    } else {
-                        (dep.clone(), root.as_path())
-                    };
-                Some(base.join(declared.get("path")?.as_str()?))
-            })();
-            let mut sources = walkdir::WalkDir::new(dir.unwrap_or_default().join("src"))
-                .into_iter()
-                .flatten()
-                .filter(|e| e.path().extension().is_some_and(|ext| ext == "rs"))
-                .filter_map(|e| fs::read_to_string(e.path()).ok())
-                .peekable();
-            sources.peek().is_some()
-                && sources.all(|s| !s.contains("pallet::call") && !s.contains("decl_module!"))
-        },
-    )
-}
-
-// ---------------------------------------------------------------------------
-// RTC002: runtime-local weights bound for a pallet missing from define_benchmarks!
-// ---------------------------------------------------------------------------
-
-/// Record the entry path segments of every `define_benchmarks!` invocation in
-/// the file. Returns whether any invocation was found.
-fn collect_define_benchmarks(file: &SynFile, keys: &mut HashSet<Vec<String>>) -> bool {
-    struct Collector<'a> {
-        keys: &'a mut HashSet<Vec<String>>,
-        found: bool,
-    }
-    impl<'ast> Visit<'ast> for Collector<'_> {
-        fn visit_macro(&mut self, mac: &'ast Macro) {
-            if path_last_ident(&mac.path).as_deref() == Some("define_benchmarks") {
-                self.found = true;
-                for tree in mac.tokens.clone() {
-                    let TokenTree::Group(group) = tree else {
-                        continue;
-                    };
-                    if group.delimiter() != Delimiter::Bracket {
-                        continue;
-                    }
-                    let segments = group
-                        .stream()
-                        .into_iter()
-                        .take_while(|tree| !matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ','))
-                        .filter_map(|tree| match tree {
-                            TokenTree::Ident(ident) => Some(ident.to_string()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
-                    if !segments.is_empty() {
-                        self.keys.insert(segments);
-                    }
-                }
-            }
-            visit::visit_macro(self, mac);
-        }
-    }
-    let mut collector = Collector { keys, found: false };
-    collector.visit_file(file);
-    collector.found
-}
-
-/// Two module paths name the same module when one is a `::` segment suffix of
-/// the other (`parachains::paras` and `polkadot_runtime_parachains::paras`).
-/// `pallet_balances` does not match `custom_pallet_balances`.
-fn paths_match(a: &[String], b: &[String]) -> bool {
-    a.ends_with(b) || b.ends_with(a)
-}
-
-/// `weights::<module>::...` or `crate::weights::<module>::...`; returns the
-/// module name.
-fn local_weights_module(path: &syn::Path) -> Option<String> {
-    let idents = path_idents(path);
-    let start = match idents.first().map(String::as_str) {
-        Some("weights") => 0,
-        Some("crate" | "self" | "super")
-            if idents.get(1).map(String::as_str) == Some("weights") =>
-        {
-            1
-        }
-        _ => return None,
-    };
-    // `weights::<module>::<Type>` needs at least a module and a type.
-    (idents.len() >= start + 3).then(|| idents[start + 1].clone())
-}
-
-pub struct PalletMissingFromDefineBenchmarks;
-
-impl LintRule for PalletMissingFromDefineBenchmarks {
-    fn id(&self) -> &str {
-        "RTC002"
-    }
-    fn name(&self) -> &str {
-        "pallet-missing-from-define-benchmarks"
-    }
-    fn family(&self) -> &str {
-        "runtime-config"
-    }
-
-    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        let krate = runtime_scope(ctx, &config.runtime_config)?;
-        let benchmarks = krate.benchmarks.as_ref()?;
-        let file = production_ast(ctx.ast.as_ref()?);
-        let severity = config.rule_severity(self.id(), Severity::Warning);
-
-        let mut diagnostics = Vec::new();
-        for_each_runtime_impl(&file, |item_impl, trait_path| {
-            let pallet_segments = &trait_path[..trait_path.len() - 1];
-            for item_type in impl_types(item_impl) {
-                if !is_weight_info_ident(&item_type.ident.to_string()) {
-                    continue;
-                }
-                let Some(module) = type_path(&item_type.ty).and_then(local_weights_module) else {
-                    continue;
-                };
-                // Weight modules flatten the benchmarked path:
-                // `weights::polkadot_runtime_parachains_disputes`.
-                let covered = benchmarks
-                    .iter()
-                    .any(|key| paths_match(key, pallet_segments) || key.join("_") == module);
-                if covered {
                     continue;
                 }
                 diagnostics.push(diagnostic(
@@ -1103,15 +818,13 @@ impl LintRule for PalletMissingFromDefineBenchmarks {
                     severity,
                     line_of(&item_type.ty),
                     format!(
-                        "`{}::Config for Runtime` binds runtime weights `weights::{module}`, but the \
-                         pallet is missing from `define_benchmarks!`",
-                        pallet_segments.join("::"),
+                        "`{pallet}::Config for Runtime` uses test weights `{}`",
+                        path.to_token_stream().to_string().replace(' ', "")
                     ),
-                    "Runtime-local weight files are regenerated only for pallets listed in \
-                     `define_benchmarks!`. A pallet missing from the list keeps stale weights after \
-                     its code, its configuration, or the reference hardware changes.",
-                    "Add `[<pallet>, <PalletName>]` to the runtime's `define_benchmarks!` block so \
-                     the weight file is regenerated with the rest of the runtime.",
+                    "`TestWeightInfo` types are placeholders for mocks and unit tests; they are \
+                     not benchmarked and return zero or flat, arbitrary weights.",
+                    "Benchmark the pallet in this runtime via `define_benchmarks!` and bind the \
+                     generated `weights::<pallet>::WeightInfo<Runtime>`.",
                 ));
             }
         });
@@ -1447,7 +1160,7 @@ impl LintRule for XcmFeesWaived {
             ctx,
             config,
             XcmFeeFinding::Waived,
-            Severity::Error,
+            Severity::Warning,
             "XCM delivery fees are the congestion control for cross-chain messaging. When they are \
              waived or priced at zero, any account can fill the outbound XCMP/UMP/DMP queues for \
              free, delaying or dropping other users' messages and exhausting storage.",
@@ -1822,14 +1535,8 @@ impl ZeroDepositConfig {
 // RTC005: insecure collective-flip randomness in the runtime
 // ---------------------------------------------------------------------------
 
-/// Collective-flip crate names: the current one and the pre-rename
-/// `pallet_randomness_collective_flip`.
-const INSECURE_RANDOMNESS_PALLETS: &[&str] = &[
-    "pallet_insecure_randomness_collective_flip",
-    "pallet_randomness_collective_flip",
-];
-
-/// The crates above plus the conventional runtime pallet name.
+/// Collective-flip crate names (current and pre-rename) and the conventional
+/// runtime pallet name.
 const INSECURE_RANDOMNESS: &[&str] = &[
     "pallet_insecure_randomness_collective_flip",
     "pallet_randomness_collective_flip",
@@ -1918,18 +1625,17 @@ impl LintRule for InsecureRandomnessInRuntime {
             fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
 
             fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
-                // `impl pallet_insecure_randomness_collective_flip::Config for Runtime {}`
-                // is reported through its runtime declaration; only inspect its items.
+                // Only consumer bindings are reported, not the pallet's own `Config`
+                // impl; `pallet_contracts` only feeds the deprecated `seal_random`.
+                if item_impl.trait_.as_ref().is_some_and(|(_, path, _)| {
+                    path.segments
+                        .first()
+                        .is_some_and(|s| s.ident == "pallet_contracts")
+                }) {
+                    return;
+                }
                 for item in &item_impl.items {
                     self.visit_impl_item(item);
-                }
-            }
-
-            fn visit_macro(&mut self, mac: &'ast Macro) {
-                if path_last_ident(&mac.path).is_some_and(|name| is_construct_runtime(&name)) {
-                    for entry in construct_runtime_entries(mac.tokens.clone()) {
-                        self.record(entry.into_iter().collect(), INSECURE_RANDOMNESS_PALLETS);
-                    }
                 }
             }
 
@@ -1938,7 +1644,14 @@ impl LintRule for InsecureRandomnessInRuntime {
             }
 
             fn visit_item_type(&mut self, item: &'ast ItemType) {
-                self.record(item.ty.to_token_stream(), INSECURE_RANDOMNESS);
+                // `#[runtime::pallet_index(..)] pub type X = ..;` declares the pallet.
+                if !item
+                    .attrs
+                    .iter()
+                    .any(|a| a.path().segments[0].ident == "runtime")
+                {
+                    self.record(item.ty.to_token_stream(), INSECURE_RANDOMNESS);
+                }
             }
         }
 
@@ -2256,15 +1969,20 @@ impl LintRule for ProxyFilterFailsOpen {
                     _ => None,
                 })
             };
-            // (a) deny-list arms that leave a value-moving pallet reachable.
+            // (a) deny-list arms that already deny a value-moving pallet (so they are
+            // meant to stop transfers) but leave another one reachable.
             let mut proxies: Vec<(String, Calls)> = Vec::new();
             for arm in fn_arms("filter").unwrap_or_default() {
                 let calls = filter_calls(&arm.body);
-                if let Calls::Deny(denied) = &calls {
+                let denies = |name: &String| match &calls {
+                    Calls::Deny(denied) => denied.iter().any(|(pallet, _)| pallet == name),
+                    _ => false,
+                };
+                if krate.pallets.iter().any(|(name, _)| denies(name)) {
                     let missing: Vec<String> = krate
                         .pallets
                         .iter()
-                        .filter(|(name, _)| !denied.iter().any(|(pallet, _)| pallet == name))
+                        .filter(|(name, _)| !denies(name))
                         .map(|(name, krate)| format!("{name} ({krate})"))
                         .collect();
                     if !missing.is_empty() {

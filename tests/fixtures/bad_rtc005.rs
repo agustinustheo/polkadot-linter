@@ -6,7 +6,7 @@ use pallet_insecure_randomness_collective_flip as collective_flip;
 
 impl pallet_insecure_randomness_collective_flip::Config for Runtime {}
 
-impl pallet_contracts::Config for Runtime {
+impl pallet_lottery::Config for Runtime {
 	type Randomness = RandomnessCollectiveFlip;
 }
 

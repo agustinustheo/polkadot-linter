@@ -75,7 +75,7 @@ pub struct TerminologyConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeConfigConfig {
     /// Severity for every rule of this family. Unset by default, so each rule
-    /// keeps its own default (RTC003 is error, the others warning).
+    /// keeps its own default (RTC009 is error, the others warning).
     pub severity: Option<String>,
     /// Also lint runtimes listed in `dev_runtime_packages`
     pub include_dev_runtimes: bool,
@@ -87,12 +87,13 @@ pub struct RuntimeConfigConfig {
     /// Package or crate-directory name tokens (split on `-`/`_`) that mark a
     /// test runtime, which is always skipped. Set to `[]` to lint them.
     pub test_runtime_tokens: Vec<String>,
-    /// Pallets whose `impl WeightInfo for ()` is the intended production weight source
-    pub unit_weight_info_allowlist: Vec<String>,
-    /// Report upstream `<pallet>::weights::SubstrateWeight<Runtime>` bindings (RTC001)
-    pub flag_substrate_weight: bool,
-    /// Severity for the `SubstrateWeight` variant of RTC001
-    pub substrate_weight_severity: String,
+    /// Retired RTC001 keys, accepted so 0.2.0 configs still load.
+    #[serde(skip_serializing)]
+    unit_weight_info_allowlist: Option<toml::Value>,
+    #[serde(skip_serializing)]
+    flag_substrate_weight: Option<toml::Value>,
+    #[serde(skip_serializing)]
+    substrate_weight_severity: Option<toml::Value>,
 }
 
 impl Default for RuntimeConfigConfig {
@@ -115,13 +116,9 @@ impl Default for RuntimeConfigConfig {
                 "mock".to_string(),
                 "mocks".to_string(),
             ],
-            unit_weight_info_allowlist: vec![
-                "pallet_babe".to_string(),
-                "pallet_beefy".to_string(),
-                "pallet_grandpa".to_string(),
-            ],
-            flag_substrate_weight: false,
-            substrate_weight_severity: "advisory".to_string(),
+            unit_weight_info_allowlist: None,
+            flag_substrate_weight: None,
+            substrate_weight_severity: None,
         }
     }
 }
@@ -175,6 +172,22 @@ impl Config {
                 eprintln!("warning: config section [{section}] is no longer used: its rules were retired, see docs/retired-rules.md");
             }
         }
+        let runtime = &config.runtime_config;
+        for (key, value) in [
+            (
+                "unit_weight_info_allowlist",
+                &runtime.unit_weight_info_allowlist,
+            ),
+            ("flag_substrate_weight", &runtime.flag_substrate_weight),
+            (
+                "substrate_weight_severity",
+                &runtime.substrate_weight_severity,
+            ),
+        ] {
+            if value.is_some() {
+                eprintln!("warning: config key runtime_config.{key} is no longer used: RTC001 reports only TestWeightInfo, see docs/retired-rules.md");
+            }
+        }
         // A `[rules]` table overrides the bundled per-rule entries instead of
         // replacing them, so default-off rules stay off unless re-enabled.
         let defaults = Config::default().rules;
@@ -201,10 +214,6 @@ impl Config {
         for (section, severity) in [
             ("test_smells.severity", &self.test_smells.severity),
             ("terminology.severity", &self.terminology.severity),
-            (
-                "runtime_config.substrate_weight_severity",
-                &self.runtime_config.substrate_weight_severity,
-            ),
         ] {
             self.validate_severity(section, severity)?;
         }
@@ -298,11 +307,12 @@ mod tests {
             &path,
             "[validation_order]\nseverity = \"warning\"\nheavy_operations = [\"::get(\"]\n\n\
              [mock_usage]\nmax_mock_ratio = 3.0\n\n\
-             [benchmarking]\nverification_patterns = [\"verify\"]\n",
+             [benchmarking]\nverification_patterns = [\"verify\"]\n\n\
+             [runtime_config]\nunit_weight_info_allowlist = []\nflag_substrate_weight = false\n",
         )
         .unwrap();
         let config = Config::load(&path).expect("retired sections are ignored, not rejected");
-        assert!(config.rule_enabled("SEC011"));
+        assert!(config.rule_enabled("SEC012"));
     }
 
     #[test]

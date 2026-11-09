@@ -2,10 +2,11 @@
 
 We wrote 64 rules. We measured each rule on real projects and judged each
 finding by hand. A finding counts only if an engineer would fix it at a
-reasonable cost. The 33 rules below failed this test, so we deleted them. The
+reasonable cost. The 35 rules below failed this test, so we deleted them. The
 table tells you how to catch each problem instead.
 
-All 33 rules were deleted in 0.2.0
+RTC002 and SEM014 were deleted in 0.3.0, after a run on 14 live parachain
+repositories. The other 33 were deleted in 0.2.0
 ([#36](https://github.com/agustinustheo/polkadot-linter/pull/36)). Rules
 marked † also had an old syntax copy. That copy was deleted earlier, in
 [#30](https://github.com/agustinustheo/polkadot-linter/pull/30). Per-rule
@@ -14,15 +15,17 @@ numbers are in
 
 | Rule | What it checked | Why we removed it | Catch it instead |
 | --- | --- | --- | --- |
-| BEN001 | A weight function with no benchmark | It could not find benchmarks in companion crates or helpers | RTC002; `impl_benchmark_test_suite!` tests in CI |
+| BEN001 | A weight function with no benchmark | It could not find benchmarks in companion crates or helpers | `impl_benchmark_test_suite!` tests in CI |
 | BEN002 | A benchmark with no `verify` block | Real, but almost never worth a fix (IC: 0 of 9) | Benchmark tests (`cargo test --features runtime-benchmarks`) |
-| BEN003 | A call that no benchmark measures | It could not follow weight helpers (IC: 9 of 12 wrong) | RTC001, RTC002; manual code review of `#[pallet::weight]` |
+| BEN003 | A call that no benchmark measures | It could not follow weight helpers (IC: 9 of 12 wrong) | RTC001; manual code review of `#[pallet::weight]` |
 | TST001 | `assert!(x.is_err())` in place of `assert_noop!` | Style only; many results were not dispatch errors | Team style guide |
 | TST003 | `use` inside a test body | Style only (0 of 10 worth a fix) | Team style guide |
 | TST004 | No test that the error path pays fees | Errors already pay by default (0 of 15) | Unit tests; manual code review |
 | TST005 | Asserts on fields such as `inner` or `state` | A field name does not show if it is private (10 of 10 wrong) | Manual code review |
 | TST006 | A call that writes storage but emits no event | Events come from helpers; seldom worth a fix (IC: 0 of 8) | `System::assert_last_event` in unit tests; manual code review |
 | MOK001 | Too much mock setup in a test | It counted harness calls as mocks (10 of 10 wrong) | Manual code review |
+| RTC002 | Runtime weights for a pallet missing from `define_benchmarks!` (removed in 0.3.0) | Live chains: 2 of 16 worth a fix, both low; 2 wrong | Regenerate all weights in CI; check `define_benchmarks!` when you add a pallet |
+| SEM014 | Offchain-worker logs with no `target:` (removed in 0.3.0) | Logging style; live chains: 0 of 12 worth a fix | Team style guide |
 | SEC001 † | An unbounded `Vec` call parameter | Privileged origins and length fees already limit it | `BoundedVec`; benchmarks with a length component |
 | SEC002 † | `debug_assert!` on runtime paths | Almost all were correct precondition checks | FRAME `defensive!`; manual code review |
 | SEC003 † | Decoding of recursive types with no depth limit | It read ABI decoding as SCALE; it missed stored bytes | Fuzzing (`substrate-runtime-fuzzer`); manual or LLM-assisted review for `decode_with_depth_limit` |

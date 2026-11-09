@@ -1,4 +1,4 @@
-// RTC001 positive fixture: placeholder weights bound in a production runtime.
+// RTC001 positive fixture: test weights bound in a production runtime.
 // Mirrors SRL OpenZeppelin runtime templates 2024-04 §3.2.3, InvArch 2024 §5.4
 // and Hyperbridge 2024 §6.4.
 
@@ -9,15 +9,15 @@ impl pallet_xcm::Config for Runtime {
 
 impl pallet_message_queue::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
-	type WeightInfo = ();
+	type WeightInfo = pallet_message_queue::TestWeightInfo;
 }
 
 impl pallet_collective::Config<CouncilCollective> for Runtime {
-	type WeightInfo = ();
+	type WeightInfo = TestWeightInfo;
 }
 
 impl frame_system::Config for Runtime {
-	type SystemWeightInfo = ();
+	type SystemWeightInfo = frame_system::TestWeightInfo;
 }
 
 construct_runtime!(

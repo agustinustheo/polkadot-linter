@@ -9,8 +9,7 @@ polkadot-fellows/runtimes. All RTC rules use the syntax engine.
 | Rule | Finds | Severity |
 | --- | --- | --- |
 | [RTC001](RTC001.md) | Placeholder `WeightInfo` in a runtime | warning |
-| [RTC002](RTC002.md) | Pallet missing from `define_benchmarks!` | warning |
-| [RTC003](RTC003.md) | XCM delivery is free | error |
+| [RTC003](RTC003.md) | XCM delivery is free | warning |
 | [RTC004](RTC004.md) | Zero existential or storage deposit (off by default) | warning |
 | [RTC005](RTC005.md) | Collective-flip randomness | warning |
 | [RTC006](RTC006.md) | XCM fees burned | warning |
@@ -45,8 +44,7 @@ four conditions are true:
 
 The linter checks all other runtimes. This includes the SDK templates, because
 teams copy them into production. It also includes Westend, Rococo and the
-system parachains. (RTC001 also skips runtimes with a `rococo` or `glutton`
-name token.)
+system parachains.
 
 ## Configuration
 
@@ -63,9 +61,6 @@ dev_runtime_packages = [
 ]
 dev_runtime_tokens = ["dev", "development"]
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]  # [] checks all runtimes
-unit_weight_info_allowlist = ["pallet_babe", "pallet_beefy", "pallet_grandpa"]  # RTC001
-flag_substrate_weight = false          # RTC001
-substrate_weight_severity = "advisory" # RTC001
 ```
 
 Add your own dev and testnet runtimes (for example `moonbase-runtime`) to

@@ -519,64 +519,6 @@ fn production_rules_skip_non_production_cfg_but_keep_production_code() {
 }
 
 // ==========================================================================
-// SEM014: SubmitTransaction logs should use LOG_TARGET
-// ==========================================================================
-#[test]
-fn sem014_detects_missing_log_target() {
-    let bad = include_str!("fixtures/bad_sem014.rs");
-    let diags = check_fixture("pallets/foo/src/lib.rs", bad);
-    assert!(
-        has_rule(&diags, "SEM014"),
-        "SEM014 should fire when SubmitTransaction logging omits target: LOG_TARGET"
-    );
-}
-
-#[test]
-fn sem014_allows_multiline_log_target() {
-    let good = include_str!("fixtures/good_sem014.rs");
-    let diags = check_fixture("pallets/foo/src/lib.rs", good);
-    assert!(
-        !has_rule(&diags, "SEM014"),
-        "SEM014 should NOT fire when target: LOG_TARGET is present on a following line"
-    );
-}
-
-#[test]
-fn sem014_ignores_unrelated_logs() {
-    let code = r#"
-fn log_other_issue() {
-    log::warn!("background cleanup skipped");
-}
-"#;
-    let diags = check_fixture("pallets/foo/src/lib.rs", code);
-    assert!(
-        !has_rule(&diags, "SEM014"),
-        "SEM014 should ignore log macros unrelated to SubmitTransaction"
-    );
-}
-
-#[test]
-fn sem014_handles_wrapped_unsigned_submission_and_long_log_target() {
-    let code = r#"
-fn submit() {
-    let transaction = SubmitTransaction::<T>::new(payload);
-    transaction
-        .submit_unsigned_transaction()
-        .expect("submission succeeds");
-    log::warn!(
-        target: LOG_TARGET,
-        "unable to submit transaction with a deliberately long and detailed diagnostic message",
-    );
-}
-"#;
-    let diags = check_fixture("pallets/foo/src/lib.rs", code);
-    assert!(
-        !has_rule(&diags, "SEM014"),
-        "SEM014 should associate rustfmt-wrapped unsigned submission with its full log macro: {diags:?}"
-    );
-}
-
-// ==========================================================================
 // SEM015: #[pallet::authorize] should have #[pallet::weight_of_authorize]
 // ==========================================================================
 #[test]
@@ -680,7 +622,7 @@ fn rtc_scan(
 
 const RTC_RUNTIME_LIB: &str = r#"
 impl pallet_sudo::Config for Runtime {
-    type WeightInfo = ();
+    type WeightInfo = TestWeightInfo;
 }
 
 construct_runtime!(
@@ -737,27 +679,6 @@ fn rtc001_allows_benchmarked_allowlisted_and_test_weights() {
 }
 
 #[test]
-fn rtc001_reports_substrate_weight_as_advisory_when_enabled() {
-    let mut config = polkadot_linter::config::Config::default();
-    config.runtime_config.flag_substrate_weight = true;
-    let diags = check_fixture_with_config(
-        "runtime/src/lib.rs",
-        include_str!("fixtures/good_rtc001.rs"),
-        &config,
-    );
-    let findings = diags
-        .iter()
-        .filter(|diagnostic| diagnostic.rule_id == "RTC001")
-        .collect::<Vec<_>>();
-    assert_eq!(findings.len(), 1, "{diags:?}");
-    assert_eq!(findings[0].line, 19);
-    assert_eq!(
-        findings[0].severity,
-        polkadot_linter::diagnostics::Severity::Advisory
-    );
-}
-
-#[test]
 fn rtc_rules_skip_mock_and_test_paths() {
     let bad = include_str!("fixtures/bad_rtc001.rs");
     for path in [
@@ -786,57 +707,6 @@ impl pallet_xcm::Config for Runtime {
 }
 
 #[test]
-fn rtc002_detects_local_weights_missing_from_define_benchmarks() {
-    let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc002.rs"));
-    assert_eq!(rtc_lines(&diags, "RTC002"), vec![10, 14, 20], "{diags:?}");
-}
-
-#[test]
-fn rtc002_accepts_benchmarked_pallets() {
-    let diags = check_fixture(
-        "runtime/src/lib.rs",
-        include_str!("fixtures/good_rtc002.rs"),
-    );
-    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
-}
-
-#[test]
-fn rtc002_reads_define_benchmarks_from_sibling_files_and_requires_it() {
-    let configs = r#"
-impl pallet_balances::Config for Runtime {
-    type WeightInfo = weights::pallet_balances::WeightInfo<Runtime>;
-}
-impl pallet_sudo::Config for Runtime {
-    type WeightInfo = weights::pallet_sudo::WeightInfo<Runtime>;
-}
-"#;
-    let lib = "mod configs;\nmod benchmarks;\nconstruct_runtime!(pub enum Runtime { Balances: pallet_balances = 10 });\n";
-    let benches = "frame_benchmarking::define_benchmarks!(\n    [pallet_balances, Balances]\n);\n";
-    let krate = rtc_runtime_crate(
-        "example-runtime",
-        &[
-            ("src/lib.rs", lib),
-            ("src/configs/mod.rs", configs),
-            ("src/benchmarks.rs", benches),
-        ],
-    );
-    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
-    assert_eq!(
-        rtc_findings(&diags),
-        vec!["RTC002:6".to_string()],
-        "{diags:?}"
-    );
-
-    // Without any define_benchmarks! the precondition is not met.
-    let krate = rtc_runtime_crate(
-        "example-runtime",
-        &[("src/lib.rs", lib), ("src/configs/mod.rs", configs)],
-    );
-    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
-    assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
-}
-
-#[test]
 fn rtc003_detects_waived_xcm_fees() {
     let diags = check_fixture(
         "runtime/src/xcm_config.rs",
@@ -851,7 +721,7 @@ fn rtc003_detects_waived_xcm_fees() {
     assert!(diags
         .iter()
         .filter(|diagnostic| diagnostic.rule_id == "RTC003")
-        .all(|diagnostic| diagnostic.severity == polkadot_linter::diagnostics::Severity::Error));
+        .all(|diagnostic| diagnostic.severity == polkadot_linter::diagnostics::Severity::Warning));
 }
 
 #[test]
@@ -885,7 +755,7 @@ fn rtc004_allows_non_zero_gated_and_benchmark_only_deposits() {
 #[test]
 fn rtc005_detects_collective_flip_randomness() {
     let diags = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc005.rs"));
-    assert_eq!(rtc_lines(&diags, "RTC005"), vec![10, 16, 17], "{diags:?}");
+    assert_eq!(rtc_lines(&diags, "RTC005"), vec![10], "{diags:?}");
 }
 
 #[test]
@@ -959,7 +829,7 @@ fn rtc_checks_unsaved_file_against_its_crate() {
     assert!(!path.exists());
     let diags = check_fixture_path(
         path,
-        "impl pallet_sudo::Config for Runtime { type WeightInfo = (); }",
+        "impl pallet_sudo::Config for Runtime { type WeightInfo = TestWeightInfo; }",
     );
     assert_eq!(rtc_lines(&diags, "RTC001"), vec![1], "{diags:?}");
 }
@@ -1291,7 +1161,7 @@ pub type Barrier = AllowExplicitUnpaidExecutionFrom<Equals<Parent>, Aliasers>;\n
 }
 
 #[test]
-fn rtc003_stays_error_with_a_minimal_user_config() {
+fn rtc003_keeps_warning_with_a_minimal_user_config() {
     let config: polkadot_linter::config::Config =
         toml::from_str("[rules]\n").expect("minimal user configuration must deserialize");
     let diags = check_fixture_with_config(
@@ -1308,7 +1178,7 @@ fn rtc003_stays_error_with_a_minimal_user_config() {
     assert!(
         severities
             .iter()
-            .all(|(_, severity)| *severity == polkadot_linter::diagnostics::Severity::Error),
+            .all(|(_, severity)| *severity == polkadot_linter::diagnostics::Severity::Warning),
         "{severities:?}"
     );
 }
@@ -1319,7 +1189,7 @@ fn rtc_rules_recognise_a_bare_runtime_attribute() {
 use frame_support::runtime;
 
 impl pallet_sudo::Config for Runtime {
-    type WeightInfo = ();
+    type WeightInfo = TestWeightInfo;
 }
 
 #[runtime]
@@ -1342,7 +1212,7 @@ mod runtime {
 
     // A bare `#[runtime]` on a module without `#[runtime::*]` items is not a
     // runtime declaration.
-    let lib = "#[runtime]\nmod runtime { pub struct Runtime; }\nimpl pallet_sudo::Config for Runtime {\n    type WeightInfo = ();\n}\n";
+    let lib = "#[runtime]\nmod runtime { pub struct Runtime; }\nimpl pallet_sudo::Config for Runtime {\n    type WeightInfo = TestWeightInfo;\n}\n";
     let krate = rtc_runtime_crate("not-a-runtime", &[("src/lib.rs", lib)]);
     let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
     assert!(rtc_findings(&diags).is_empty(), "{diags:?}");
@@ -1415,36 +1285,9 @@ fn rtc_rules_match_test_package_names_by_whole_token() {
 }
 
 #[test]
-fn rtc002_ignores_define_benchmarks_in_test_modules() {
-    let lib = r#"
-impl pallet_sudo::Config for Runtime {
-    type WeightInfo = weights::pallet_sudo::WeightInfo<Runtime>;
-}
-
-construct_runtime!(pub enum Runtime { Sudo: pallet_sudo = 15 });
-
-#[cfg(feature = "runtime-benchmarks")]
-mod benches {
-    frame_benchmarking::define_benchmarks!([pallet_balances, Balances]);
-}
-
-#[cfg(test)]
-mod tests {
-    frame_benchmarking::define_benchmarks!([pallet_sudo, Sudo]);
-}
-"#;
-    let krate = rtc_runtime_crate("bench-runtime", &[("src/lib.rs", lib)]);
-    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
-    assert_eq!(
-        rtc_findings(&diags),
-        vec!["RTC002:3".to_string()],
-        "{diags:?}"
-    );
-}
-
-#[test]
 fn rtc_rules_skip_files_behind_test_or_benchmark_module_declarations() {
-    let placeholder = "impl pallet_sudo::Config for Runtime {\n    type WeightInfo = ();\n}\n";
+    let placeholder =
+        "impl pallet_sudo::Config for Runtime {\n    type WeightInfo = TestWeightInfo;\n}\n";
     let lib = "#[cfg(test)]\nmod sandbox;\n#[cfg(feature = \"runtime-benchmarks\")]\nmod bench_config;\nmod configs;\nconstruct_runtime!(pub enum Runtime { Sudo: pallet_sudo = 15 });\n";
     let krate = rtc_runtime_crate(
         "sandbox-runtime",
@@ -1479,7 +1322,8 @@ fn rtc_rules_skip_files_behind_test_or_benchmark_module_declarations() {
 fn rtc_rules_lint_runtimes_switched_by_feature() {
     let decl =
         "construct_runtime!(\n    pub enum Runtime {\n        Sudo: pallet_sudo = 15,\n    }\n);\n";
-    let config = "impl pallet_sudo::Config for Runtime {\n    type WeightInfo = ();\n}\n";
+    let config =
+        "impl pallet_sudo::Config for Runtime {\n    type WeightInfo = TestWeightInfo;\n}\n";
     // Both declarations gated by `feature` (directly, inside `not`, or via
     // an enclosing module or file): the crate is still a runtime.
     for lib in [
@@ -1509,18 +1353,6 @@ fn rtc_rules_lint_runtimes_switched_by_feature() {
 }
 
 #[test]
-fn rtc002_matches_benchmark_paths_by_whole_segments() {
-    let lib = "construct_runtime!(pub enum Runtime { Balances: pallet_balances = 10 });\n\
-impl custom_pallet_balances::Config for Runtime {\n    type WeightInfo = weights::custom_pallet_balances::WeightInfo<Runtime>;\n}\n\
-impl parachains_paras::Config for Runtime {\n    type WeightInfo = weights::polkadot_runtime_parachains_paras::WeightInfo<Runtime>;\n}\n\
-impl disputes::Config for Runtime {\n    type WeightInfo = weights::disputes::WeightInfo<Runtime>;\n}\n\
-define_benchmarks!(\n    [pallet_balances, Balances]\n    [polkadot_runtime_parachains::paras, Paras]\n    [polkadot_runtime_parachains::disputes, Disputes]\n);\n";
-    let krate = rtc_runtime_crate("segment-runtime", &[("src/lib.rs", lib)]);
-    let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
-    assert_eq!(rtc_lines(&diags, "RTC002"), vec![3], "{diags:?}");
-}
-
-#[test]
 fn rtc_rules_treat_aliases_redefined_in_nested_modules_as_ambiguous() {
     // RTC003: the outer waiver is `Everything`; a nested `Nothing` must not
     // hide it.
@@ -1539,75 +1371,4 @@ impl pallet_referenda::Config for Runtime {\n    type SubmitOrigin = SubmissionO
 mod nested {\n    type SubmissionOrigin = EnsureRoot<AccountId>;\n}\n";
     let diags = check_fixture("runtime/src/lib.rs", lib);
     assert_eq!(rtc_lines(&diags, "RTC004"), vec![5], "{diags:?}");
-}
-
-// ==========================================================================
-// Noise narrowing (round 2): one negative case per mechanism, plus recall guards
-// ==========================================================================
-
-/// Writes `files` (relative path, content) under a fresh temp dir.
-fn write_tree(files: &[(&str, &str)]) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    for (path, content) in files {
-        let path = dir.path().join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
-    }
-    dir
-}
-
-#[test]
-fn rtc001_skips_parity_test_networks_only() {
-    for (package, fires) in [
-        ("rococo-runtime", false),
-        ("glutton-westend-runtime", false),
-        ("next-people-paseo-runtime", false),
-        ("westend-runtime", true),
-        ("parachain-template-runtime", true),
-    ] {
-        let krate = rtc_runtime_crate(package, &[("src/lib.rs", RTC_RUNTIME_LIB)]);
-        let diags = rtc_scan(krate.path(), polkadot_linter::config::Config::default());
-        assert_eq!(
-            rtc_findings(&diags) == vec!["RTC001:3".to_string()],
-            fires,
-            "{package}: {diags:?}"
-        );
-    }
-}
-
-#[test]
-fn rtc001_skips_pallets_without_calls() {
-    let runtime = r#"
-impl pallet_hooks::Config for Runtime {
-    type WeightInfo = ();
-    type ExtensionsWeightInfo = pallet_hooks::TestWeightInfo;
-}
-impl pallet_calls::Config for Runtime {
-    type WeightInfo = ();
-}
-
-construct_runtime!(
-    pub enum Runtime {
-        Hooks: pallet_hooks = 1,
-        Calls: pallet_calls = 2,
-    }
-);
-"#;
-    let dir = write_tree(&[
-        (
-            "runtime/Cargo.toml",
-            "[package]\nname = \"chain-runtime\"\nversion = \"0.1.0\"\n\n[dependencies]\npallet-hooks = { path = \"../hooks\" }\npallet-calls = { path = \"../calls\" }\n",
-        ),
-        ("runtime/src/lib.rs", runtime),
-        ("hooks/src/lib.rs", "#[pallet::hooks]\nimpl<T: Config> Hooks for Pallet<T> {}\n"),
-        ("calls/src/lib.rs", "#[pallet::call]\nimpl<T: Config> Pallet<T> {}\n"),
-    ]);
-    let diags = rtc_scan(
-        &dir.path().join("runtime"),
-        polkadot_linter::config::Config::default(),
-    );
-    // The no-calls skip covers `()` only, not `TestWeightInfo`.
-    let mut findings = rtc_findings(&diags);
-    findings.sort();
-    assert_eq!(findings, vec!["RTC001:4", "RTC001:7"], "{diags:?}");
 }

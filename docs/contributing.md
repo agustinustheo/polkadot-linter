@@ -24,7 +24,7 @@ that rule.
   resolved types, trait impls or expanded macros.
 - **Syntax engine:** RTC001-RTC008 and RTC010 read authored runtime config.
   Macro expansion removes some of it, for example `define_benchmarks!`
-  members. SEM011, SEM014, SEM015, SEM019 and TST002 read authored attributes
+  members. SEM011, SEM015, SEM019 and TST002 read authored attributes
   and source shape. TRM001 reads comments and strings. RTC009 reads
   `Cargo.lock`.
 
