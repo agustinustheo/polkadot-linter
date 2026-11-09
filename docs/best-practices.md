@@ -8,7 +8,7 @@ clean lint run does not prove that you follow them.
 | Practice | Rules | Coverage |
 | --- | --- | --- |
 | [Avoid unbounded iteration](https://libro.blockdeep.dev/critical/Avoid_Unbounded_Iteration.html) | SEC011, SEC012 | Partial |
-| [Use benchmarking for accurate dynamic weights](https://libro.blockdeep.dev/critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.html) | SEM011, RTC001, RTC002, SEC004 | Partial |
+| [Use benchmarking for accurate dynamic weights](https://libro.blockdeep.dev/critical/Use_Benchmarking_for_Accurate_Dynamic_Weights.html) | SEM011, RTC001, SEC004 | Partial |
 | [Avoid redundant storage access in mutations](https://libro.blockdeep.dev/high/Avoid_Redundant_Storage_Access_in_Mutations.html) | SEM009 | Enforced |
 | [Distribute finalization costs](https://libro.blockdeep.dev/high/Prevent_Inconsistent_State_By_Distributing_Finalization_Costs.html) | SEC011, SEC012 | Partial |
 | [Use atomic operations](https://libro.blockdeep.dev/high/Use_Atomic_Operations_To_Prevent_State_Inconsistencies.html) | SEC010 | Enforced |

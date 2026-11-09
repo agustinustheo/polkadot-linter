@@ -15,9 +15,9 @@ polkadot-linter --manifest-path Cargo.toml ./runtime ./pallets
 
 ## Few findings, high precision
 
-The linter has 31 rules. 28 are on by default. A rule is on by default only if
+The linter has 29 rules. 25 are on by default. A rule is on by default only if
 it was measured as accurate on real parachain code. Most rules come from a real
-incident. We deleted 33 rules that were mostly wrong or not worth fixing.
+incident. We deleted 35 rules that were mostly wrong or not worth fixing.
 [Retired rules](retired-rules.md) tells you how to catch those problems
 instead.
 
@@ -25,7 +25,7 @@ instead.
 
 | Engine | What it reads | Rules | Requirement |
 | --- | --- | --- | --- |
-| Syntax | Source text, attributes, `Cargo.lock` | RTC, TST, TRM, SEM011, SEM014, SEM015, SEM019, LNT001 | Stable Rust 1.91+ |
+| Syntax | Source text, attributes, `Cargo.lock` | RTC, TST, TRM, SEM011, SEM015, SEM019, LNT001 | Stable Rust 1.91+ |
 | Compiler | Resolved types and expanded macros | All SEC, SEM009, SEM010, SEM016 | The driver on `nightly-2025-09-01` |
 
 The syntax engine always runs. The compiler engine runs when the driver is

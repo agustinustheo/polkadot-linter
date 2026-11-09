@@ -7,4 +7,5 @@
 [rules.enabled]
 RTC004 = true
 SEC004 = true
+SEC011 = true
 SEC024 = true

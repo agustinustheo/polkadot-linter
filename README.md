@@ -31,8 +31,8 @@ discarded proof verdicts, vulnerable crate versions in `Cargo.lock`, free XCM
 delivery. Run it after `cargo fmt` and `cargo clippy`. It checks what they do
 not know about FRAME.
 
-- **31 rules, 28 on by default.** A rule is on only if it was measured as
-  accurate on real parachain code. We deleted 33 rules that were not.
+- **29 rules, 25 on by default.** A rule is on only if it was measured as
+  accurate on real parachain code. We deleted 35 rules that were not.
 - **From incidents.** Most rules copy a real bug: the dotUSD exploit,
   polkadot-sdk #7200, #11738, #12771, fellows runtimes #1237 and #1341,
   GHSA-wwx5.
@@ -78,13 +78,13 @@ on an existing codebase, use `--write-baseline` and `--baseline`.
 | --- | --- | --- |
 | [RTC](https://agustinustheo.github.io/polkadot-linter/rules/runtime-config.html) | RTC001-RTC010 | Runtime and XCM config mistakes, vulnerable `Cargo.lock` versions |
 | [SEC](https://agustinustheo.github.io/polkadot-linter/rules/security.html) | SEC004, SEC006, SEC010-SEC012, SEC015, SEC019-SEC024 | Lost funds, skipped origin or proof checks, unbounded storage work |
-| [SEM](https://agustinustheo.github.io/polkadot-linter/rules/semantic.html) | SEM009-SEM011, SEM014-SEM016, SEM019 | Zero weights, `^` as a power, verifiers that accept all input |
+| [SEM](https://agustinustheo.github.io/polkadot-linter/rules/semantic.html) | SEM009-SEM011, SEM015, SEM016, SEM019 | Zero weights, `^` as a power, verifiers that accept all input |
 | [TST](https://agustinustheo.github.io/polkadot-linter/rules/testing.html) | TST002 | `assert_ok!` that hides dispatch errors |
 | [TRM](https://agustinustheo.github.io/polkadot-linter/rules/terminology.html) | TRM001 | Spelling and terms |
 
-`RTC004`, `SEC004` and `SEC024` are off by default. [All rules](https://agustinustheo.github.io/polkadot-linter/rule-index.html)
+`RTC004`, `SEC004`, `SEC011` and `SEC024` are off by default. [All rules](https://agustinustheo.github.io/polkadot-linter/rule-index.html)
 lists every rule with its severity. [Retired rules](https://agustinustheo.github.io/polkadot-linter/retired-rules.html)
-lists the 33 deleted rules and the best way to catch each problem instead.
+lists the 35 deleted rules and the best way to catch each problem instead.
 
 ## For AI agents
 

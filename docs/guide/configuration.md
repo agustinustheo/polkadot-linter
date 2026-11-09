@@ -8,7 +8,7 @@ one entry at a time. You only write the entries you want to change.
 ```toml
 [rules.enabled]
 SEC024 = true          # turn on a rule that is off by default
-SEM014 = false         # turn off a rule
+SEM009 = false         # turn off a rule
 
 [rules.severity]
 SEM009 = "warning"     # advisory, warning or error

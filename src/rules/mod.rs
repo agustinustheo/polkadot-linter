@@ -46,7 +46,6 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
     let mut rules: Vec<Box<dyn LintRule>> = vec![
         // Semantic rules
         Box::new(semantic::WeightZeroPlaceholder),
-        Box::new(semantic::SubmitTransactionLogTarget),
         Box::new(semantic::MissingWeightOfAuthorize),
         Box::new(semantic::VerifierDefaultsToTrue),
         // Test smell rules
@@ -55,7 +54,6 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(terminology::SpellingConventions),
         // Runtime configuration rules
         Box::new(runtime_config::PlaceholderWeightInfoInRuntime),
-        Box::new(runtime_config::PalletMissingFromDefineBenchmarks),
         Box::new(runtime_config::XcmFeesWaived),
         Box::new(runtime_config::ZeroDepositConfig),
         Box::new(runtime_config::InsecureRandomnessInRuntime),

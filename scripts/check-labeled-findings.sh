@@ -36,7 +36,7 @@ EOF
   chmod +x "$dir/linter"
   local file="$dir/sdk/substrate/frame/x/src/lib.rs"
   local hit="[{\"rule_id\":\"SEM011\",\"file\":\"$file\",\"line\":2}]"
-  local other="[{\"rule_id\":\"SEM014\",\"file\":\"$file\",\"line\":1}]"
+  local other="[{\"rule_id\":\"SEM019\",\"file\":\"$file\",\"line\":1}]"
 
   # expect <pass|error pattern> <description> <findings json> <label rows...>
   # A failing case must exit non-zero and print the error pattern.

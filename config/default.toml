@@ -21,6 +21,8 @@ SEC004 = false
 # refund, delegated-staking reporter reward, xcm-executor best-effort return).
 # See docs/rules/SEC024.md.
 SEC024 = false
+# SEC011: 0 of 10 findings worth fixing on 14 live parachain repos (2026-11).
+SEC011 = false
 
 # Override individual rule severity: rule_id = "advisory"|"warning"|"error"
 [rules.severity]
@@ -70,21 +72,6 @@ dev_runtime_tokens = ["dev", "development"]
 # e.g. `polkadot-test-runtime` or `xcm_mock_runtime`, but not
 # `mychain-testnet-runtime`. Set to [] to lint every runtime.
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]
-
-# RTC001: pallets whose `impl WeightInfo for ()` is a hand-written production
-# weight source (equivocation reporting), so `type WeightInfo = ();` is intended.
-unit_weight_info_allowlist = [
-	"pallet_babe",
-	"pallet_beefy",
-	"pallet_grandpa",
-]
-
-# RTC001: also report upstream `<pallet>::weights::SubstrateWeight<Runtime>`
-# bindings. Off by default: the pinned SDK's production runtimes and templates
-# contain 13 such bindings (59 more in kitchensink), several of them deliberate
-# (pallet_revive, pallet_state_trie_migration), so the signal is advisory only.
-flag_substrate_weight = false
-substrate_weight_severity = "advisory"
 
 # ---------------------------------------------------------------------------
 # Rule family: Terminology (TRM001)

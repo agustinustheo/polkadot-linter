@@ -1,8 +1,8 @@
-// RTC005 negative fixture: VRF-backed randomness, and references to the removed
-// pallet that are only storage-prefix bytes or test code.
+// RTC005 negative fixture: pallet_contracts (only the deprecated `seal_random`), and
+// references to the removed pallet that are only storage-prefix bytes or test code.
 
 impl pallet_contracts::Config for Runtime {
-	type Randomness = pallet_babe::RandomnessFromOneEpochAgo<Runtime>;
+	type Randomness = RandomnessCollectiveFlip;
 }
 
 pub fn remove_old_pallet() {
