@@ -232,6 +232,26 @@ pub fn bench_only(o: Origin) {
     let _ = ensure_root(o); // OK SEC022
 }
 
+#[cfg(all(feature = "runtime-benchmarks", not(test)))]
+pub fn bench_only_compound(o: Origin) {
+    let _ = ensure_root(o); // OK SEC022
+}
+
+#[cfg(all(not(feature = "try-runtime"), any(test, feature = "runtime-benchmarks")))]
+pub fn bench_only_nested(o: Origin) {
+    let _ = ensure_root(o); // OK SEC022
+}
+
+#[cfg(not(test))]
+pub fn not_test(o: Origin) {
+    let _ = ensure_root(o); // BAD SEC022
+}
+
+#[cfg(any(feature = "runtime-benchmarks", not(test)))]
+pub fn bench_or_other(o: Origin) {
+    let _ = ensure_root(o); // BAD SEC022
+}
+
 // SEC023: `Option == Option` authorization inside an `EnsureOrigin` impl.
 pub fn owner_of(_asset: u32) -> Option<u64> {
     None
@@ -250,7 +270,8 @@ impl EnsureOrigin<Origin> for ForeignAssetOwner {
             return Err(o);
         }
         let check = || -> Result<(), Error> {
-            ensure!(account_of(&Origin(None)) == owner_of(1), Error); // BAD SEC023
+            // Suppressed: a closure may run after a guard written below it.
+            ensure!(account_of(&Origin(None)) == owner_of(1), Error); // OK SEC023
             Ok(())
         };
         if !(&from == &owner) { // BAD SEC023
@@ -301,6 +322,59 @@ impl EnsureOrigin<Origin> for CheckedOwner {
             return Err(o);
         }
         if !(account_of(&o) < owner_of(1)) { // OK SEC023
+            return Err(o);
+        }
+        Ok(())
+    }
+}
+
+pub struct ParenCheckedOwner;
+impl EnsureOrigin<Origin> for ParenCheckedOwner {
+    type Success = ();
+    fn try_origin(o: Origin) -> Result<(), Origin> {
+        let from = account_of(&o);
+        let to = account_of(&o);
+        if (from).is_none() || (&to).is_none() {
+            return Err(o);
+        }
+        if from != owner_of(1) { // OK SEC023
+            return Err(o);
+        }
+        if &to != &owner_of(2) { // OK SEC023
+            return Err(o);
+        }
+        Ok(())
+    }
+}
+
+pub struct ClosureBeforeGuard;
+impl EnsureOrigin<Origin> for ClosureBeforeGuard {
+    type Success = ();
+    fn try_origin(o: Origin) -> Result<(), Origin> {
+        let from = account_of(&o);
+        let check = || -> Result<(), Error> {
+            if from != owner_of(1) { // OK SEC023
+                return Err(Error);
+            }
+            Ok(())
+        };
+        if from.is_none() {
+            return Err(o);
+        }
+        check().map_err(|_| o)
+    }
+}
+
+pub struct ShadowedOwner;
+impl EnsureOrigin<Origin> for ShadowedOwner {
+    type Success = ();
+    fn try_origin(o: Origin) -> Result<(), Origin> {
+        let from = owner_of(1);
+        if from.is_none() {
+            return Err(o);
+        }
+        let from = account_of(&o);
+        if from != owner_of(1) { // BAD SEC023
             return Err(o);
         }
         Ok(())

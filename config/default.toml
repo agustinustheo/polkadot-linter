@@ -67,13 +67,6 @@ SEC017 = false
 SEC018 = false
 TST004 = false
 VAL002 = false
-# 2026-11 final review of SEC022/SEC023 reproduced false positives that are not
-# fixed yet: SEC022 inside compound benchmark cfgs such as
-# `cfg(all(feature = "runtime-benchmarks", not(..)))`; SEC023 when the operand
-# is checked earlier as `(from).is_none()`/`(&from).is_none()`, or the check is
-# in a closure defined before the comparison and called after it. Opt-in.
-SEC022 = false
-SEC023 = false
 # SEC024 (discarded `Result` whose `Err` holds funds): 10 compiled findings on
 # polkadot-sdk (28 crates) and astar-runtime, 3 TP / 7 NOISE / 0 FP. The noise is
 # deliberate "burn on failure" code, mostly commented as such (asset-tx-payment
