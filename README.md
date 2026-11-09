@@ -58,7 +58,7 @@ cargo +nightly-2025-09-01 install polkadot-linter --features rustc-driver
 ## Use
 
 ```bash
-polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime ./pallets   # full scan from the workspace root
+polkadot-linter --manifest-path Cargo.toml ./runtime ./pallets   # full scan from the workspace root
 polkadot-linter --syntax-only .                          # no build, syntax rules only
 polkadot-linter --rules RTC,SEC020 ./runtime             # some families or rules
 polkadot-linter -s warning --fail-on-warning ./pallets   # CI gate

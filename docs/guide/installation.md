@@ -21,13 +21,7 @@ rustup toolchain install nightly-2025-09-01 --component rustc-dev --component ll
 cargo +nightly-2025-09-01 install polkadot-linter --features rustc-driver
 ```
 
-This installs the CLI and the driver. The CLI looks for the driver at
-`target/debug/polkadot-linter-driver`. Give the installed path with
-`--driver-path`:
-
-```bash
-polkadot-linter --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime
-```
+This installs the CLI and the driver. After `cargo install`, the linter finds the driver automatically. From a source checkout, pass `--driver-path target/debug/polkadot-linter-driver` if you built it elsewhere.
 
 If the CLI cannot find the driver, it prints a notice. It then reports syntax
 findings only.

@@ -10,7 +10,7 @@ This linter does.
 
 ```bash
 cargo install polkadot-linter
-polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime ./pallets
+polkadot-linter --manifest-path Cargo.toml ./runtime ./pallets
 ```
 
 ## Few findings, high precision
@@ -30,7 +30,7 @@ instead.
 
 The syntax engine always runs. The compiler engine runs when the driver is
 installed and the scan paths belong to one Cargo project.
-[Install](guide/installation.md) shows how to install the driver. After `cargo install`, pass the driver explicitly with `--driver-path ~/.cargo/bin/polkadot-linter-driver`.
+[Install](guide/installation.md) shows how to install the driver.
 
 ## Where to go next
 

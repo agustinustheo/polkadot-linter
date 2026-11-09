@@ -4,7 +4,7 @@
 
 ```bash
 # From the workspace root:
-polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime ./pallets
+polkadot-linter --manifest-path Cargo.toml ./runtime ./pallets
 ```
 
 With no path, the linter scans the current directory. Use `--syntax-only` to
