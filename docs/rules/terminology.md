@@ -1,7 +1,8 @@
-# Terminology Rules (TRM)
+# Terminology rules (TRM)
 
-Terminology rules enforce project-specific spelling and vocabulary conventions across code, comments, documentation, and string literals.
+TRM rules check spelling and terms in comments, docs and strings against lists
+that you configure.
 
-| Rule | Title | Default severity | Engine |
-| --- | --- | --- | --- |
-| [`TRM001`](TRM001.md) | Spelling and Terminology Conventions | Advisory | source (syn) |
+| Rule | Finds | Severity |
+| --- | --- | --- |
+| [TRM001](TRM001.md) | Words that break your spelling or term list | advisory |

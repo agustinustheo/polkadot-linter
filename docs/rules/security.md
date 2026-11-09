@@ -1,20 +1,20 @@
-# Security Rules (SEC)
+# Security rules (SEC)
 
-Security rules target patterns that put a live chain at risk: unbounded storage work in callable paths, unchecked balance moves, filter and origin-check bypasses, and verification or funds-handling mistakes copied from real incidents. All SEC rules are compiler-backed — the rustc driver is the authority, giving them resolved-type evidence rather than text matching.
+SEC rules find pallet and XCM code that can lose funds, skip a check or do
+unbounded work. Most copy the shape of a real incident. All SEC rules use the
+compiler engine, so they need the [driver](../guide/installation.md#the-compiler-driver).
 
-| Rule | Title | Default severity | Engine |
-| --- | --- | --- | --- |
-| [`SEC004`](SEC004.md) | Non-Saturating Arithmetic in Weight Attributes | Advisory, off by default | compiler-backed |
-| [`SEC006`](SEC006.md) | Unchecked repatriate_reserved Remaining Balance | Warning | compiler-backed |
-| [`SEC010`](SEC010.md) | Missing Transactional Layer in FRAME Hooks | Warning | compiler-backed |
-| [`SEC011`](SEC011.md) | Unbounded Storage Iteration in Callable Runtime Paths | Warning | compiler-backed |
-| [`SEC012`](SEC012.md) | Unbounded clear_prefix Deletion Limit | Warning | compiler-backed |
-| [`SEC015`](SEC015.md) | Unguarded dispatch_bypass_filter in Production Code | Warning | compiler-backed |
-| [`SEC019`](SEC019.md) | Token Imbalance Escapes a Transactional Storage Layer | Error | compiler-backed |
-| [`SEC020`](SEC020.md) | Discarded Verification Verdict | Error | compiler-backed |
-| [`SEC021`](SEC021.md) | Inverted Verification Guard | Error | compiler-backed |
-| [`SEC022`](SEC022.md) | Discarded Origin Check | Error | compiler-backed |
-| [`SEC023`](SEC023.md) | Option Equality in an Origin Check | Error | compiler-backed |
-| [`SEC024`](SEC024.md) | Discarded Funds in an Error | Error, off by default | compiler-backed |
-
-Retired rules of this family are listed in [What we tried and removed](../retired-rules.md).
+| Rule | Finds | Severity |
+| --- | --- | --- |
+| [SEC004](SEC004.md) | Non-saturating weight arithmetic (off by default) | warning |
+| [SEC006](SEC006.md) | Unchecked `repatriate_reserved` remainder | warning |
+| [SEC010](SEC010.md) | Hook writes storage without a storage layer | warning |
+| [SEC011](SEC011.md) | Storage iteration in a dispatchable or hook | warning |
+| [SEC012](SEC012.md) | Unbounded `clear_prefix` | warning |
+| [SEC015](SEC015.md) | `dispatch_bypass_filter` in production code | warning |
+| [SEC019](SEC019.md) | Token imbalance escapes a storage layer | error |
+| [SEC020](SEC020.md) | Discarded verification verdict | error |
+| [SEC021](SEC021.md) | Inverted verification guard | error |
+| [SEC022](SEC022.md) | Discarded origin check | error |
+| [SEC023](SEC023.md) | `Option` equality in an origin check | error |
+| [SEC024](SEC024.md) | Discarded funds in an error (off by default) | error |

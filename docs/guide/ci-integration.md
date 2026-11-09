@@ -1,34 +1,45 @@
-# CI Integration
+# CI and AI agents
 
-`polkadot-linter` complements standard Rust tooling rather than replacing it. A
-typical CI order is:
+## CI
+
+Run the linter after the standard Rust tools:
 
 ```text
 cargo fmt -> cargo clippy -> polkadot-linter
 ```
 
-A minimal gating step that fails the build on warnings and errors:
+This step fails the build on errors and warnings.:
 
 ```bash
-cargo run --release -- ./pallets ./runtime -s warning --fail-on-warning
+polkadot-linter --manifest-path Cargo.toml -s warning --fail-on-warning ./runtime ./pallets
 ```
 
-See [Output & Exit Codes](output-and-exit-codes.md) for exactly which conditions
-produce a non-zero exit.
-
-To feed a code-scanning dashboard, emit SARIF and upload the artifact:
+For GitHub code scanning, write SARIF and upload the file:
 
 ```bash
-cargo run --release -- ./pallets -f sarif > polkadot-linter.sarif
+polkadot-linter --manifest-path Cargo.toml -f sarif ./runtime ./pallets > polkadot-linter.sarif
 ```
 
-## crates.io releases
+To add the linter to an existing codebase, start with a
+[baseline](suppressing-findings.md#baseline-file). Then CI fails only on new
+findings.
 
-Pushing a tag named `v<package-version>` runs the release workflow. It verifies
-the tag against `Cargo.toml`, checks formatting, runs Clippy with warnings
-denied, runs tests, builds the release binary, and performs a `cargo publish
---dry-run` before publishing to crates.io.
+## AI coding agents
 
-The workflow reads its publishing credential from the repository Actions secret
-`CARGO_REGISTRY_TOKEN`. Never place a crates.io token in the repository, tag,
-or workflow source.
+[`skill/SKILL.md`](https://github.com/agustinustheo/polkadot-linter/blob/main/skill/SKILL.md)
+tells an agent when to run the linter, which commands to use, how to read the
+JSON, and how to triage each finding.
+
+- **Claude Code:** copy the skill into your skills directory:
+
+  ```bash
+  mkdir -p ~/.claude/skills/polkadot-linter
+  curl -fsSL https://raw.githubusercontent.com/agustinustheo/polkadot-linter/main/skill/SKILL.md -o ~/.claude/skills/polkadot-linter/SKILL.md
+  ```
+
+- **Codex and other agents:** add this line to `AGENTS.md` or to the agent's
+  instructions: *"For Polkadot SDK, FRAME or runtime code, run
+  `polkadot-linter` and triage each finding as described in
+  https://github.com/agustinustheo/polkadot-linter/blob/main/skill/SKILL.md."*
+
+The linter does not call an LLM.

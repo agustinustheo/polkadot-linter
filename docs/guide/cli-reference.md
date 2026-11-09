@@ -1,58 +1,45 @@
-# Command-Line Reference
+# Command-line options
 
 ```text
 polkadot-linter [OPTIONS] [PATHS]...
 ```
 
-`PATHS` are one or more files or directories to scan. When omitted, the current
-directory (`.`) is scanned.
+`PATHS` are files or directories. The default is the current directory.
+`polkadot-linter --help` shows the same list.
 
 ## Common options
 
-| Flag | Default | Purpose |
+| Flag | Default | What it does |
 | --- | --- | --- |
-| `-c`, `--config <FILE>` | `polkadot-linter.toml` | Project configuration file. If the default name is absent, built-in defaults are used; a missing *explicitly named* config is an error. |
-| `-f`, `--format <FMT>` | `human` | Output format: `human`, `json`, or `sarif`. |
-| `-s`, `--severity <LEVEL>` | `advisory` | Minimum severity to report: `advisory`, `warning`, or `error`. Lower-severity diagnostics are filtered out of the output. |
-| `--fail-on-warning` | off | Exit non-zero if any warning (or error) is reported. |
-| `--rules <IDS>` | all enabled | Comma-separated rule IDs or family prefixes to run (for example `--rules SEC011,SEC012` or `--rules SEC`). Only rules enabled by the config run: naming a rule that is off by default reports nothing unless you also pass `-c config/all-rules.toml` or enable it in your config. |
-| `--include <GLOBS>` | — | Comma-separated glob patterns of files to include. |
-| `--exclude <GLOBS>` | — | Comma-separated glob patterns of files to exclude. |
-| `-v`, `--verbose` | off | Verbose (`debug`-level) logging. |
-| `--write-baseline <PATH>` | — | Write every current finding to a baseline file and exit 0. |
-| `--baseline <PATH>` | — | Hide findings recorded in the baseline; only new findings are reported and affect the exit code. Prints the number hidden on stderr. |
+| `-c`, `--config <FILE>` | `polkadot-linter.toml` | Config file. If you name a file that does not exist, the run fails. |
+| `-f`, `--format <FMT>` | `human` | `human`, `json` or `sarif`. |
+| `-s`, `--severity <LEVEL>` | `advisory` | Lowest severity to show: `advisory`, `warning` or `error`. |
+| `--fail-on-warning` | off | Exit with code 1 on a warning too. |
+| `--rules <IDS>` | all enabled rules | Rule IDs or families, for example `RTC,SEC020`. Rules that are off stay off. |
+| `--include <GLOBS>` | none | Only scan files that match. |
+| `--exclude <GLOBS>` | none | Do not scan files that match. |
+| `--baseline <PATH>` | none | Hide the findings in this baseline. |
+| `--write-baseline <PATH>` | none | Write all current findings to this baseline, then exit 0. |
+| `-v`, `--verbose` | off | Show debug logs. |
 
-Individual findings can also be suppressed with
-`// polkadot-linter: allow(RULE, reason = "...")` comments. See
-[Suppressing Findings](suppressing-findings.md).
+## Engine options
 
-## Engine selection
-
-| Flag | Default | Purpose |
+| Flag | Default | What it does |
 | --- | --- | --- |
-| `--syntax-only` | off | Run only the syntax/token pass; skip compiler-backed analysis. Appropriate when you only want the source/text rule families. |
-| `--no-syntax` | off | Skip the syntax/token scan and emit only the compiler-backed (auxiliary) analysis results. |
-| `--no-progress` | off | Hide Cargo's compiler progress during the compiler-backed phase. |
+| `--syntax-only` | off | Run only the syntax engine. No build. |
+| `--no-syntax` | off | Run only the compiler engine. |
+| `--no-progress` | off | Hide Cargo build progress. |
+| `--driver-path <FILE>` | next to the `polkadot-linter` binary, then `target/debug/polkadot-linter-driver` | Path to the driver. |
+| `--toolchain <NAME>` | `nightly-2025-09-01` | Toolchain for the compiler engine. |
+| `--manifest-path <FILE>` | found from the paths | `Cargo.toml` to check. Use it when the paths belong to more than one Cargo project. |
+| `--package <NAME>` | Cargo's default package selection | Package to check. Repeat the flag to choose packages. |
+| `--lib` | off | Check only the library target. |
+| `--features <LIST>` | none | Cargo features. Both engines use them. |
+| `--no-default-features` | off | Turn off default Cargo features. Both engines use this. |
+| `--target-dir <DIR>` | Cargo default | Cargo target directory. |
+| `--compiler-backed-rules <IDS>` | all compiler rules | Compiler rules to run. |
+| `--source-filter <TEXT>` | none | Only report compiler findings in files whose path contains this text. |
 
-## Compiler-backed (rustc driver) options
-
-These apply to the rustc-driven pipeline, which runs automatically when the scan
-path resolves to a single Cargo project.
-
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `--manifest-path <FILE>` | discovered | `Cargo.toml` to analyze. Discovered from the scan path if not given. |
-| `--package <NAME>` | — | Package to pass to `cargo check`; may be repeated. |
-| `--lib` | off | Analyze only the library target. |
-| `--no-default-features` | off | Pass `--no-default-features` to `cargo check`. |
-| `--target-dir <DIR>` | Cargo default | Cargo target directory for the compiler-backed check. |
-| `--toolchain <NAME>` | `nightly-2025-09-01` | Rust toolchain used for compiler-backed analysis. |
-| `--driver-path <FILE>` | `target/debug/polkadot-linter-driver` | Path to the `polkadot-linter-driver` binary. |
-| `--compiler-backed-rules <IDS>` | migrated set | Comma-separated rule IDs to route through the rustc driver. |
-| `--source-filter <SUBSTR>` | — | Comma-separated file-substring filters for compiler-backed diagnostics. |
-
-> **Warm target directories.** The compiler-backed pipeline observes rustc
-> diagnostics only when Cargo actually recompiles. If you re-run against a warm
-> `--target-dir`, Cargo may skip compilation and the compiler-backed rules will
-> report nothing. For repeatable compiler-backed runs, use a fresh target
-> directory.
+The compiler engine runs `cargo check` with the driver. It sees only the crates
+that Cargo compiles again. The linter forces a new build for each scan, so a
+warm `--target-dir` is safe.

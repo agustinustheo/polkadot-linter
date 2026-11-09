@@ -11,3 +11,9 @@ build-dir = "book"
 [output.html]
 git-repository-url = "https://github.com/agustinustheo/polkadot-linter"
 edit-url-template = "https://github.com/agustinustheo/polkadot-linter/edit/main/{path}"
+
+[output.html.redirect]
+"/guide/output-and-exit-codes.html" = "quick-start.html#exit-codes"
+"/rule-authority-matrix.html" = "contributing.html#which-engine-owns-a-rule"
+"/review-remediation.html" = "contributing.html"
+"/best-practices/index.html" = "../best-practices.html"
