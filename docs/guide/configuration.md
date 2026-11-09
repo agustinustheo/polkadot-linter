@@ -29,11 +29,7 @@ SEM009 = "warning"     # advisory, warning or error
 
 `RTC004`, `SEC004` and `SEC024` are off by default. They are often correct but
 seldom worth a change. To turn one on, set it to `true` under
-`[rules.enabled]`. To run every rule, use the bundled `config/all-rules.toml`:
-
-```bash
-polkadot-linter -c config/all-rules.toml ./runtime
-```
+`[rules.enabled]`.
 
 ## Old config files
 

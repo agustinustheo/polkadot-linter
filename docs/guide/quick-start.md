@@ -3,7 +3,8 @@
 ## 1. Run a scan
 
 ```bash
-polkadot-linter ./runtime ./pallets
+# From the workspace root:
+polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime ./pallets
 ```
 
 With no path, the linter scans the current directory. Use `--syntax-only` to

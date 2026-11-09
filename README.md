@@ -58,8 +58,7 @@ cargo +nightly-2025-09-01 install polkadot-linter --features rustc-driver
 ## Use
 
 ```bash
-polkadot-linter ./runtime ./pallets                      # scan
-polkadot-linter --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime
+polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver ./runtime ./pallets   # full scan from the workspace root
 polkadot-linter --syntax-only .                          # no build, syntax rules only
 polkadot-linter --rules RTC,SEC020 ./runtime             # some families or rules
 polkadot-linter -s warning --fail-on-warning ./pallets   # CI gate
@@ -93,7 +92,7 @@ lists the 33 deleted rules and the best way to catch each problem instead.
 and how to triage each finding. For Claude Code:
 
 ```bash
-mkdir -p ~/.claude/skills/polkadot-linter && cp skill/SKILL.md ~/.claude/skills/polkadot-linter/
+mkdir -p ~/.claude/skills/polkadot-linter && curl -fsSL https://raw.githubusercontent.com/agustinustheo/polkadot-linter/main/skill/SKILL.md -o ~/.claude/skills/polkadot-linter/SKILL.md
 ```
 
 For other agents, see [CI and AI agents](https://agustinustheo.github.io/polkadot-linter/guide/ci-integration.html). The

@@ -8,16 +8,16 @@ Run the linter after the standard Rust tools:
 cargo fmt -> cargo clippy -> polkadot-linter
 ```
 
-This step fails the build on errors and warnings:
+This step fails the build on errors and warnings. Pass the installed driver explicitly with `--driver-path`:
 
 ```bash
-polkadot-linter -s warning --fail-on-warning ./runtime ./pallets
+polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver -s warning --fail-on-warning ./runtime ./pallets
 ```
 
 For GitHub code scanning, write SARIF and upload the file:
 
 ```bash
-polkadot-linter -f sarif ./runtime ./pallets > polkadot-linter.sarif
+polkadot-linter --manifest-path Cargo.toml --driver-path ~/.cargo/bin/polkadot-linter-driver -f sarif ./runtime ./pallets > polkadot-linter.sarif
 ```
 
 To add the linter to an existing codebase, start with a
@@ -34,7 +34,7 @@ JSON, and how to triage each finding.
 
   ```bash
   mkdir -p ~/.claude/skills/polkadot-linter
-  cp skill/SKILL.md ~/.claude/skills/polkadot-linter/
+  curl -fsSL https://raw.githubusercontent.com/agustinustheo/polkadot-linter/main/skill/SKILL.md -o ~/.claude/skills/polkadot-linter/SKILL.md
   ```
 
 - **Codex and other agents:** add this line to `AGENTS.md` or to the agent's

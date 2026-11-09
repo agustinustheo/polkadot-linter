@@ -21,7 +21,3 @@ clean lint run does not prove that you follow them.
 
 "Enforced" means a default rule reports the main form of the problem.
 "Partial" means a rule checks one part, or the rule is off by default (SEC004).
-
-No rule covers the other Libro practices. Examples: origin checks, input
-validation, `unwrap` in the runtime, XCM barriers and fee management,
-`try_state` hooks and documentation.

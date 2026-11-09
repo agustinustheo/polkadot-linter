@@ -32,7 +32,7 @@ polkadot-linter [OPTIONS] [PATHS]...
 | `--driver-path <FILE>` | `target/debug/polkadot-linter-driver` | Path to the driver. |
 | `--toolchain <NAME>` | `nightly-2025-09-01` | Toolchain for the compiler engine. |
 | `--manifest-path <FILE>` | found from the paths | `Cargo.toml` to check. Use it when the paths belong to more than one Cargo project. |
-| `--package <NAME>` | all | Package to check. You can repeat it. |
+| `--package <NAME>` | Cargo's default package selection | Package to check. Repeat the flag to choose packages. |
 | `--lib` | off | Check only the library target. |
 | `--features <LIST>` | none | Cargo features. Both engines use them. |
 | `--no-default-features` | off | Turn off default Cargo features. Both engines use this. |
