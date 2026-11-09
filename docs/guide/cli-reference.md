@@ -29,7 +29,7 @@ polkadot-linter [OPTIONS] [PATHS]...
 | `--syntax-only` | off | Run only the syntax engine. No build. |
 | `--no-syntax` | off | Run only the compiler engine. |
 | `--no-progress` | off | Hide Cargo build progress. |
-| `--driver-path <FILE>` | `target/debug/polkadot-linter-driver` | Path to the driver. |
+| `--driver-path <FILE>` | next to the `polkadot-linter` binary, then `target/debug/polkadot-linter-driver` | Path to the driver. |
 | `--toolchain <NAME>` | `nightly-2025-09-01` | Toolchain for the compiler engine. |
 | `--manifest-path <FILE>` | found from the paths | `Cargo.toml` to check. Use it when the paths belong to more than one Cargo project. |
 | `--package <NAME>` | Cargo's default package selection | Package to check. Repeat the flag to choose packages. |
