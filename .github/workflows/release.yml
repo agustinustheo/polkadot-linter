@@ -43,6 +43,7 @@ jobs:
     name: Publish package
     needs: verify
     runs-on: ubuntu-latest
+    environment: crates-io # must match the crates.io Trusted Publishing config
     permissions:
       contents: read
       id-token: write # crates.io Trusted Publishing
