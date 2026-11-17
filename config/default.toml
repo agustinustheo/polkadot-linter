@@ -36,7 +36,7 @@ TST002 = "error"
 severity = "warning"
 
 # ---------------------------------------------------------------------------
-# Rule family: Runtime configuration (RTC001-RTC010)
+# Rule family: Runtime configuration (RTC001-RTC011)
 # ---------------------------------------------------------------------------
 # These rules only inspect runtime crates: the Cargo package whose library
 # target (`[lib] path`, default src/lib.rs) or a module reachable from it

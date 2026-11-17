@@ -17,6 +17,7 @@ polkadot-fellows/runtimes. All RTC rules use the syntax engine.
 | [RTC008](RTC008.md) | Proxy filter fails open | warning |
 | [RTC009](RTC009.md) | Vulnerable crate version in `Cargo.lock` | error |
 | [RTC010](RTC010.md) | Storage-reading aliaser on the unpaid barrier | warning |
+| [RTC011](RTC011.md) | `RemovePallet` deletes a live pallet | error |
 
 ## Which code the rules check
 

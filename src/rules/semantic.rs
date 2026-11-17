@@ -993,6 +993,78 @@ impl LintRule for VerifierDefaultsToTrue {
 }
 
 // ---------------------------------------------------------------------------
+// SEM020: pallet-revive precompile that acts for the caller under delegatecall
+// ---------------------------------------------------------------------------
+
+pub struct PrecompileWithoutDelegateGuard;
+
+impl LintRule for PrecompileWithoutDelegateGuard {
+    fn id(&self) -> &str {
+        "SEM020"
+    }
+    fn name(&self) -> &str {
+        "precompile-without-delegate-guard"
+    }
+    fn family(&self) -> &str {
+        "semantic"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        // Any `delegate` text counts as a guard: `is_delegate_call()`, also in
+        // a same-file helper, or an imported `ensure_not_delegate(env)`.
+        if should_skip_production_rule(ctx)
+            || !ctx.content.contains(".caller()")
+            || ctx.content.contains("delegate")
+        {
+            return None;
+        }
+        let severity = config.rule_severity(self.id(), Severity::Warning);
+        // A pallet-revive `impl Precompile` has `fn call(.., env: &mut impl Ext)`;
+        // Frontier-style precompiles have `fn execute(handle)`.
+        let diagnostics = ast_file(ctx)?
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                syn::Item::Impl(item) => item.trait_.as_ref().map(|(_, path, _)| (item, path)),
+                _ => None,
+            })
+            .filter(|(_, path)| path_last_ident(path).as_deref() == Some("Precompile"))
+            .flat_map(|(item, _)| &item.items)
+            .filter_map(|item| match item {
+                ImplItem::Fn(f) if f.sig.ident == "call" => Some(f),
+                _ => None,
+            })
+            .filter(|f| {
+                f.sig
+                    .inputs
+                    .iter()
+                    .any(|input| compact_tokens(input).starts_with("env:"))
+            })
+            .map(|f| Diagnostic {
+                rule_id: self.id().to_string(),
+                rule_name: self.name().to_string(),
+                category: RuleCategory::Semantic,
+                severity,
+                file: ctx.path.clone(),
+                line: span_line(f.sig.ident.span()),
+                column: None,
+                end_line: None,
+                message: "precompile acts for `caller()` but does not reject a delegate call"
+                    .to_string(),
+                explanation: "Under DELEGATECALL, `env.caller()` is the original caller, so an \
+                    intermediate contract can act as them: move their assets or send XCM for \
+                    them (polkadot-sdk #11676, #11715)."
+                    .to_string(),
+                suggestion: Some(
+                    "Start `call` with `if env.is_delegate_call() { return Err(..) }`.".to_string(),
+                ),
+            })
+            .collect::<Vec<_>>();
+        (!diagnostics.is_empty()).then_some(diagnostics)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SEM015: #[pallet::authorize] should have #[pallet::weight_of_authorize]
 // ---------------------------------------------------------------------------
 

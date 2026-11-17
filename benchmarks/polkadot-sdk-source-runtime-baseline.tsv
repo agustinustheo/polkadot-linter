@@ -41,3 +41,9 @@ RTC008	templates	0
 RTC008	substrate/bin/node/runtime	0
 RTC008	cumulus/test	0
 RTC008	polkadot/xcm	0
+RTC011	polkadot/runtime	0
+RTC011	cumulus/parachains/runtimes	1
+RTC011	templates	0
+RTC011	substrate/bin/node/runtime	0
+RTC011	cumulus/test	0
+RTC011	polkadot/xcm	0

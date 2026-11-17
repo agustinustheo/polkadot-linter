@@ -48,6 +48,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(semantic::WeightZeroPlaceholder),
         Box::new(semantic::MissingWeightOfAuthorize),
         Box::new(semantic::VerifierDefaultsToTrue),
+        Box::new(semantic::PrecompileWithoutDelegateGuard),
         // Test smell rules
         Box::new(test_smells::ApplyExtrinsicAssertOk),
         // Terminology rules
@@ -62,6 +63,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn LintRule>> {
         Box::new(runtime_config::ProxyFilterFailsOpen),
         Box::new(runtime_config::KnownVulnerableCrateVersion),
         Box::new(runtime_config::StorageReadingUnpaidAliaser),
+        Box::new(runtime_config::RemovePalletOfLivePallet),
     ];
 
     // Filter disabled rules

@@ -22,9 +22,9 @@ that rule.
 
 - **Compiler engine:** all SEC rules, SEM009, SEM010 and SEM016. They need
   resolved types, trait impls or expanded macros.
-- **Syntax engine:** RTC001-RTC008 and RTC010 read authored runtime config.
+- **Syntax engine:** RTC001-RTC008, RTC010 and RTC011 read authored runtime config.
   Macro expansion removes some of it, for example `define_benchmarks!`
-  members. SEM011, SEM015, SEM019 and TST002 read authored attributes
+  members. SEM011, SEM015, SEM019, SEM020 and TST002 read authored attributes
   and source shape. TRM001 reads comments and strings. RTC009 reads
   `Cargo.lock`.
 

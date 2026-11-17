@@ -12,3 +12,4 @@ all input.
 | [SEM015](SEM015.md) | Missing `weight_of_authorize` | warning | syntax |
 | [SEM016](SEM016.md) | Missing `AuthorizeCall` | warning | compiler |
 | [SEM019](SEM019.md) | Verifier trait method defaults to `true` | warning | syntax |
+| [SEM020](SEM020.md) | Precompile acts for the caller under delegatecall | warning | syntax |

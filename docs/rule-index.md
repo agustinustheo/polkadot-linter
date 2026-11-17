@@ -1,6 +1,6 @@
 # All rules
 
-29 rules and LNT001. "Off" rules are off by default. To turn one on, see
+31 rules and LNT001. "Off" rules are off by default. To turn one on, see
 [Configuration](guide/configuration.md). "Compiler" rules need the
 [driver](guide/installation.md#the-compiler-driver).
 
@@ -15,6 +15,7 @@
 | [RTC008](rules/RTC008.md) | A proxy filter that fails open | warning | on | syntax |
 | [RTC009](rules/RTC009.md) | `Cargo.lock` has a crate version with a known security bug | error | on | syntax |
 | [RTC010](rules/RTC010.md) | `AuthorizedAliasers` on the unpaid-execution barrier | warning | on | syntax |
+| [RTC011](rules/RTC011.md) | `RemovePallet` deletes a pallet that is still in the runtime | error | on | syntax |
 | [SEC004](rules/SEC004.md) | Non-saturating arithmetic in a weight attribute | warning | off | compiler |
 | [SEC006](rules/SEC006.md) | The remainder of `repatriate_reserved` is ignored | warning | on | compiler |
 | [SEC010](rules/SEC010.md) | A hook writes storage more than once without a storage layer | warning | on | compiler |
@@ -33,6 +34,7 @@
 | [SEM015](rules/SEM015.md) | `#[pallet::authorize]` without `#[pallet::weight_of_authorize]` | warning | on | syntax |
 | [SEM016](rules/SEM016.md) | `create_extension()` without `AuthorizeCall` | warning | on | compiler |
 | [SEM019](rules/SEM019.md) | A verifier trait method that returns `true` by default | warning | on | syntax |
+| [SEM020](rules/SEM020.md) | A revive precompile acts for the caller under delegatecall | warning | on | syntax |
 | [TST002](rules/TST002.md) | `assert_ok!` on `apply_extrinsic` | error | on | syntax |
 | [TRM001](rules/TRM001.md) | Words that break your spelling list | advisory | on | syntax |
 | [LNT001](rules/LNT001.md) | An allow comment that is invalid or unused | warning | on | syntax |
