@@ -1372,3 +1372,28 @@ mod nested {\n    type SubmissionOrigin = EnsureRoot<AccountId>;\n}\n";
     let diags = check_fixture("runtime/src/lib.rs", lib);
     assert_eq!(rtc_lines(&diags, "RTC004"), vec![5], "{diags:?}");
 }
+
+#[test]
+fn rtc011_reports_remove_pallet_of_a_live_pallet() {
+    let bad = check_fixture("runtime/src/lib.rs", include_str!("fixtures/bad_rtc011.rs"));
+    assert_eq!(rtc_lines(&bad, "RTC011"), vec![11], "{bad:?}");
+    let good = check_fixture(
+        "runtime/src/lib.rs",
+        include_str!("fixtures/good_rtc011.rs"),
+    );
+    assert!(rtc_lines(&good, "RTC011").is_empty(), "{good:?}");
+}
+
+#[test]
+fn sem020_reports_revive_precompile_without_delegate_guard() {
+    let bad = check_fixture(
+        "precompiles/src/lib.rs",
+        include_str!("fixtures/bad_sem020.rs"),
+    );
+    assert_eq!(rtc_lines(&bad, "SEM020"), vec![3], "{bad:?}");
+    let good = check_fixture(
+        "precompiles/src/lib.rs",
+        include_str!("fixtures/good_sem020.rs"),
+    );
+    assert!(rtc_lines(&good, "SEM020").is_empty(), "{good:?}");
+}

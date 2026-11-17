@@ -31,7 +31,7 @@ discarded proof verdicts, vulnerable crate versions in `Cargo.lock`, free XCM
 delivery. Run it after `cargo fmt` and `cargo clippy`. It checks what they do
 not know about FRAME.
 
-- **29 rules, 25 on by default.** A rule is on only if it was measured as
+- **31 rules, 27 on by default.** A rule is on only if it was measured as
   accurate on real parachain code. We deleted 35 rules that were not.
 - **From incidents.** Most rules copy a real bug: the dotUSD exploit,
   polkadot-sdk #7200, #11738, #12771, fellows runtimes #1237 and #1341,
@@ -76,9 +76,9 @@ on an existing codebase, use `--write-baseline` and `--baseline`.
 
 | Family | Rules | Finds |
 | --- | --- | --- |
-| [RTC](https://agustinustheo.github.io/polkadot-linter/rules/runtime-config.html) | RTC001-RTC010 | Runtime and XCM config mistakes, vulnerable `Cargo.lock` versions |
+| [RTC](https://agustinustheo.github.io/polkadot-linter/rules/runtime-config.html) | RTC001-RTC011 | Runtime and XCM config mistakes, vulnerable `Cargo.lock` versions |
 | [SEC](https://agustinustheo.github.io/polkadot-linter/rules/security.html) | SEC004, SEC006, SEC010-SEC012, SEC015, SEC019-SEC024 | Lost funds, skipped origin or proof checks, unbounded storage work |
-| [SEM](https://agustinustheo.github.io/polkadot-linter/rules/semantic.html) | SEM009-SEM011, SEM015, SEM016, SEM019 | Zero weights, `^` as a power, verifiers that accept all input |
+| [SEM](https://agustinustheo.github.io/polkadot-linter/rules/semantic.html) | SEM009-SEM011, SEM015, SEM016, SEM019, SEM020 | Zero weights, `^` as a power, verifiers that accept all input, unguarded precompiles |
 | [TST](https://agustinustheo.github.io/polkadot-linter/rules/testing.html) | TST002 | `assert_ok!` that hides dispatch errors |
 | [TRM](https://agustinustheo.github.io/polkadot-linter/rules/terminology.html) | TRM001 | Spelling and terms |
 

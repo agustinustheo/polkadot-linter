@@ -1,4 +1,4 @@
-//! Runtime configuration rules (RTC001-RTC010).
+//! Runtime configuration rules (RTC001-RTC011).
 //!
 //! These rules inspect the *runtime* crate rather than individual pallets:
 //! `impl <pallet>::Config for Runtime` blocks, `construct_runtime!` /
@@ -85,6 +85,10 @@ struct RuntimeCrate {
     /// Production runtime pallets from `VALUE_MOVING_PALLETS`: `RuntimeCall`
     /// variant and pallet crate.
     pallets: Vec<(String, String)>,
+    /// Every production runtime pallet name.
+    pallet_names: HashSet<String>,
+    /// `&'static str` constants and `parameter_types!`: name to string value.
+    str_params: HashMap<String, String>,
 }
 
 /// Locate the Cargo package owning `path`, or fall back to the file itself
@@ -110,6 +114,8 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
         return Arc::new(RuntimeCrate {
             is_runtime: declarations.is_runtime(),
             pallets: declarations.pallets,
+            pallet_names: declarations.pallet_names,
+            str_params: declarations.str_params,
             ..RuntimeCrate::default()
         });
     };
@@ -156,6 +162,8 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         root: Some(root.to_path_buf()),
         is_runtime,
         pallets: declarations.pallets,
+        pallet_names: declarations.pallet_names,
+        str_params: declarations.str_params,
         modules: modules
             .files
             .into_iter()
@@ -273,6 +281,8 @@ struct Declarations {
     ungated: usize,
     featured: usize,
     pallets: Vec<(String, String)>,
+    pallet_names: HashSet<String>,
+    str_params: HashMap<String, String>,
 }
 
 impl Declarations {
@@ -310,10 +320,20 @@ impl Finder<'_> {
         }
     }
 
-    /// Record a declared pallet whose crate moves value.
+    /// Record a declared pallet, and its crate when that crate moves value.
     fn pallet(&mut self, name: Option<String>, tokens: TokenStream) {
-        if let (Some(name), Some((krate, _))) = (name, find_ident(tokens, VALUE_MOVING_PALLETS)) {
-            self.counts.pallets.push((name, krate));
+        let Some(name) = name else { return };
+        if let Some((krate, _)) = find_ident(tokens, VALUE_MOVING_PALLETS) {
+            self.counts.pallets.push((name.clone(), krate));
+        }
+        self.counts.pallet_names.insert(name);
+    }
+
+    fn str_param(&mut self, name: String, value: &[TokenTree]) {
+        if let [TokenTree::Literal(literal)] = value {
+            if let Lit::Str(value) = Lit::new(literal.clone()) {
+                self.counts.str_params.insert(name, value.value());
+            }
         }
     }
 }
@@ -330,7 +350,15 @@ impl<'ast> Visit<'ast> for Finder<'_> {
                 });
                 self.pallet(name, entry.into_iter().collect());
             }
+        } else if path_last_ident(&item.mac.path).as_deref() == Some("parameter_types") {
+            for (name, _, value) in parameter_type_consts(item.mac.tokens.clone()) {
+                self.str_param(name, &value);
+            }
         }
+    }
+    fn visit_item_const(&mut self, item: &'ast ItemConst) {
+        let value = item.expr.to_token_stream().into_iter().collect::<Vec<_>>();
+        self.str_param(item.ident.to_string(), &value);
     }
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         if is_runtime_module(item) {
@@ -1332,10 +1360,10 @@ fn deposit_is_origin_gated(item_impl: &ItemImpl, deposit_type: &str, aliases: &A
         .is_some_and(|item| origin_is_privileged(&item.ty, aliases, 0))
 }
 
-/// Declarations inside a `parameter_types!` body: name, line, zero? Covers the
+/// Declarations inside a `parameter_types!` body: name, line, value. Covers the
 /// `pub const X: T = v;`, `pub X: T = v;` and `pub storage X: T = v;` forms
 /// (frame/support/src/macros.rs), skipping test/benchmark-gated declarations.
-fn parameter_type_consts(tokens: TokenStream) -> Vec<(String, usize, bool)> {
+fn parameter_type_consts(tokens: TokenStream) -> Vec<(String, usize, Vec<TokenTree>)> {
     let trees = tokens.into_iter().collect::<Vec<_>>();
     trees
         .split(|tree| matches!(tree, TokenTree::Punct(punct) if punct.as_char() == ';'))
@@ -1366,7 +1394,7 @@ fn parameter_type_consts(tokens: TokenStream) -> Vec<(String, usize, bool)> {
                 (
                     name.to_string(),
                     name.span().start().line,
-                    expr_tokens_are_zero(&rest[equals + 1..]),
+                    rest[equals + 1..].to_vec(),
                 )
             })
         })
@@ -1431,8 +1459,8 @@ impl LintRule for ZeroDepositConfig {
 
             fn visit_macro(&mut self, mac: &'ast Macro) {
                 if path_last_ident(&mac.path).as_deref() == Some("parameter_types") {
-                    for (name, line, zero) in parameter_type_consts(mac.tokens.clone()) {
-                        if zero {
+                    for (name, line, value) in parameter_type_consts(mac.tokens.clone()) {
+                        if expr_tokens_are_zero(&value) {
                             self.zero_items.push((name, line));
                         }
                     }
@@ -2294,6 +2322,77 @@ impl LintRule for StorageReadingUnpaidAliaser {
                          `type CheapTrustedAliasers = (AliasChildLocation,);`, and keep \
                          `(CheapTrustedAliasers, AuthorizedAliasers<Runtime>)` for \
                          `xcm_executor::Config::Aliasers`.",
+                    )
+                })
+                .collect(),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RTC011: `RemovePallet` that names a pallet still in the runtime
+// ---------------------------------------------------------------------------
+
+pub struct RemovePalletOfLivePallet;
+
+impl LintRule for RemovePalletOfLivePallet {
+    fn id(&self) -> &str {
+        "RTC011"
+    }
+    fn name(&self) -> &str {
+        "remove-pallet-of-live-pallet"
+    }
+    fn family(&self) -> &str {
+        "runtime-config"
+    }
+
+    fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
+        struct Removals<'a> {
+            krate: &'a RuntimeCrate,
+            found: Vec<(usize, String)>,
+        }
+        impl<'ast> Visit<'ast> for Removals<'_> {
+            fn visit_path_segment(&mut self, segment: &'ast syn::PathSegment) {
+                if segment.ident == "RemovePallet" {
+                    let name = generic_type_args(segment)
+                        .first()
+                        .and_then(|ty| type_path(ty))
+                        .and_then(path_last_ident)
+                        .and_then(|param| self.krate.str_params.get(&param));
+                    if let Some(name) = name.filter(|name| self.krate.pallet_names.contains(*name))
+                    {
+                        self.found.push((line_of(segment), name.clone()));
+                    }
+                }
+                visit::visit_path_segment(self, segment);
+            }
+        }
+
+        let krate = runtime_scope(ctx, &config.runtime_config)?;
+        let file = production_ast(ctx.ast.as_ref()?);
+        let severity = config.rule_severity(self.id(), Severity::Error);
+        let mut removals = Removals {
+            krate: &krate,
+            found: Vec::new(),
+        };
+        removals.visit_file(&file);
+        non_empty(
+            removals
+                .found
+                .into_iter()
+                .map(|(line, name)| {
+                    diagnostic(
+                        self,
+                        ctx,
+                        severity,
+                        line,
+                        format!("`RemovePallet` deletes the storage of `{name}`, which the runtime still declares"),
+                        "`RemovePallet` deletes every key under the pallet prefix on each runtime \
+                         upgrade. If the pallet is still in the runtime, each later upgrade wipes \
+                         its live state (polkadot-sdk #13137: Asset Hub Westend kept \
+                         `RemovePallet<PsmName, _>` with `Psm` still in the runtime).",
+                        "Remove the `RemovePallet` entry from the migrations after it has run once, \
+                         or remove the pallet from the runtime.",
                     )
                 })
                 .collect(),
