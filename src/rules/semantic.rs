@@ -1010,11 +1010,11 @@ impl LintRule for PrecompileWithoutDelegateGuard {
     }
 
     fn check(&self, ctx: &FileContext, config: &Config) -> Option<Vec<Diagnostic>> {
-        // Any `delegate` text counts as a guard: `is_delegate_call()`, also in
-        // a same-file helper, or an imported `ensure_not_delegate(env)`.
+        // `is_delegate_call` anywhere in the file counts as a guard, so a check
+        // in a same-file helper (vesting's `ensure_mutable`) is accepted.
         if should_skip_production_rule(ctx)
             || !ctx.content.contains(".caller()")
-            || ctx.content.contains("delegate")
+            || ctx.content.contains("is_delegate_call")
         {
             return None;
         }
