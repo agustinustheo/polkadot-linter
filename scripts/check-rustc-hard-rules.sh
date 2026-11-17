@@ -203,6 +203,11 @@ pub fn standalone_discarded_repatriate_reserved() {
     frame_support::traits::Currency::repatriate_reserved();
 }
 
+pub fn try_discarded_repatriate_reserved() -> Result<(), ()> {
+    frame_support::traits::Currency::repatriate_reserved()?;
+    Ok(())
+}
+
 pub fn checked_repatriate_reserved() -> Result<(), ()> {
     let remaining = frame_support::traits::Currency::repatriate_reserved()?;
     if !remaining.is_zero() {
@@ -1344,10 +1349,12 @@ rustc_sec012_count="$(jq '[.[] | select(.rule_id == "SEC012")] | length' "$RUSTC
 rustc_sec015_count="$(jq '[.[] | select(.rule_id == "SEC015")] | length' "$RUSTC_JSON")"
 discarded_repatriate_line="$(grep -n 'pub fn discarded_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 standalone_discarded_repatriate_line="$(grep -n 'pub fn standalone_discarded_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
+try_discarded_repatriate_line="$(grep -n 'pub fn try_discarded_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 checked_repatriate_line="$(grep -n 'pub fn checked_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 unrelated_repatriate_line="$(grep -n 'pub fn unrelated_repatriate_reserved' "$FIXTURE" | cut -d: -f1)"
 rustc_sec006_discarded_count="$(jq --argjson line "$discarded_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec006_standalone_discarded_count="$(jq --argjson line "$standalone_discarded_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
+rustc_sec006_try_discarded_count="$(jq --argjson line "$try_discarded_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 rustc_sec006_checked_count="$(jq --argjson line "$checked_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 6))] | length' "$RUSTC_JSON")"
 rustc_sec006_unrelated_count="$(jq --argjson line "$unrelated_repatriate_line" '[.[] | select(.rule_id == "SEC006" and .line >= $line and .line <= ($line + 2))] | length' "$RUSTC_JSON")"
 unguarded_dispatch_bypass_line="$(grep -n 'pub fn unguarded_dispatch_bypass' "$FIXTURE" | cut -d: -f1)"
@@ -1413,9 +1420,10 @@ echo "rustc filtered empty findings: $rustc_filtered_empty_count"
 echo "rustc rule-filtered findings: $rustc_rule_filtered_count"
 
 test "$syn_sec006_count" = "0"
-test "$rustc_sec006_count" = "2"
+test "$rustc_sec006_count" = "3"
 test "$rustc_sec006_discarded_count" = "1"
 test "$rustc_sec006_standalone_discarded_count" = "1"
+test "$rustc_sec006_try_discarded_count" = "1"
 test "$rustc_sec006_checked_count" = "0"
 test "$rustc_sec006_unrelated_count" = "0"
 test "$syn_sec010_count" = "0"
@@ -1448,7 +1456,7 @@ test "$rustc_sec015_count" = "1"
 test "$rustc_sec015_unguarded_count" = "1"
 test "$rustc_sec015_root_guarded_count" = "0"
 test "$rustc_sec015_unrelated_count" = "0"
-test "$rustc_filtered_count" = "17"
+test "$rustc_filtered_count" = "18"
 test "$rustc_filtered_empty_count" = "0"
 test "$rustc_rule_filtered_count" = "13"
 test "$rustc_rule_filtered_sec011_count" = "6"
