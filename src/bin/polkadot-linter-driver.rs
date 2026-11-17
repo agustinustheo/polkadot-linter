@@ -1369,8 +1369,13 @@ fn is_repatriate_reserved_call(
     let expr = strip_drop_temps(expr);
     let callee = match expr.kind {
         ExprKind::Call(callee, _) => callee,
+        // `call?` lowers to `match Try::branch(call) { .. }`: look through the `branch` call.
         ExprKind::Match(scrutinee, _, rustc_hir::MatchSource::TryDesugar(_)) => {
-            return is_repatriate_reserved_call(tcx, typeck, scrutinee);
+            let inner = match strip_drop_temps(scrutinee).kind {
+                ExprKind::Call(_, [inner]) => inner,
+                _ => scrutinee,
+            };
+            return is_repatriate_reserved_call(tcx, typeck, inner);
         }
         _ => return false,
     };
