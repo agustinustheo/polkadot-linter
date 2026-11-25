@@ -21,8 +21,13 @@ polkadot-fellows/runtimes. All RTC rules use the syntax engine.
 
 ## Which code the rules check
 
-RTC009 reads every `Cargo.lock`. The other RTC rules check a file only when all
-four conditions are true:
+RTC009 reads every `Cargo.lock`. In a runtime workspace it downgrades entries
+that no included production runtime reaches to `advisory`/`low`. Local
+runtimes, packages that build a WASM blob through `substrate-wasm-builder`,
+packages that depend on `frame-executive` and packages named like a runtime
+are the roots, and a stale lockfile turns the downgrade off
+([RTC009](RTC009.md#limits)). The other RTC rules check a file
+only when all four conditions are true:
 
 1. **The file is in a runtime crate.** The linter starts at the library target
    of the nearest package (default `src/lib.rs`). It follows `mod` items. The
@@ -62,7 +67,24 @@ dev_runtime_packages = [
 ]
 dev_runtime_tokens = ["dev", "development"]
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]  # [] checks all runtimes
+# exclude_testnet_runtimes = false       # unset: off, `--profile security` turns it on
+testnet_runtime_tokens = ["testnet", "rococo", "westend", "paseo"]
+# rtc008_value_escalations_only = false  # unset: off, `--profile security` turns it on
 ```
+
+`exclude_testnet_runtimes` and `rtc008_value_escalations_only` are unset by
+default. `--profile security` turns both on, but a value the project config
+states wins. When `exclude_testnet_runtimes` would skip every runtime that the
+scan lints, the linter lints them anyway and names them on stderr. Otherwise
+it names the testnet runtimes it skips on stderr. The linter decides once for
+all scan paths. It counts only the runtimes it lints: the runtimes of the
+files it reads after `include` and `exclude` globs and test classification,
+and the local runtimes of a scanned `Cargo.lock` with an affected package.
+A runtime under `tests/` or one that a glob removes does not count.
+
+Under `--profile security` the pinned SDK reports 0 findings, because its
+Westend and Rococo runtimes are skipped. A project that ships a runtime on a
+testnet should set `exclude_testnet_runtimes = false`.
 
 Add your own dev and testnet runtimes (for example `moonbase-runtime`) to
 `dev_runtime_packages`.

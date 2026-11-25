@@ -1,7 +1,32 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    str::FromStr,
+};
 
 use crate::diagnostics::Severity;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    Default,
+    Security,
+    All,
+}
+
+impl FromStr for Profile {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "default" => Ok(Profile::Default),
+            "security" => Ok(Profile::Security),
+            "all" | "all-rules" => Ok(Profile::All),
+            _ => Err(format!(
+                "Unknown profile `{s}`; expected default, security, or all"
+            )),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -47,6 +72,10 @@ pub struct RulesConfig {
     pub enabled: HashMap<String, bool>,
     /// Map of rule_id -> severity override
     pub severity: HashMap<String, String>,
+    /// Rule IDs that the loaded project file lists in `[rules.enabled]`. A
+    /// `--profile` does not change them.
+    #[serde(skip)]
+    project_enabled: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +116,17 @@ pub struct RuntimeConfigConfig {
     /// Package or crate-directory name tokens (split on `-`/`_`) that mark a
     /// test runtime, which is always skipped. Set to `[]` to lint them.
     pub test_runtime_tokens: Vec<String>,
+    /// Skip testnet runtimes whose package or directory name contains a
+    /// `testnet_runtime_tokens` token. Unset means off, and `--profile
+    /// security` sets it only when the project leaves it unset.
+    pub exclude_testnet_runtimes: Option<bool>,
+    /// Package or crate-directory name tokens marking testnet runtimes when
+    /// `exclude_testnet_runtimes` is enabled.
+    pub testnet_runtime_tokens: Vec<String>,
+    /// In RTC008 `is_superset`, only report escalations that admit a
+    /// value-moving, deposit-moving, or privilege pallet. Unset means off, and
+    /// `--profile security` sets it only when the project leaves it unset.
+    pub rtc008_value_escalations_only: Option<bool>,
     /// Retired RTC001 keys, accepted so 0.2.0 configs still load.
     #[serde(skip_serializing)]
     unit_weight_info_allowlist: Option<toml::Value>,
@@ -94,6 +134,18 @@ pub struct RuntimeConfigConfig {
     flag_substrate_weight: Option<toml::Value>,
     #[serde(skip_serializing)]
     substrate_weight_severity: Option<toml::Value>,
+}
+
+impl RuntimeConfigConfig {
+    /// Effective `exclude_testnet_runtimes`: off when unset.
+    pub fn excludes_testnet_runtimes(&self) -> bool {
+        self.exclude_testnet_runtimes.unwrap_or(false)
+    }
+
+    /// Effective `rtc008_value_escalations_only`: off when unset.
+    pub fn rtc008_reports_value_escalations_only(&self) -> bool {
+        self.rtc008_value_escalations_only.unwrap_or(false)
+    }
 }
 
 impl Default for RuntimeConfigConfig {
@@ -116,6 +168,14 @@ impl Default for RuntimeConfigConfig {
                 "mock".to_string(),
                 "mocks".to_string(),
             ],
+            exclude_testnet_runtimes: None,
+            testnet_runtime_tokens: vec![
+                "testnet".to_string(),
+                "rococo".to_string(),
+                "westend".to_string(),
+                "paseo".to_string(),
+            ],
+            rtc008_value_escalations_only: None,
             unit_weight_info_allowlist: None,
             flag_substrate_weight: None,
             substrate_weight_severity: None,
@@ -159,10 +219,55 @@ impl Default for TerminologyConfig {
     }
 }
 
+/// Explicit rule allowlist for `--profile security`. Any future hygiene rule
+/// stays off in the security profile unless deliberately added here.
+pub const SECURITY_PROFILE_RULE_IDS: &[&str] = &[
+    "RTC005", "RTC007", "RTC008", "RTC009", "RTC010", "RTC011", "SEC006", "SEC010", "SEC012",
+    "SEC015", "SEC019", "SEC020", "SEC021", "SEC022", "SEC023", "SEM019", "SEM020", "LNT001",
+];
+
 impl Config {
+    pub fn from_profile(profile: Profile) -> Self {
+        let mut config = Self::default();
+        config.apply_profile(profile);
+        config
+    }
+
+    /// Overlay a built-in rule profile onto an existing config.
+    ///
+    /// The profile sets which rules run, except a rule that the project file
+    /// lists in `[rules.enabled]`. `security` also turns on
+    /// `exclude_testnet_runtimes` and `rtc008_value_escalations_only`, but only
+    /// where the project config leaves them unset. `default` changes nothing.
+    /// Every other project setting stays as loaded.
+    pub fn apply_profile(&mut self, profile: Profile) {
+        let enabled = |rule_id: &str| match profile {
+            Profile::Default => None,
+            Profile::Security => Some(SECURITY_PROFILE_RULE_IDS.contains(&rule_id)),
+            Profile::All => Some(true),
+        };
+        for rule_id in crate::rules::all_rule_ids() {
+            if self.rules.project_enabled.contains(&rule_id) {
+                continue;
+            }
+            if let Some(enabled) = enabled(&rule_id) {
+                self.rules.enabled.insert(rule_id, enabled);
+            }
+        }
+        if profile == Profile::Security {
+            let runtime = &mut self.runtime_config;
+            runtime.exclude_testnet_runtimes.get_or_insert(true);
+            runtime.rtc008_value_escalations_only.get_or_insert(true);
+        }
+    }
+
     pub fn load(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        let mut config: Config = toml::from_str(&content)?;
+        Self::from_toml_str(&content)
+    }
+
+    fn from_toml_str(content: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut config: Config = toml::from_str(content)?;
         for (section, value) in [
             ("validation_order", &config.validation_order),
             ("mock_usage", &config.mock_usage),
@@ -190,6 +295,7 @@ impl Config {
         }
         // A `[rules]` table overrides the bundled per-rule entries instead of
         // replacing them, so default-off rules stay off unless re-enabled.
+        config.rules.project_enabled = config.rules.enabled.keys().cloned().collect();
         let defaults = Config::default().rules;
         for (rule_id, enabled) in defaults.enabled {
             config.rules.enabled.entry(rule_id).or_insert(enabled);

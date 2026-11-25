@@ -37,16 +37,21 @@ say so in your report.
 
 ```bash
 polkadot-linter --syntax-only -f json .                 # quick pass, no build
+polkadot-linter --profile security --group -f json .    # high-signal security audit, deduplicated across runtimes; stderr names skipped testnet runtimes
 polkadot-linter -f json --no-progress \
   --driver-path ~/.cargo/bin/polkadot-linter-driver \
   --manifest-path runtime/Cargo.toml runtime            # full pass, builds the crate
 polkadot-linter --syntax-only -f json --rules RTC,SEC020 .   # some families or rule IDs
-polkadot-linter -c config/all-rules.toml -f json .      # every rule; file from the linter repo
+polkadot-linter --profile all -f json .                 # every rule
 ```
 
 Start with `--syntax-only`. Run the full pass before a PR; the crate must
-build. Use `-c config/all-rules.toml` only when the user asks: the extra rules
-are off because they were measured as noisy. Do not edit the project's
+build. Use `--profile all` only when the user asks: the extra rules
+are off because they were measured as noisy. A rule the project lists in
+`[rules.enabled]` keeps that setting under every profile. `--profile security`
+skips testnet runtimes (Westend, Rococo, Paseo): if the project ships on a
+testnet, say so in your report or pass a config with
+`exclude_testnet_runtimes = false`. Do not edit the project's
 `polkadot-linter.toml` to silence findings.
 
 ## Reading the JSON

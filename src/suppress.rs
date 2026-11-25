@@ -197,6 +197,7 @@ fn lnt_diagnostic(path: &Path, line: usize, severity: Severity, message: String)
         rule_name: "allow-comment".to_string(),
         category: RuleCategory::Semantic,
         severity,
+        confidence: crate::diagnostics::default_confidence(ALLOW_RULE_ID),
         file: relative_to_cwd(path),
         line,
         column: None,
@@ -204,6 +205,7 @@ fn lnt_diagnostic(path: &Path, line: usize, severity: Severity, message: String)
         message,
         explanation: "`// polkadot-linter: allow(RULE, reason = \"...\")` must name known rules, give a reason, and cover a finding.".to_string(),
         suggestion: None,
+        also_in: Vec::new(),
     }
 }
 

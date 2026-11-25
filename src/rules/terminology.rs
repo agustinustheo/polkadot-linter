@@ -112,6 +112,7 @@ impl LintRule for SpellingConventions {
                             rule_name: self.name().to_string(),
                             category: RuleCategory::Terminology,
                             severity: config.rule_severity(self.id(), Severity::Advisory),
+                            confidence: crate::diagnostics::default_confidence(self.id()),
                             file: ctx.path.clone(),
                             line: i + 1,
                             column: None,
@@ -127,6 +128,7 @@ impl LintRule for SpellingConventions {
                                 "Replace `{}` with `{}`",
                                 forbidden, preferred
                             )),
+                            also_in: Vec::new(),
                         });
                         break;
                     }
@@ -144,6 +146,7 @@ impl LintRule for SpellingConventions {
                             rule_name: self.name().to_string(),
                             category: RuleCategory::Terminology,
                             severity: config.rule_severity(self.id(), Severity::Advisory),
+                            confidence: crate::diagnostics::default_confidence(self.id()),
                             file: ctx.path.clone(),
                             line: i + 1,
                             column: None,
@@ -157,6 +160,7 @@ impl LintRule for SpellingConventions {
                                 "Replace `{}` with `{}`",
                                 forbidden, preferred
                             )),
+                            also_in: Vec::new(),
                         });
                     }
                 }

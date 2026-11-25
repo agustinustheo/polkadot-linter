@@ -18,9 +18,9 @@ SEM009 = "warning"     # advisory, warning or error
 
 | Section | What it controls |
 | --- | --- |
-| `[rules.enabled]` | Turns each rule on or off. |
+| `[rules.enabled]` | Turns each rule on or off. A rule listed here keeps its setting under any `--profile`. |
 | `[rules.severity]` | Changes the severity of each rule. It does not turn a rule on. |
-| `[runtime_config]` | Which runtimes the RTC rules check, and RTC001 settings. See [Runtime configuration](../rules/runtime-config.md). |
+| `[runtime_config]` | Which runtimes the RTC rules check, and RTC001 settings. `exclude_testnet_runtimes` and `rtc008_value_escalations_only` are unset by default; `--profile security` turns them on only when the project leaves them unset. See [Runtime configuration](../rules/runtime-config.md). |
 | `[test_smells]` | `severity` for the TST rules. |
 | `[terminology]` | Settings for TRM001. See [TRM001](../rules/TRM001.md). |
 | `[general]` | `include` and `exclude` globs for files. |

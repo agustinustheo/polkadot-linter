@@ -26,6 +26,7 @@ fn relative_manifest_path_resolves_workspace_paths_and_baseline_is_cwd_relative(
         rule_name: String::new(),
         category: polkadot_linter::diagnostics::RuleCategory::RuntimeConfig,
         severity: polkadot_linter::diagnostics::Severity::Warning,
+        confidence: polkadot_linter::diagnostics::Confidence::Low,
         file: "member/src/lib.rs".into(),
         line: 1,
         column: None,
@@ -33,6 +34,7 @@ fn relative_manifest_path_resolves_workspace_paths_and_baseline_is_cwd_relative(
         message: String::new(),
         explanation: String::new(),
         suggestion: None,
+        also_in: Vec::new(),
     };
     let baseline_path = workspace.path().join("baseline.json");
     write_baseline(&baseline_path, std::slice::from_ref(&diagnostic), &resolver).unwrap();

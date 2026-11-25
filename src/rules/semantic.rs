@@ -823,23 +823,25 @@ impl LintRule for WeightZeroPlaceholder {
                         }));
                     if zero {
                         self.diagnostics.push(Diagnostic {
-							rule_id: self.rule_id.to_string(),
-							rule_name: self.rule_name.to_string(),
-							category: RuleCategory::Semantic,
-							severity: self.severity,
-							file: self.file.to_path_buf(),
-							line: span_line(attr.span()),
-							column: Some(span_column(attr.span())),
-							end_line: None,
-							message: format!("zero weight `{}` in weight attribute", compact_tokens(&expr)),
-							explanation: "A zero weight (`Weight::zero()`, `0`, \
+                            rule_id: self.rule_id.to_string(),
+                            rule_name: self.rule_name.to_string(),
+                            category: RuleCategory::Semantic,
+                            severity: self.severity,
+                            confidence: crate::diagnostics::default_confidence(self.rule_id),
+                            file: self.file.to_path_buf(),
+                            line: span_line(attr.span()),
+                            column: Some(span_column(attr.span())),
+                            end_line: None,
+                            message: format!("zero weight `{}` in weight attribute", compact_tokens(&expr)),
+                            explanation: "A zero weight (`Weight::zero()`, `0`, \
                                 `Weight::from_parts(0, 0)`) means the extrinsic is free, which is \
                                 almost certainly wrong. Replace with an actual benchmarked weight function."
-								.to_string(),
-							suggestion: Some(
-								"Add a benchmark and use `T::WeightInfo::your_function()`".to_string(),
-							),
-						});
+                                .to_string(),
+                            suggestion: Some(
+                                "Add a benchmark and use `T::WeightInfo::your_function()`".to_string(),
+                            ),
+                            also_in: Vec::new(),
+                        });
                     }
                 }
             }
@@ -968,6 +970,7 @@ impl LintRule for VerifierDefaultsToTrue {
                 rule_name: self.name().to_string(),
                 category: RuleCategory::Semantic,
                 severity,
+                confidence: crate::diagnostics::default_confidence(self.id()),
                 file: ctx.path.clone(),
                 line,
                 column: None,
@@ -986,6 +989,7 @@ impl LintRule for VerifierDefaultsToTrue {
                      `false` (fail closed)."
                         .to_string(),
                 ),
+                also_in: Vec::new(),
             })
             .collect::<Vec<_>>();
         (!diagnostics.is_empty()).then_some(diagnostics)
@@ -1045,6 +1049,7 @@ impl LintRule for PrecompileWithoutDelegateGuard {
                 rule_name: self.name().to_string(),
                 category: RuleCategory::Semantic,
                 severity,
+                confidence: crate::diagnostics::default_confidence(self.id()),
                 file: ctx.path.clone(),
                 line: span_line(f.sig.ident.span()),
                 column: None,
@@ -1058,6 +1063,7 @@ impl LintRule for PrecompileWithoutDelegateGuard {
                 suggestion: Some(
                     "Start `call` with `if env.is_delegate_call() { return Err(..) }`.".to_string(),
                 ),
+                also_in: Vec::new(),
             })
             .collect::<Vec<_>>();
         (!diagnostics.is_empty()).then_some(diagnostics)
@@ -1127,6 +1133,7 @@ impl LintRule for MissingWeightOfAuthorize {
                     rule_name: self.rule_name.to_string(),
                     category: RuleCategory::Semantic,
                     severity: self.severity,
+                    confidence: crate::diagnostics::default_confidence(self.rule_id),
                     file: self.file.to_path_buf(),
                     line: span_line(span),
                     column: Some(span_column(span)),
@@ -1140,6 +1147,7 @@ impl LintRule for MissingWeightOfAuthorize {
                     suggestion: Some(
                         "Add `#[pallet::weight_of_authorize(T::WeightInfo::authorize_your_call())]` near the call attributes".to_string(),
                     ),
+                    also_in: Vec::new(),
                 });
             }
         }

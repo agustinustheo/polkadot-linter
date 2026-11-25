@@ -45,9 +45,10 @@ severity = "warning"
 # mod x;` files), mock/tests/benches paths and test runtime crates are always
 # skipped.
 #
-# No family-wide severity is set, so each rule keeps its own default: RTC003
-# (XCM fees waived or delivery free) is error, the others are warning. Set
-# `severity = "..."` here to override all of them, or use [rules.severity].
+# No family-wide severity is set, so each rule keeps its own default: RTC009
+# (vulnerable crate version) and RTC011 (RemovePallet of a live pallet) are
+# error, the others are warning. Set `severity = "..."` here to override all of
+# them, or use [rules.severity].
 [runtime_config]
 
 # Development runtimes are skipped unless include_dev_runtimes = true. They
@@ -72,6 +73,21 @@ dev_runtime_tokens = ["dev", "development"]
 # e.g. `polkadot-test-runtime` or `xcm_mock_runtime`, but not
 # `mychain-testnet-runtime`. Set to [] to lint every runtime.
 test_runtime_tokens = ["test", "tests", "mock", "mocks"]
+
+# Testnet runtimes are linted by default. Set `exclude_testnet_runtimes = true`
+# to skip runtimes matching `testnet_runtime_tokens`. `--profile security` turns
+# it on when the project config leaves it unset; an explicit `false` here wins.
+# When the filter would skip every runtime in the scan, they are linted anyway,
+# and the CLI names the runtimes it skips on stderr.
+# exclude_testnet_runtimes = false
+testnet_runtime_tokens = ["testnet", "rococo", "westend", "paseo"]
+
+# Set `rtc008_value_escalations_only = true` to suppress RTC008 `is_superset`
+# findings whose only uncovered calls belong to known operational-only pallets
+# (e.g. Timestamp or Aura). CollatorSelection and Session are not: their calls
+# reserve candidacy bonds or key deposits. `--profile security` turns it on
+# when the project config leaves it unset; an explicit `false` here wins.
+# rtc008_value_escalations_only = false
 
 # ---------------------------------------------------------------------------
 # Rule family: Terminology (TRM001)

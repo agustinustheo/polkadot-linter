@@ -301,11 +301,13 @@ fn absolutize(path: &Path) -> Result<PathBuf, RustcPipelineError> {
 impl From<RustcDiagnostic> for Diagnostic {
     fn from(value: RustcDiagnostic) -> Self {
         let severity = crate::rules::compiler_backed_rule_default_severity(&value.rule_id);
+        let confidence = crate::diagnostics::default_confidence(&value.rule_id);
         Diagnostic {
             rule_id: value.rule_id,
             rule_name: value.rule_name,
             category: RuleCategory::Semantic,
             severity,
+            confidence,
             file: PathBuf::from(value.file),
             line: value.line,
             column: Some(value.column),
@@ -313,6 +315,7 @@ impl From<RustcDiagnostic> for Diagnostic {
             message: value.message,
             explanation: "Compiler-backed analysis used rustc-resolved types, expanded cfg/macro context, and HIR/typeck evidence for this diagnostic.".to_string(),
             suggestion: Some("Review the resolved compiler-backed finding and bound, meter, or handle the reported runtime path explicitly.".to_string()),
+            also_in: Vec::new(),
         }
     }
 }
