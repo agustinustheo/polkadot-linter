@@ -6,7 +6,10 @@ use std::{
 };
 
 use polkadot_linter::{
-    config::Config, diagnostics, engine::LintEngine, rules::COMPILER_BACKED_RULE_IDS,
+    config::{Config, Profile},
+    diagnostics,
+    engine::LintEngine,
+    rules::COMPILER_BACKED_RULE_IDS,
     rustc_pipeline, suppress,
 };
 
@@ -25,6 +28,10 @@ struct Cli {
     #[arg(short, long)]
     config: Option<PathBuf>,
 
+    /// Built-in rule profile overlaid on the loaded config: default, security, or all
+    #[arg(long)]
+    profile: Option<Profile>,
+
     /// Output format: human, json, or sarif
     #[arg(short = 'f', long, default_value = "human")]
     format: diagnostics::OutputFormat,
@@ -32,6 +39,14 @@ struct Cli {
     /// Severity threshold: advisory, warning, or error
     #[arg(short, long, default_value = "advisory")]
     severity: diagnostics::Severity,
+
+    /// Minimum triage confidence: low, medium, or high
+    #[arg(long, default_value = "low")]
+    confidence: diagnostics::Confidence,
+
+    /// Group diagnostics with identical rule ID and message into one entry with `also_in` locations
+    #[arg(long)]
+    group: bool,
 
     /// Fail on warnings (exit code 1 if any warning or error)
     #[arg(long)]
@@ -132,7 +147,7 @@ fn main() {
         env_logger::init();
     }
 
-    let config = match load_config(cli.config.as_deref()) {
+    let config = match load_config(cli.config.as_deref(), cli.profile) {
         Ok(config) => config,
         Err(error) => {
             eprintln!("Error loading config: {error}");
@@ -211,13 +226,7 @@ fn main() {
         );
     }
     if !cli.no_syntax {
-        for path in &cli.paths {
-            results.extend(engine.scan_with_cargo_features(
-                path,
-                cli.no_default_features,
-                &cli.features,
-            ));
-        }
+        results.extend(engine.scan_paths(&cli.paths, cli.no_default_features, &cli.features));
     }
 
     if !cli.syntax_only && compiler_driver_available && !compiler_backed_rules.is_empty() {
@@ -311,10 +320,14 @@ fn main() {
         );
     }
 
-    let filtered = results
+    let mut filtered = results
         .into_iter()
-        .filter(|d| d.severity >= cli.severity)
+        .filter(|d| d.severity >= cli.severity && d.confidence >= cli.confidence)
         .collect::<Vec<_>>();
+
+    if cli.group {
+        filtered = diagnostics::group_diagnostics(filtered);
+    }
 
     match cli.format {
         diagnostics::OutputFormat::Human => {
@@ -367,19 +380,23 @@ fn main() {
     }
 }
 
-fn load_config(path: Option<&Path>) -> Result<Config, String> {
-    match path {
-        Some(path) => Config::load(path).map_err(|error| error.to_string()),
+fn load_config(path: Option<&Path>, profile: Option<Profile>) -> Result<Config, String> {
+    let mut config = match path {
+        Some(path) => Config::load(path).map_err(|error| error.to_string())?,
         None => {
             let default_path = Path::new("polkadot-linter.toml");
             if default_path.is_file() {
-                Config::load(default_path).map_err(|error| error.to_string())
+                Config::load(default_path).map_err(|error| error.to_string())?
             } else {
                 log::info!("No config file found, using bundled defaults");
-                Ok(Config::default())
+                Config::default()
             }
         }
+    };
+    if let Some(profile) = profile {
+        config.apply_profile(profile);
     }
+    Ok(config)
 }
 
 fn effective_manifest_path(cli: &Cli) -> Result<Option<PathBuf>, String> {
@@ -504,8 +521,8 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     use polkadot_linter::{
-        config::Config,
-        diagnostics::{Diagnostic, RuleCategory, Severity},
+        config::{Config, Profile},
+        diagnostics::{Confidence, Diagnostic, RuleCategory, Severity},
         rules::COMPILER_BACKED_RULE_IDS,
     };
 
@@ -576,7 +593,126 @@ mod tests {
             .path()
             .join("missing.toml");
 
-        assert!(load_config(Some(&path)).is_err());
+        assert!(load_config(Some(&path), None).is_err());
+    }
+
+    #[test]
+    fn security_profile_keeps_runtime_settings_the_project_states() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let cfg_path = dir.path().join("custom.toml");
+        fs::write(
+            &cfg_path,
+            "[runtime_config]\nexclude_testnet_runtimes = false\n\
+             rtc008_value_escalations_only = false\n",
+        )
+        .expect("config should be written");
+        let config =
+            load_config(Some(&cfg_path), Some(Profile::Security)).expect("security profile loads");
+        assert_eq!(config.runtime_config.exclude_testnet_runtimes, Some(false));
+        assert_eq!(
+            config.runtime_config.rtc008_value_escalations_only,
+            Some(false)
+        );
+        let config = load_config(Some(&cfg_path), None).expect("config loads");
+        assert!(!config.runtime_config.excludes_testnet_runtimes());
+        let config = Config::from_profile(Profile::Security);
+        assert!(config.runtime_config.excludes_testnet_runtimes());
+        assert!(config
+            .runtime_config
+            .rtc008_reports_value_escalations_only());
+    }
+
+    #[test]
+    fn profiles_keep_rule_toggles_the_project_states() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let cfg_path = dir.path().join("custom.toml");
+        fs::write(
+            &cfg_path,
+            "[rules.enabled]\nRTC003 = true\nRTC009 = false\n",
+        )
+        .expect("config should be written");
+        for profile in [
+            None,
+            Some(Profile::Default),
+            Some(Profile::Security),
+            Some(Profile::All),
+        ] {
+            let config = load_config(Some(&cfg_path), profile).expect("config loads");
+            assert!(config.rule_enabled("RTC003"), "{profile:?}");
+            assert!(!config.rule_enabled("RTC009"), "{profile:?}");
+        }
+        // A rule the project leaves unset follows the profile, including a
+        // bundled default-off rule.
+        let security = load_config(Some(&cfg_path), Some(Profile::Security)).unwrap();
+        assert!(!security.rule_enabled("RTC001"));
+        let all = load_config(Some(&cfg_path), Some(Profile::All)).unwrap();
+        assert!(all.rule_enabled("RTC004"));
+        let default = load_config(Some(&cfg_path), Some(Profile::Default)).unwrap();
+        assert!(!default.rule_enabled("RTC004"));
+        assert!(default.rule_enabled("RTC001"));
+    }
+
+    #[test]
+    fn security_profile_enables_exact_allowlist_and_preserves_project_config() {
+        let dir = tempfile::tempdir().expect("tempdir should be created");
+        let cfg_path = dir.path().join("custom.toml");
+        fs::write(
+            &cfg_path,
+            "[general]\nexclude = [\"vendor/**\"]\n\n[rules.severity]\nRTC007 = \"error\"\n\n\
+             [runtime_config]\ndev_runtime_packages = [\"custom-dev\"]\n",
+        )
+        .expect("config should be written");
+
+        let config =
+            load_config(Some(&cfg_path), Some(Profile::Security)).expect("security profile loads");
+        assert_eq!(config.general.exclude, vec!["vendor/**"]);
+        assert_eq!(
+            config.runtime_config.dev_runtime_packages,
+            vec!["custom-dev"]
+        );
+        assert_eq!(
+            config.rule_severity("RTC007", Severity::Warning),
+            Severity::Error
+        );
+        assert_eq!(config.runtime_config.exclude_testnet_runtimes, Some(true));
+        assert_eq!(
+            config.runtime_config.rtc008_value_escalations_only,
+            Some(true)
+        );
+
+        let expected: std::collections::BTreeSet<&str> =
+            polkadot_linter::config::SECURITY_PROFILE_RULE_IDS
+                .iter()
+                .copied()
+                .collect();
+        let actual: std::collections::BTreeSet<String> = polkadot_linter::rules::all_rule_ids()
+            .into_iter()
+            .filter(|id| config.rule_enabled(id))
+            .collect();
+        let actual_refs: std::collections::BTreeSet<&str> =
+            actual.iter().map(String::as_str).collect();
+        assert_eq!(actual_refs, expected);
+
+        // config/security.toml must match the programmatic allowlist.
+        let toml_security =
+            Config::load(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config/security.toml"))
+                .expect("config/security.toml must load");
+        let toml_actual: std::collections::BTreeSet<String> =
+            polkadot_linter::rules::all_rule_ids()
+                .into_iter()
+                .filter(|id| toml_security.rule_enabled(id))
+                .collect();
+        assert_eq!(toml_actual, actual);
+
+        // `--profile all` enables every rule while preserving project excludes.
+        let all_cfg = load_config(Some(&cfg_path), Some(Profile::All)).expect("all profile loads");
+        assert_eq!(all_cfg.general.exclude, vec!["vendor/**"]);
+        for rule_id in polkadot_linter::rules::all_rule_ids() {
+            assert!(
+                all_cfg.rule_enabled(&rule_id),
+                "{rule_id} must be enabled under --profile all"
+            );
+        }
     }
 
     #[test]
@@ -631,6 +767,7 @@ mod tests {
             rule_name: "test".to_string(),
             category: RuleCategory::Semantic,
             severity: Severity::Warning,
+            confidence: Confidence::High,
             file: PathBuf::from("src/lib.rs"),
             line,
             column: None,
@@ -638,6 +775,7 @@ mod tests {
             message: "test finding".to_string(),
             explanation: "test explanation".to_string(),
             suggestion: None,
+            also_in: Vec::new(),
         };
         let mut diagnostics = vec![
             diagnostic("SEC012", 3),

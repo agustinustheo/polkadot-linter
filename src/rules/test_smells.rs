@@ -55,6 +55,7 @@ impl LintRule for ApplyExtrinsicAssertOk {
                         rule_name: self.rule_name.to_string(),
                         category: RuleCategory::TestSmell,
                         severity: self.severity,
+                        confidence: crate::diagnostics::default_confidence(self.rule_id),
                         file: self.file.to_path_buf(),
                         line: span_line(stmt_macro.span()),
                         column: Some(span_column(stmt_macro.span())),
@@ -71,6 +72,7 @@ impl LintRule for ApplyExtrinsicAssertOk {
                             "Check both layers: `assert_eq!(apply_extrinsic(call), Ok(Ok(())))`"
                                 .to_string(),
                         ),
+                        also_in: Vec::new(),
                     });
                 }
                 visit::visit_stmt_macro(self, stmt_macro);

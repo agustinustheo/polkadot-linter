@@ -1,0 +1,26 @@
+# High-signal security profile for audits and automated triage.
+#
+# Reference TOML matching `--profile security`. Prefer `--profile security` on
+# the CLI so project settings in `polkadot-linter.toml` (such as `exclude`,
+# `dev_runtime_packages`, and severity overrides) are preserved; `--profile
+# security` also uses an explicit rule allowlist so new hygiene rules stay off.
+
+[rules.enabled]
+RTC001 = false
+RTC003 = false
+RTC004 = false
+RTC006 = false
+SEC004 = false
+SEC011 = false
+SEC024 = false
+SEM009 = false
+SEM010 = false
+SEM011 = false
+SEM015 = false
+SEM016 = false
+TRM001 = false
+TST002 = false
+
+[runtime_config]
+exclude_testnet_runtimes = true
+rtc008_value_escalations_only = true

@@ -26,7 +26,7 @@
 //!   skipped unless `include_dev_runtimes = true`.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -41,10 +41,11 @@ use syn::{
     Attribute, Expr, File as SynFile, ImplItem, ImplItemType, Item, ItemConst, ItemImpl, ItemMacro,
     ItemMod, ItemType, Lit, Macro, Meta, Type, TypePath,
 };
+use walkdir::WalkDir;
 
 use crate::{
     config::{Config, RuntimeConfigConfig},
-    diagnostics::{Diagnostic, RuleCategory, Severity},
+    diagnostics::{default_confidence, Confidence, Diagnostic, RuleCategory, Severity},
     engine::{crate_lib, scan_cached, FileContext},
     rules::LintRule,
     syn_util::{
@@ -79,43 +80,76 @@ struct RuntimeCrate {
     /// The library target and the production modules reachable from it declare
     /// exactly one FRAME runtime.
     is_runtime: bool,
+    /// The module tree was parsed. A crate that [`may_declare_runtime`]
+    /// skipped is not a runtime here, but it is not a proven library either.
+    sources_read: bool,
     /// Gate of every source file reachable from the library target through
     /// `mod` declarations, keyed by canonical path.
     modules: HashMap<PathBuf, Gate>,
     /// Production runtime pallets from `VALUE_MOVING_PALLETS`: `RuntimeCall`
     /// variant and pallet crate.
     pallets: Vec<(String, String)>,
+    /// Every declared production `RuntimeCall` variant name and the pallet
+    /// crate of each declaration (`None` when not visible). `#[cfg]`
+    /// alternatives of a runtime declaration can give a variant several crates.
+    pallet_crates: HashMap<String, Vec<Option<String>>>,
+    /// The version Cargo writes for the package in `Cargo.lock`. `None` when
+    /// the manifest inherits a version that the workspace does not state.
+    version: Option<String>,
+    /// Canonical root of the workspace the package belongs to, if any.
+    workspace: Option<PathBuf>,
     /// Every production runtime pallet name.
     pallet_names: HashSet<String>,
     /// `&'static str` constants and `parameter_types!`: name to string value.
     str_params: HashMap<String, String>,
+    /// Every production `AssetTransactor` is `()`, and the executors that
+    /// `pallet_xcm` and every other `XcmExecutor<..>` name are visible
+    /// `xcm_executor::Config` impls. See [`Declarations::unit_asset_transactor_only`].
+    unit_asset_transactor_only: bool,
+    /// True if `pallet_xcm::Config` exists in this runtime crate, all
+    /// permissionless local `pallet_xcm` outbound paths are provably
+    /// privileged-only or `Nothing`, and no other pallet declares an XCM sender.
+    local_outbound_xcm_privileged_only: bool,
 }
 
-/// Locate the Cargo package owning `path`, or fall back to the file itself
-/// when no manifest exists (single-file fixtures).
-fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
+/// Nearest ancestor of `path` with a `Cargo.toml`, spelt as in `path`.
+///
+/// The result is not canonical, so it strips as a prefix of `path` under a
+/// relative or symlinked scan root.
+fn manifest_dir(path: &Path) -> Option<&Path> {
     // The file may not exist yet (unsaved editor buffers); an empty root is the
     // working directory, outside the scanned package.
-    let manifest_dir = ctx
-        .path
-        .ancestors()
+    path.ancestors()
         .skip(1)
         .filter(|dir| !dir.as_os_str().is_empty())
         .find(|dir| dir.join("Cargo.toml").is_file())
-        .map(Path::to_path_buf);
+}
+
+/// Locate the Cargo package owning `path`, or fall back to the file itself
+/// (its AST from `ast`) when no manifest exists (single-file fixtures).
+fn runtime_crate_at(path: &Path, ast: impl FnOnce() -> Option<SynFile>) -> Arc<RuntimeCrate> {
+    // The canonical directory is the cache key, so relative and absolute scans
+    // share one parsed crate.
+    let manifest_dir =
+        manifest_dir(path).map(|dir| fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()));
 
     // Fixtures and single files scanned outside any Cargo package.
     let Some(manifest_dir) = manifest_dir else {
-        let ast = ctx.ast.as_ref();
         let mut declarations = Declarations::default();
-        if let Some(file) = ast {
-            declarations.count(&production_ast(file), false);
+        if let Some(file) = ast() {
+            declarations.count(&production_ast(&file), false, Some(&[]));
         }
+        let local_outbound_xcm_privileged_only = declarations.local_outbound_xcm_privileged_only();
+        let unit_asset_transactor_only = declarations.unit_asset_transactor_only();
         return Arc::new(RuntimeCrate {
             is_runtime: declarations.is_runtime(),
+            sources_read: true,
             pallets: declarations.pallets,
+            pallet_crates: declarations.pallet_crates,
             pallet_names: declarations.pallet_names,
             str_params: declarations.str_params,
+            unit_asset_transactor_only,
+            local_outbound_xcm_privileged_only,
             ..RuntimeCrate::default()
         });
     };
@@ -124,18 +158,45 @@ fn runtime_crate_for(ctx: &FileContext) -> Arc<RuntimeCrate> {
 }
 
 fn load_runtime_crate(root: &Path) -> RuntimeCrate {
+    load_crate(root, CrateLoad::Sources)
+}
+
+/// What [`load_crate`] reads beyond the manifest.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CrateLoad {
+    /// Parse the module tree and its declarations.
+    Sources,
+    /// Read only the manifest: the crate is not a runtime.
+    ManifestOnly,
+}
+
+fn load_crate(root: &Path, load: CrateLoad) -> RuntimeCrate {
     let manifest = fs::read_to_string(root.join("Cargo.toml"))
         .ok()
         .and_then(|manifest| manifest.parse::<toml::Value>().ok());
-    let package = manifest
-        .as_ref()
-        .and_then(|manifest| manifest.get("package")?.get("name")?.as_str())
-        .map(ToOwned::to_owned);
+    let package_field = |key: &str| {
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.get("package")?.get(key)?.as_str())
+            .map(ToOwned::to_owned)
+    };
+    let package = package_field("name");
 
     // A manifest without a package (a virtual workspace) does not own the file
     // as a crate source; the file is an orphan and is not a runtime.
     if package.is_none() {
         return RuntimeCrate {
+            root: Some(root.to_path_buf()),
+            ..RuntimeCrate::default()
+        };
+    }
+    let workspace = workspace_manifest(root, manifest.as_ref());
+    let version = lock_version(manifest.as_ref(), workspace.as_ref());
+    if load == CrateLoad::ManifestOnly {
+        return RuntimeCrate {
+            package,
+            version,
+            workspace: workspace.map(|(dir, _)| dir),
             root: Some(root.to_path_buf()),
             ..RuntimeCrate::default()
         };
@@ -147,28 +208,111 @@ fn load_runtime_crate(root: &Path) -> RuntimeCrate {
         true,
         Gate::Production,
         false,
+        Some(&[]),
     );
 
     let mut declarations = Declarations::default();
     for module in modules.files.values() {
         if module.gate == Gate::Production {
-            declarations.count(&production_ast(&module.file), module.featured);
+            declarations.count(
+                &production_ast(&module.file),
+                module.featured,
+                module.path.as_deref(),
+            );
         }
     }
     let is_runtime = declarations.is_runtime();
+    let sources_read = !modules.files.is_empty();
+    let local_outbound_xcm_privileged_only = declarations.local_outbound_xcm_privileged_only();
+    let unit_asset_transactor_only = declarations.unit_asset_transactor_only();
 
     RuntimeCrate {
         package,
+        version,
+        workspace: workspace.map(|(dir, _)| dir),
         root: Some(root.to_path_buf()),
         is_runtime,
+        sources_read,
         pallets: declarations.pallets,
+        pallet_crates: declarations.pallet_crates,
         pallet_names: declarations.pallet_names,
         str_params: declarations.str_params,
+        unit_asset_transactor_only,
+        local_outbound_xcm_privileged_only,
         modules: modules
             .files
             .into_iter()
             .map(|(path, module)| (path, module.gate))
             .collect(),
+    }
+}
+
+/// The canonical directory and parsed manifest of the workspace that owns the
+/// package at `root`: the `package.workspace` path, or else the nearest
+/// directory from `root` upwards whose `Cargo.toml` has a `[workspace]` table.
+///
+/// The search stops at a directory with a `Cargo.lock` and no `[workspace]`:
+/// Cargo writes the lockfile at the workspace root, so the package there is
+/// its own workspace even when a parent workspace excludes it.
+fn workspace_manifest(
+    root: &Path,
+    manifest: Option<&toml::Value>,
+) -> Option<(PathBuf, Arc<toml::Value>)> {
+    // Every crate of a workspace reads the same ancestor manifests, so each
+    // directory is read once per scan.
+    let read = |dir: &Path| {
+        scan_cached(WorkspaceManifestKey(dir.to_path_buf()), |key| {
+            let dir = &key.0;
+            let manifest = fs::read_to_string(dir.join("Cargo.toml"))
+                .ok()?
+                .parse::<toml::Value>()
+                .ok()?;
+            manifest.get("workspace")?;
+            let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+            Some((dir, Arc::new(manifest)))
+        })
+    };
+    let explicit = manifest
+        .and_then(|manifest| manifest.get("package")?.get("workspace")?.as_str())
+        .map(|path| root.join(path));
+    match explicit {
+        Some(dir) => read(&dir),
+        None => {
+            for dir in root.ancestors() {
+                if let Some(workspace) = read(dir) {
+                    return Some(workspace);
+                }
+                if dir.join("Cargo.lock").is_file() {
+                    return None;
+                }
+            }
+            None
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct WorkspaceManifestKey(PathBuf);
+
+/// The version Cargo writes in `Cargo.lock` for the package: the manifest
+/// string, the `[workspace.package]` version for `version.workspace = true`,
+/// or `0.0.0` when the manifest has no version. `None` when an inherited
+/// version is not stated.
+fn lock_version(
+    manifest: Option<&toml::Value>,
+    workspace: Option<&(PathBuf, Arc<toml::Value>)>,
+) -> Option<String> {
+    match manifest?.get("package")?.get("version") {
+        None => Some("0.0.0".to_string()),
+        Some(toml::Value::String(version)) => Some(version.clone()),
+        Some(version) if version.get("workspace")?.as_bool()? => workspace?
+            .1
+            .get("workspace")?
+            .get("package")?
+            .get("version")?
+            .as_str()
+            .map(ToOwned::to_owned),
+        Some(_) => None,
     }
 }
 
@@ -183,19 +327,33 @@ struct Module {
     gate: Gate,
     /// Every path reaching the file passes a `cfg` mentioning a `feature`.
     featured: bool,
+    /// Module path from the crate root. `None` when several module paths
+    /// reach the file.
+    path: Option<Vec<String>>,
     file: SynFile,
 }
 
 impl ModuleTree {
     /// `owns_dir`: the file is a crate root or `mod.rs`, so its child modules
     /// live next to it rather than in a directory named after it.
-    fn walk(&mut self, path: &Path, owns_dir: bool, gate: Gate, featured: bool) {
+    fn walk(
+        &mut self,
+        path: &Path,
+        owns_dir: bool,
+        gate: Gate,
+        featured: bool,
+        module_path: Option<&[String]>,
+    ) {
         let Ok(canonical) = fs::canonicalize(path) else {
             return;
         };
         if let Some(known) = self.files.get_mut(&canonical) {
-            if known.gate <= gate && (!known.featured || featured) {
+            let same_path = known.path.as_deref() == module_path;
+            if same_path && known.gate <= gate && (!known.featured || featured) {
                 return;
+            }
+            if !same_path {
+                known.path = None;
             }
             known.gate = known.gate.min(gate);
             known.featured &= featured;
@@ -211,6 +369,7 @@ impl ModuleTree {
                 Module {
                     gate,
                     featured,
+                    path: module_path.map(<[String]>::to_vec),
                     file,
                 },
             );
@@ -227,17 +386,28 @@ impl ModuleTree {
         let gate = gate.max(attrs_gate(&module.file.attrs));
         let featured = featured || feature_gated(&module.file.attrs);
         let items = module.file.items.clone();
-        self.walk_items(&items, &parent, &child_dir, false, gate, featured);
+        let module_path = module.path.clone();
+        self.walk_items(
+            &items,
+            &parent,
+            &child_dir,
+            gate,
+            featured,
+            module_path.as_deref(),
+        );
     }
 
+    /// `path_base`: the directory a `#[path]` on a file module of `items` is
+    /// relative to. It is the file's directory, or `child_dir` for the items
+    /// of an inline module.
     fn walk_items(
         &mut self,
         items: &[Item],
-        file_dir: &Path,
+        path_base: &Path,
         child_dir: &Path,
-        inline: bool,
         gate: Gate,
         featured: bool,
+        parent_module: Option<&[String]>,
     ) {
         for item in items {
             let Item::Mod(module) = item else {
@@ -247,30 +417,35 @@ impl ModuleTree {
             let featured = featured || feature_gated(&module.attrs);
             let explicit = path_attr(&module.attrs);
             let name = module.ident.to_string();
+            let path = parent_module.map(|parent| [parent, &[ident_text(&module.ident)]].concat());
             match &module.content {
                 Some((_, items)) => {
                     let dir = explicit
                         .map(|path| child_dir.join(path))
                         .unwrap_or_else(|| child_dir.join(&name));
-                    self.walk_items(items, file_dir, &dir, true, gate, featured);
+                    self.walk_items(items, &dir, &dir, gate, featured, path.as_deref());
                 }
                 None => {
-                    if let Some(path) = explicit {
-                        let base = if inline { child_dir } else { file_dir };
-                        self.walk(&base.join(path), true, gate, featured);
+                    if let Some(explicit) = explicit {
+                        let file = path_base.join(explicit);
+                        self.walk(&file, true, gate, featured, path.as_deref());
                         continue;
                     }
                     let flat = child_dir.join(format!("{name}.rs"));
                     if flat.is_file() {
-                        self.walk(&flat, false, gate, featured);
+                        self.walk(&flat, false, gate, featured, path.as_deref());
                     } else {
-                        self.walk(&child_dir.join(&name).join("mod.rs"), true, gate, featured);
+                        let file = child_dir.join(&name).join("mod.rs");
+                        self.walk(&file, true, gate, featured, path.as_deref());
                     }
                 }
             }
         }
     }
 }
+
+/// Additional pallet crates that can send outbound XCM outside `pallet_xcm`.
+const OTHER_XCM_SENDER_PALLETS: &[&str] = &["orml_xtokens", "orml_xcm", "pallet_xcm_transactor"];
 
 /// `construct_runtime!`, `#[frame_support::runtime]` (or a bare `#[runtime]`
 /// whose module uses `#[runtime::*]` attributes) and `#[frame_construct_runtime]`
@@ -281,8 +456,25 @@ struct Declarations {
     ungated: usize,
     featured: usize,
     pallets: Vec<(String, String)>,
+    pallet_crates: HashMap<String, Vec<Option<String>>>,
     pallet_names: HashSet<String>,
     str_params: HashMap<String, String>,
+    /// Crate paths of the self types of the impls whose trait path resolves
+    /// to `xcm_executor::Config`.
+    executors: HashSet<Vec<String>>,
+    /// Some impl has an `AssetTransactor` other than `()`, or an executor impl
+    /// has none.
+    active_asset_transactor: bool,
+    /// Crate path of `X` in each `pallet_xcm::Config` `type XcmExecutor =
+    /// XcmExecutor<X>`. `None` when the impl has no such item, the type has
+    /// another shape or `X` does not resolve.
+    pallet_xcm_executors: Vec<Option<Vec<String>>>,
+    /// Crate path of `X` in every `XcmExecutor<X>`, in types and expressions.
+    /// `None` when `X` does not resolve.
+    executor_refs: Vec<Option<Vec<String>>>,
+    has_pallet_xcm_config: bool,
+    any_pallet_xcm_config_open: bool,
+    has_other_xcm_sender: bool,
 }
 
 impl Declarations {
@@ -294,11 +486,47 @@ impl Declarations {
         self.ungated == 1 || (self.ungated == 0 && self.featured >= 1)
     }
 
-    fn count(&mut self, file: &SynFile, featured: bool) {
+    fn local_outbound_xcm_privileged_only(&self) -> bool {
+        let has_other_xcm_pallet = self
+            .pallet_crates
+            .values()
+            .flatten()
+            .flatten()
+            .any(|krate| OTHER_XCM_SENDER_PALLETS.contains(&krate.as_str()));
+        self.has_pallet_xcm_config
+            && !self.any_pallet_xcm_config_open
+            && !self.has_other_xcm_sender
+            && !has_other_xcm_pallet
+    }
+
+    /// Every `AssetTransactor` in the crate is `()`, and `pallet_xcm` and every
+    /// other `XcmExecutor<X>` name an `X` that resolves to the path of a
+    /// visible `xcm_executor::Config` impl. An executor that `include!` or a
+    /// macro expands is not visible, so a `pallet_xcm` that names it keeps the
+    /// finding.
+    fn unit_asset_transactor_only(&self) -> bool {
+        let visible = |executor: &Option<Vec<String>>| {
+            executor
+                .as_ref()
+                .is_some_and(|executor| self.executors.contains(executor))
+        };
+        !self.active_asset_transactor
+            && !self.executors.is_empty()
+            && !self.pallet_xcm_executors.is_empty()
+            && self.pallet_xcm_executors.iter().all(visible)
+            && self.executor_refs.iter().all(visible)
+    }
+
+    /// `module`: the file's module path from the crate root, or `None` when
+    /// it is not known.
+    fn count(&mut self, file: &SynFile, featured: bool, module: Option<&[String]>) {
         let featured = featured || feature_gated(&file.attrs);
         let mut finder = Finder {
             counts: self,
             featured,
+            aliases: module_aliases(&file.items),
+            uses: module_uses(&file.items),
+            module: module.map(<[String]>::to_vec),
         };
         for item in &file.items {
             finder.visit_item(item);
@@ -309,9 +537,122 @@ impl Declarations {
 struct Finder<'a> {
     counts: &'a mut Declarations,
     featured: bool,
+    /// Aliases declared at the module level of the item being visited. An
+    /// alias from another module resolves to nothing, so an impl's
+    /// `AssetTransactor` or XCM sender is not `()` unless its own module says so.
+    aliases: Aliases,
+    /// `use` imports of the module of the item being visited.
+    uses: Uses,
+    /// Path from the crate root of the module of the item being visited.
+    /// `None` inside a block or a file that several module paths reach.
+    module: Option<Vec<String>>,
+}
+
+/// First crate identifier after `:` in a `construct_runtime!` entry
+/// (`Name: pallet_foo = 1` or `Name: pallet_foo::{Pallet, Call} = 1`).
+fn construct_runtime_pallet_crate(entry: &[TokenTree]) -> Option<String> {
+    let colon = entry
+        .iter()
+        .position(|tree| matches!(tree, TokenTree::Punct(p) if p.as_char() == ':'))?;
+    entry[colon + 1..].iter().find_map(|tree| match tree {
+        TokenTree::Ident(ident) => Some(ident.to_string()),
+        _ => None,
+    })
+}
+
+/// First path segment of a `#[frame_support::runtime]` pallet type: `pallet_foo`
+/// in `pallet_foo`, `pallet_foo::Pallet<Runtime>` or `pallet_foo + Call`.
+fn runtime_type_pallet_crate(ty: &Type) -> Option<String> {
+    let path = match ty {
+        Type::TraitObject(object) => object.bounds.iter().find_map(|bound| match bound {
+            syn::TypeParamBound::Trait(bound) => Some(&bound.path),
+            _ => None,
+        })?,
+        ty => type_path(ty)?,
+    };
+    path.segments
+        .first()
+        .map(|segment| segment.ident.to_string())
+}
+
+/// The path from the crate root that `path` names when written in `module`
+/// under the `use` imports `uses`. A first segment that no `use` imports is an
+/// item of `module`, so an extern crate path does not resolve to a local item.
+/// `None` for a `::` path, a name with several imports or a `super` above the
+/// crate root.
+fn resolve_path(path: &syn::Path, module: &[String], uses: &Uses) -> Option<Vec<String>> {
+    if path.leading_colon.is_some() {
+        return None;
+    }
+    let idents = path
+        .segments
+        .iter()
+        .map(|segment| ident_text(&segment.ident))
+        .collect::<Vec<_>>();
+    let (first, rest) = idents.split_first()?;
+    let written = match uses.get(first).map(Vec::as_slice) {
+        Some([import]) => import.iter().chain(rest).cloned().collect::<Vec<_>>(),
+        Some(_) => return None,
+        None => idents.clone(),
+    };
+    let mut segments = written.into_iter().peekable();
+    let mut resolved = if segments.next_if(|segment| segment == "crate").is_some() {
+        Vec::new()
+    } else {
+        module.to_vec()
+    };
+    loop {
+        if segments.next_if(|segment| segment == "self").is_some() {
+            continue;
+        }
+        if segments.next_if(|segment| segment == "super").is_some() {
+            resolved.pop()?;
+            continue;
+        }
+        break;
+    }
+    resolved.extend(segments);
+    Some(resolved)
 }
 
 impl Finder<'_> {
+    /// The crate path that `path` names in the module being visited.
+    fn resolve(&self, path: &syn::Path) -> Option<Vec<String>> {
+        resolve_path(path, self.module.as_deref()?, &self.uses)
+    }
+
+    /// Segment `index` of `path` names `XcmExecutor`, directly or as the
+    /// first segment through a `use` rename.
+    fn names_xcm_executor(&self, path: &syn::Path, index: usize) -> bool {
+        let name = ident_text(&path.segments[index].ident);
+        name == "XcmExecutor"
+            || (index == 0
+                && path.leading_colon.is_none()
+                && self.uses.get(&name).is_some_and(|imports| {
+                    imports
+                        .iter()
+                        .any(|import| import.last().is_some_and(|last| last == "XcmExecutor"))
+                }))
+    }
+
+    /// Crate path of `X` in an `XcmExecutor<X>` segment.
+    fn executor_arg(&self, segment: &syn::PathSegment) -> Option<Vec<String>> {
+        match generic_type_args(segment).as_slice() {
+            [arg] => type_path(arg).and_then(|path| self.resolve(path)),
+            _ => None,
+        }
+    }
+
+    /// Crate path of `X` when `ty` is `XcmExecutor<X>`.
+    fn xcm_executor_arg(&self, ty: &Type) -> Option<Vec<String>> {
+        let path = type_path(ty)?;
+        let last = path.segments.len().checked_sub(1)?;
+        if !self.names_xcm_executor(path, last) {
+            return None;
+        }
+        self.executor_arg(&path.segments[last])
+    }
+
     fn found(&mut self, attrs: &[Attribute]) {
         if self.featured || feature_gated(attrs) {
             self.counts.featured += 1;
@@ -320,11 +661,26 @@ impl Finder<'_> {
         }
     }
 
-    /// Record a declared pallet, and its crate when that crate moves value.
-    fn pallet(&mut self, name: Option<String>, tokens: TokenStream) {
+    /// Record a declared pallet, its crate, and value-moving crates. Every
+    /// declaration of a variant is kept, so `#[cfg]` alternatives add up. A
+    /// known XCM sender crate anywhere in the path (`my_pallets::pallet_xcm_transactor`)
+    /// counts as an XCM sender.
+    fn pallet(&mut self, name: Option<String>, crate_name: Option<String>, tokens: TokenStream) {
         let Some(name) = name else { return };
-        if let Some((krate, _)) = find_ident(tokens, VALUE_MOVING_PALLETS) {
-            self.counts.pallets.push((name.clone(), krate));
+        if find_ident(tokens.clone(), OTHER_XCM_SENDER_PALLETS).is_some() {
+            self.counts.has_other_xcm_sender = true;
+        }
+        let value_moving = find_ident(tokens, VALUE_MOVING_PALLETS).map(|(krate, _)| krate);
+        if let Some(krate) = &value_moving {
+            let pallet = (name.clone(), krate.clone());
+            if !self.counts.pallets.contains(&pallet) {
+                self.counts.pallets.push(pallet);
+            }
+        }
+        let krate = value_moving.or(crate_name);
+        let crates = self.counts.pallet_crates.entry(name.clone()).or_default();
+        if !crates.contains(&krate) {
+            crates.push(krate);
         }
         self.counts.pallet_names.insert(name);
     }
@@ -348,7 +704,8 @@ impl<'ast> Visit<'ast> for Finder<'_> {
                     TokenTree::Ident(ident) => Some(ident.to_string()),
                     _ => None,
                 });
-                self.pallet(name, entry.into_iter().collect());
+                let crate_name = construct_runtime_pallet_crate(&entry);
+                self.pallet(name, crate_name, entry.into_iter().collect());
             }
         } else if path_last_ident(&item.mac.path).as_deref() == Some("parameter_types") {
             for (name, _, value) in parameter_type_consts(item.mac.tokens.clone()) {
@@ -360,6 +717,79 @@ impl<'ast> Visit<'ast> for Finder<'_> {
         let value = item.expr.to_token_stream().into_iter().collect::<Vec<_>>();
         self.str_param(item.ident.to_string(), &value);
     }
+    fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
+        let broad_executor = is_xcm_executor_impl(item_impl, &self.uses);
+        let executor = is_executor_config_impl(item_impl, &self.uses);
+        let is_pallet_xcm = is_pallet_xcm_impl(item_impl);
+        let other_config =
+            !broad_executor && !is_pallet_xcm && runtime_config_impl(item_impl).is_some();
+        let transactors = impl_types_named(item_impl, "AssetTransactor");
+        if broad_executor || is_pallet_xcm || other_config || !transactors.is_empty() {
+            // Type parameters shadow module aliases inside the impl.
+            let aliases = if item_impl.generics.type_params().next().is_some() {
+                std::borrow::Cow::Owned(without_generic_params(&self.aliases, &item_impl.generics))
+            } else {
+                std::borrow::Cow::Borrowed(&self.aliases)
+            };
+            if executor {
+                if let Some(key) = type_path(&item_impl.self_ty).and_then(|path| self.resolve(path))
+                {
+                    self.counts.executors.insert(key);
+                }
+            }
+            self.counts.active_asset_transactor |= (broad_executor && transactors.is_empty())
+                || transactors
+                    .iter()
+                    .any(|item| !is_unit_or_alias_unit(&item.ty, &aliases, 0));
+            if is_pallet_xcm {
+                self.counts.has_pallet_xcm_config = true;
+                if !pallet_xcm_outbound_is_privileged(item_impl, &aliases) {
+                    self.counts.any_pallet_xcm_config_open = true;
+                }
+                let executors = impl_types_named(item_impl, "XcmExecutor");
+                if executors.is_empty() {
+                    self.counts.pallet_xcm_executors.push(None);
+                }
+                for item in executors {
+                    let executor = self.xcm_executor_arg(&item.ty);
+                    self.counts.pallet_xcm_executors.push(executor);
+                }
+            } else if other_config {
+                // Any other pallet Config impl declaring an XcmSender / XcmRouter /
+                // SendXcm associated type can emit outbound XCM independently of
+                // `pallet_xcm`.
+                let sends_xcm = impl_types(item_impl).any(|item| {
+                    matches!(
+                        item.ident.to_string().as_str(),
+                        "XcmSender" | "XcmRouter" | "SendXcm"
+                    ) && !is_unit_or_alias_unit(&item.ty, &aliases, 0)
+                });
+                self.counts.has_other_xcm_sender |= sends_xcm;
+            }
+        }
+        visit::visit_item_impl(self, item_impl);
+    }
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        // Every segment, so a turbofish `XcmExecutor::<X>::execute(..)` counts.
+        for (index, segment) in path.segments.iter().enumerate() {
+            if self.names_xcm_executor(path, index) {
+                let executor = self.executor_arg(segment);
+                self.counts.executor_refs.push(executor);
+            }
+        }
+        visit::visit_path(self, path);
+    }
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        // Items in a block see the block's own items first, which the module
+        // aliases and imports do not describe.
+        let outer = std::mem::take(&mut self.aliases);
+        let outer_uses = std::mem::take(&mut self.uses);
+        let outer_module = self.module.take();
+        visit::visit_block(self, block);
+        self.aliases = outer;
+        self.uses = outer_uses;
+        self.module = outer_module;
+    }
     fn visit_item_mod(&mut self, item: &'ast ItemMod) {
         if is_runtime_module(item) {
             self.found(&item.attrs);
@@ -367,6 +797,7 @@ impl<'ast> Visit<'ast> for Finder<'_> {
                 if let Item::Type(item_type) = item {
                     self.pallet(
                         Some(item_type.ident.to_string()),
+                        runtime_type_pallet_crate(&item_type.ty),
                         item_type.ty.to_token_stream(),
                     );
                 }
@@ -374,7 +805,23 @@ impl<'ast> Visit<'ast> for Finder<'_> {
         }
         let outer = self.featured;
         self.featured |= feature_gated(&item.attrs);
+        let outer_scope = item.content.as_ref().map(|(_, items)| {
+            let module = self
+                .module
+                .as_ref()
+                .map(|module| [module.as_slice(), &[ident_text(&item.ident)]].concat());
+            (
+                std::mem::replace(&mut self.aliases, module_aliases(items)),
+                std::mem::replace(&mut self.uses, module_uses(items)),
+                std::mem::replace(&mut self.module, module),
+            )
+        });
         visit::visit_item_mod(self, item);
+        if let Some((aliases, uses, module)) = outer_scope {
+            self.aliases = aliases;
+            self.uses = uses;
+            self.module = module;
+        }
         self.featured = outer;
     }
 }
@@ -448,35 +895,15 @@ fn has_name_token(name: &str, tokens: &[String]) -> bool {
     name_tokens(name).any(|token| tokens.iter().any(|t| t.eq_ignore_ascii_case(&token)))
 }
 
-/// Shared gate: the file is non-test source of a production (or opted-in dev)
-/// runtime crate.
-fn runtime_scope(ctx: &FileContext, config: &RuntimeConfigConfig) -> Option<Arc<RuntimeCrate>> {
-    if !ctx.is_rust || ctx.is_test_file || ctx.is_benchmark_file || ctx.ast.is_none() {
-        return None;
-    }
-
-    let krate = runtime_crate_for(ctx);
+/// Returns `true` when `krate` is a runtime crate that passes the configured
+/// test, dev, and testnet runtime filters.
+fn is_included_runtime_crate(krate: &RuntimeCrate, config: &RuntimeConfigConfig) -> bool {
     if !krate.is_runtime {
-        return None;
+        return false;
     }
     let Some(root) = &krate.root else {
-        // Single-file fallback: only the scan-relative path is known.
-        return (!is_test_path(&ctx.rel_path)).then_some(krate);
+        return true;
     };
-
-    let in_crate = ctx.path.strip_prefix(root).unwrap_or(&ctx.path);
-    if is_test_path(in_crate) {
-        return None;
-    }
-    // Files reached only through `#[cfg(test)]` or benchmark-gated `mod`
-    // declarations are not production code. Files the module walk could not
-    // reach (macro-generated modules, `include!`) are kept.
-    let gate = fs::canonicalize(&ctx.path)
-        .ok()
-        .and_then(|path| krate.modules.get(&path).copied());
-    if gate.is_some_and(|gate| gate != Gate::Production) {
-        return None;
-    }
     let dir_name = root
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -485,12 +912,152 @@ fn runtime_scope(ctx: &FileContext, config: &RuntimeConfigConfig) -> Option<Arc<
     let named =
         |tokens: &[String]| has_name_token(&dir_name, tokens) || has_name_token(package, tokens);
     if named(&config.test_runtime_tokens) {
-        return None;
+        return false;
     }
     if !config.include_dev_runtimes
         && (named(&config.dev_runtime_tokens)
             || config.dev_runtime_packages.iter().any(|p| p == package))
     {
+        return false;
+    }
+    if config.excludes_testnet_runtimes() && named(&config.testnet_runtime_tokens) {
+        return false;
+    }
+    true
+}
+
+/// The runtime crates that a scan lints, gathered before the scan so that
+/// `exclude_testnet_runtimes` is decided once for every scan root.
+pub(crate) struct ScannedRuntimes {
+    /// The scan's runtime config with testnet runtimes linted.
+    config: RuntimeConfigConfig,
+    crates: Vec<Arc<RuntimeCrate>>,
+}
+
+impl ScannedRuntimes {
+    pub(crate) fn new(config: &RuntimeConfigConfig) -> Self {
+        let mut config = config.clone();
+        config.exclude_testnet_runtimes = Some(false);
+        Self {
+            config,
+            crates: Vec::new(),
+        }
+    }
+
+    fn add(&mut self, krate: Arc<RuntimeCrate>) {
+        let known = self.crates.iter().any(|known| {
+            Arc::ptr_eq(known, &krate) || (known.root.is_some() && known.root == krate.root)
+        });
+        if !known {
+            self.crates.push(krate);
+        }
+    }
+
+    /// Adds the runtime crate that the source rules lint `path` as part of,
+    /// with testnet runtimes included. The caller passes only a Rust file
+    /// that the engine does not classify as test or benchmark code.
+    pub(crate) fn add_source(&mut self, path: &Path, rel_path: &Path) {
+        let krate = runtime_crate_at(path, || {
+            fs::read_to_string(path)
+                .ok()
+                .and_then(|content| syn::parse_file(&content).ok())
+        });
+        if let Some(krate) = source_scope(krate, path, rel_path, &self.config) {
+            self.add(krate);
+        }
+    }
+
+    /// Adds the local runtimes that RTC009 roots in the `Cargo.lock` at
+    /// `path`, when it has an affected package.
+    pub(crate) fn add_lock(&mut self, path: &Path) {
+        if path.file_name().is_none_or(|name| name != "Cargo.lock")
+            || !lock_has_affected_package(path)
+        {
+            return;
+        }
+        let lock_dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        let lock_root = fs::canonicalize(lock_dir).unwrap_or_else(|_| lock_dir.to_path_buf());
+        for krate in &workspace_runtimes(lock_dir) {
+            if !is_other_workspace(krate, &lock_root)
+                && is_included_runtime_crate(krate, &self.config)
+            {
+                self.add(Arc::clone(krate));
+            }
+        }
+    }
+
+    /// Names of the runtimes that `exclude_testnet_runtimes` skips, and
+    /// whether they are every runtime the scan lints. A name is the package
+    /// name, or the directory name for a package without one.
+    pub(crate) fn testnets(&self, config: &RuntimeConfigConfig) -> (Vec<String>, bool) {
+        let (kept, skipped): (Vec<_>, Vec<_>) = self
+            .crates
+            .iter()
+            .partition(|krate| is_included_runtime_crate(krate, config));
+        let mut names = skipped
+            .iter()
+            .map(|krate| {
+                krate.package.clone().unwrap_or_else(|| {
+                    krate
+                        .root
+                        .as_deref()
+                        .and_then(Path::file_name)
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                })
+            })
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        let all = kept.is_empty() && !names.is_empty();
+        (names, all)
+    }
+}
+
+/// Shared gate: the file is non-test source of a production (or opted-in dev)
+/// runtime crate.
+fn runtime_scope(ctx: &FileContext, config: &RuntimeConfigConfig) -> Option<Arc<RuntimeCrate>> {
+    if !ctx.is_rust || ctx.is_test_file || ctx.is_benchmark_file || ctx.ast.is_none() {
+        return None;
+    }
+    let krate = runtime_crate_at(&ctx.path, || ctx.ast.clone());
+    source_scope(krate, &ctx.path, &ctx.rel_path, config)
+}
+
+/// `krate` when the file at `path` is production source of it and the runtime
+/// filters in `config` keep it.
+fn source_scope(
+    krate: Arc<RuntimeCrate>,
+    path: &Path,
+    rel_path: &Path,
+    config: &RuntimeConfigConfig,
+) -> Option<Arc<RuntimeCrate>> {
+    if !is_included_runtime_crate(&krate, config) {
+        return None;
+    }
+    if krate.root.is_none() {
+        // Single-file fallback: only the scan-relative path is known.
+        return (!is_test_path(rel_path)).then_some(krate);
+    }
+
+    // `krate.root` is canonical and `path` may not be, so strip the
+    // manifest directory as spelt in `path`.
+    let in_crate = manifest_dir(path)
+        .and_then(|dir| path.strip_prefix(dir).ok())
+        .unwrap_or(path);
+    if is_test_path(in_crate) {
+        return None;
+    }
+    // Files reached only through `#[cfg(test)]` or benchmark-gated `mod`
+    // declarations are not production code. Files the module walk could not
+    // reach (macro-generated modules, `include!`) are kept.
+    let gate = fs::canonicalize(path)
+        .ok()
+        .and_then(|path| krate.modules.get(&path).copied());
+    if gate.is_some_and(|gate| gate != Gate::Production) {
         return None;
     }
     Some(krate)
@@ -698,6 +1265,12 @@ fn impl_type_named<'a>(item_impl: &'a ItemImpl, name: &str) -> Option<&'a ImplIt
     impl_types(item_impl).find(|item_type| item_type.ident == name)
 }
 
+fn impl_types_named<'a>(item_impl: &'a ItemImpl, name: &str) -> Vec<&'a ImplItemType> {
+    impl_types(item_impl)
+        .filter(|item_type| item_type.ident == name)
+        .collect()
+}
+
 fn is_weight_info_ident(ident: &str) -> bool {
     ident.ends_with("WeightInfo")
 }
@@ -774,6 +1347,7 @@ fn diagnostic(
         rule_name: rule.name().to_string(),
         category: RuleCategory::RuntimeConfig,
         severity,
+        confidence: default_confidence(rule.id()),
         file: ctx.path.clone(),
         line,
         column: None,
@@ -781,6 +1355,7 @@ fn diagnostic(
         message,
         explanation: explanation.to_string(),
         suggestion: Some(suggestion.to_string()),
+        also_in: Vec::new(),
     }
 }
 
@@ -882,19 +1457,140 @@ fn is_free_delivery_price(ty: &Type) -> bool {
             .is_some_and(|ident| ident == "NoPriceForMessageDelivery")
 }
 
-fn is_xcm_executor_impl(item_impl: &ItemImpl) -> bool {
+/// The impl may be an XCM executor config: its trait is `xcm_executor::Config`
+/// (see [`is_executor_config_impl`]), or a `Config` that a module path names
+/// or whose self type is `XcmConfig`. RTC003 and RTC006 check every such impl.
+fn is_xcm_executor_impl(item_impl: &ItemImpl, uses: &Uses) -> bool {
     let Some((_, trait_path, _)) = &item_impl.trait_ else {
         return false;
     };
+    if is_executor_config_impl(item_impl, uses) {
+        return true;
+    }
     if path_last_ident(trait_path).as_deref() != Some("Config") {
         return false;
     }
     path_idents(trait_path)
         .iter()
-        .any(|segment| segment == "xcm_executor")
+        .any(|segment| segment == "xcm_executor" || segment == "staging_xcm_executor")
         || type_path(&item_impl.self_ty)
             .and_then(path_last_ident)
             .is_some_and(|ident| ident == "XcmConfig")
+}
+
+/// The impl's trait path resolves to `xcm_executor::Config` or
+/// `staging_xcm_executor::Config`, through the module's `use` imports and
+/// renames. A name with several imports resolves only when each one does.
+fn is_executor_config_impl(item_impl: &ItemImpl, uses: &Uses) -> bool {
+    let Some((_, trait_path, _)) = &item_impl.trait_ else {
+        return false;
+    };
+    let idents = trait_path
+        .segments
+        .iter()
+        .map(|segment| ident_text(&segment.ident))
+        .collect::<Vec<_>>();
+    let Some((first, rest)) = idents.split_first() else {
+        return false;
+    };
+    let is_executor_config = |path: &[String]| {
+        path.last().is_some_and(|last| last == "Config")
+            && path
+                .iter()
+                .any(|segment| segment == "xcm_executor" || segment == "staging_xcm_executor")
+    };
+    match uses.get(first) {
+        Some(imports) => imports.iter().all(|import| {
+            is_executor_config(&import.iter().chain(rest).cloned().collect::<Vec<_>>())
+        }),
+        None => is_executor_config(&idents),
+    }
+}
+
+/// Names that a module's `use` items bring into scope, each with the full
+/// path of every import of it. Glob imports are left out.
+type Uses = HashMap<String, Vec<Vec<String>>>;
+
+fn module_uses(items: &[Item]) -> Uses {
+    fn walk(tree: &syn::UseTree, prefix: &mut Vec<String>, uses: &mut Uses) {
+        match tree {
+            syn::UseTree::Path(path) => {
+                prefix.push(ident_text(&path.ident));
+                walk(&path.tree, prefix, uses);
+                prefix.pop();
+            }
+            syn::UseTree::Name(name) if name.ident == "self" => {
+                if let Some(last) = prefix.last() {
+                    uses.entry(last.clone()).or_default().push(prefix.clone());
+                }
+            }
+            syn::UseTree::Name(name) => {
+                let mut path = prefix.clone();
+                path.push(ident_text(&name.ident));
+                uses.entry(ident_text(&name.ident)).or_default().push(path);
+            }
+            syn::UseTree::Rename(rename) => {
+                let mut path = prefix.clone();
+                if rename.ident != "self" {
+                    path.push(ident_text(&rename.ident));
+                }
+                uses.entry(ident_text(&rename.rename))
+                    .or_default()
+                    .push(path);
+            }
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(group) => {
+                for tree in &group.items {
+                    walk(tree, prefix, uses);
+                }
+            }
+        }
+    }
+    let mut uses = Uses::new();
+    for item in items {
+        if let Item::Use(item) = item {
+            walk(&item.tree, &mut Vec::new(), &mut uses);
+        }
+    }
+    uses
+}
+
+/// An identifier without its `r#` raw prefix, so `r#Transactor` and
+/// `Transactor` are the same name.
+fn ident_text(ident: &syn::Ident) -> String {
+    use syn::ext::IdentExt;
+    ident.unraw().to_string()
+}
+
+/// A name without its `r#` raw prefix.
+fn unraw_name(name: &str) -> &str {
+    name.strip_prefix("r#").unwrap_or(name)
+}
+
+/// True when `ty` is `()` or resolves to `()` through unambiguous aliases in
+/// `aliases`. An ambiguous or unknown alias returns `false` (fail closed), so
+/// the caller sets the alias scope.
+fn is_unit_or_alias_unit(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    if is_unit_type(ty) {
+        return true;
+    }
+    if let Type::Paren(inner) = ty {
+        return is_unit_or_alias_unit(&inner.elem, aliases, depth + 1);
+    }
+    let Some(path) = type_path(ty) else {
+        return false;
+    };
+    let Some(segment) = path.segments.last() else {
+        return false;
+    };
+    if path.segments.len() == 1 && segment.arguments.is_empty() {
+        return unique_alias(aliases, &segment.ident.to_string())
+            .is_some_and(|alias| is_unit_or_alias_unit(alias, aliases, depth + 1));
+    }
+    false
 }
 
 /// Same-file `type Name = ...;` aliases: every distinct right-hand side of a
@@ -908,7 +1604,7 @@ fn type_aliases(file: &SynFile) -> Aliases {
         fn visit_item_type(&mut self, item: &'ast ItemType) {
             if item.generics.params.is_empty() {
                 let text = |ty: &Type| ty.to_token_stream().to_string();
-                let known = self.0.entry(item.ident.to_string()).or_default();
+                let known = self.0.entry(ident_text(&item.ident)).or_default();
                 if known.iter().all(|ty| text(ty) != text(&item.ty)) {
                     known.push((*item.ty).clone());
                 }
@@ -920,10 +1616,98 @@ fn type_aliases(file: &SynFile) -> Aliases {
     aliases.0
 }
 
+/// Adds every name that `tree` brings into scope to `names`. Sets `glob` for a
+/// `*` import, which can bring any name into scope.
+fn use_tree_names(
+    tree: &syn::UseTree,
+    parent: Option<&syn::Ident>,
+    names: &mut Vec<String>,
+    glob: &mut bool,
+) {
+    match tree {
+        syn::UseTree::Path(path) => use_tree_names(&path.tree, Some(&path.ident), names, glob),
+        syn::UseTree::Name(name) if name.ident == "self" => {
+            names.extend(parent.map(ident_text));
+        }
+        syn::UseTree::Name(name) => names.push(ident_text(&name.ident)),
+        syn::UseTree::Rename(rename) => names.push(ident_text(&rename.rename)),
+        syn::UseTree::Glob(_) => *glob = true,
+        syn::UseTree::Group(group) => {
+            for tree in &group.items {
+                use_tree_names(tree, parent, names, glob);
+            }
+        }
+    }
+}
+
+/// `type Name = ...;` aliases declared directly in `items`, not in nested
+/// modules, that resolve without doubt.
+///
+/// An alias resolves only when its `type` item is the single item of the
+/// module that defines the name and has no `#[cfg]` or `#[cfg_attr]`. A `use`,
+/// `struct`, `enum`, gated item or second `type` of the same name makes the
+/// name unknown, and a glob import makes every name unknown. An unknown name
+/// is never `()`, so a check that needs `()` fails closed.
+fn module_aliases(items: &[Item]) -> Aliases {
+    let mut definitions = HashMap::<String, usize>::new();
+    let mut candidates = Aliases::new();
+    let mut glob = false;
+    for item in items {
+        let mut names = Vec::new();
+        match item {
+            Item::Type(item) => {
+                names.push(ident_text(&item.ident));
+                if item.generics.params.is_empty() && !has_cfg(&item.attrs) {
+                    candidates.insert(ident_text(&item.ident), vec![(*item.ty).clone()]);
+                }
+            }
+            Item::Struct(item) => names.push(ident_text(&item.ident)),
+            Item::Enum(item) => names.push(ident_text(&item.ident)),
+            Item::Union(item) => names.push(ident_text(&item.ident)),
+            Item::Trait(item) => names.push(ident_text(&item.ident)),
+            Item::TraitAlias(item) => names.push(ident_text(&item.ident)),
+            Item::Mod(item) => names.push(ident_text(&item.ident)),
+            Item::ExternCrate(item) => names.push(ident_text(
+                item.rename
+                    .as_ref()
+                    .map_or(&item.ident, |(_, rename)| rename),
+            )),
+            Item::Use(item) => use_tree_names(&item.tree, None, &mut names, &mut glob),
+            _ => {}
+        }
+        for name in names {
+            *definitions.entry(name).or_default() += 1;
+        }
+    }
+    if glob {
+        return Aliases::new();
+    }
+    candidates.retain(|name, _| definitions.get(name) == Some(&1));
+    candidates
+}
+
+/// A `#[cfg]` or `#[cfg_attr]`, which can remove the item or give it another
+/// `cfg`.
+fn has_cfg(attrs: &[Attribute]) -> bool {
+    attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("cfg") || attr.path().is_ident("cfg_attr"))
+}
+
+/// `aliases` without the names that `generics` declares as type parameters,
+/// which shadow a module alias inside the item.
+fn without_generic_params(aliases: &Aliases, generics: &syn::Generics) -> Aliases {
+    let mut aliases = aliases.clone();
+    for param in generics.type_params() {
+        aliases.remove(&ident_text(&param.ident));
+    }
+    aliases
+}
+
 /// The single same-file definition of alias `ident`; `None` if it is unknown
 /// or ambiguous.
 fn unique_alias<'a>(aliases: &'a Aliases, ident: &str) -> Option<&'a Type> {
-    match aliases.get(ident)?.as_slice() {
+    match aliases.get(unraw_name(ident))?.as_slice() {
         [ty] => Some(ty),
         _ => None,
     }
@@ -953,7 +1737,7 @@ fn contains_filter(
             };
             ident == name
                 || (type_path(ty).is_some_and(|path| path.segments.len() == 1)
-                    && aliases.get(&ident).is_some_and(|definitions| {
+                    && aliases.get(unraw_name(&ident)).is_some_and(|definitions| {
                         if every_definition {
                             definitions.iter().all(recurse)
                         } else {
@@ -980,8 +1764,10 @@ fn generic_type_args(segment: &syn::PathSegment) -> Vec<&Type> {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum XcmFeeFinding {
-    /// RTC003: fees are not charged at all.
-    Waived,
+    /// RTC003: executor `FeeManager` waives fees for every origin.
+    FeeManagerWaived,
+    /// RTC003: router delivery price is free (`()` or `NoPriceForMessageDelivery`).
+    RouterDeliveryFree,
     /// RTC006: fees are charged and then dropped.
     Burned,
 }
@@ -994,6 +1780,7 @@ fn type_text(ty: &Type) -> String {
 fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
     struct Visitor<'a> {
         aliases: &'a Aliases,
+        uses: Uses,
         findings: Vec<(XcmFeeFinding, usize, String)>,
         lines: HashSet<usize>,
         /// Delivery prices in the file: (any free, any priced).
@@ -1029,7 +1816,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
         fn check_price(&mut self, ident: &str, ty: &Type) {
             if DELIVERY_PRICE_TYPES.contains(&ident) && self.note_price(ty) {
                 self.push(
-                    XcmFeeFinding::Waived,
+                    XcmFeeFinding::RouterDeliveryFree,
                     line_of(ty),
                     format!(
                         "`{ident}` is `{}`, so XCM messages are delivered without a fee",
@@ -1061,7 +1848,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                 });
             if ident == "WaiveDeliveryFees" || waived_everywhere {
                 self.push(
-                    XcmFeeFinding::Waived,
+                    XcmFeeFinding::FeeManagerWaived,
                     line_of(ty),
                     format!(
                         "XCM executor `FeeManager` is `{}`: delivery and export fees are waived \
@@ -1077,7 +1864,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
         fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
 
         fn visit_item_impl(&mut self, item_impl: &'ast ItemImpl) {
-            if is_xcm_executor_impl(item_impl) {
+            if is_xcm_executor_impl(item_impl, &self.uses) {
                 // An executor that can neither send nor export never pays a
                 // delivery or export fee, so its fee manager is moot.
                 let sends = impl_type_named(item_impl, "XcmSender")
@@ -1111,7 +1898,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
                     if let Some(price) = generic_type_args(segment).get(2) {
                         if self.note_price(price) {
                             self.push(
-                                XcmFeeFinding::Waived,
+                                XcmFeeFinding::RouterDeliveryFree,
                                 line_of(*price),
                                 format!(
                                     "`{ident}` router is configured with delivery price `{}`",
@@ -1129,6 +1916,7 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
     let aliases = type_aliases(file);
     let mut visitor = Visitor {
         aliases: &aliases,
+        uses: module_uses(&file.items),
         findings: Vec::new(),
         lines: HashSet::new(),
         prices: (false, false),
@@ -1146,24 +1934,131 @@ fn xcm_fee_findings(file: &SynFile) -> Vec<(XcmFeeFinding, usize, String)> {
     visitor.findings
 }
 
+fn is_pallet_xcm_impl(item_impl: &ItemImpl) -> bool {
+    runtime_config_impl(item_impl)
+        .is_some_and(|segments| segments.iter().any(|segment| segment == "pallet_xcm"))
+}
+
+fn is_nothing_filter(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    match ty {
+        Type::Paren(inner) => is_nothing_filter(&inner.elem, aliases, depth + 1),
+        Type::Tuple(tuple) => {
+            tuple.elems.is_empty()
+                || tuple
+                    .elems
+                    .iter()
+                    .all(|elem| is_nothing_filter(elem, aliases, depth + 1))
+        }
+        _ => {
+            let Some(path) = type_path(ty) else {
+                return false;
+            };
+            let Some(ident) = path_last_ident(path) else {
+                return false;
+            };
+            ident == "Nothing"
+                || (path.segments.len() == 1
+                    && unique_alias(aliases, &ident)
+                        .is_some_and(|alias| is_nothing_filter(alias, aliases, depth + 1)))
+        }
+    }
+}
+
+/// Origin is provably privileged or rejects every origin (including
+/// `EnsureXcmOrigin<_, ()>` and `NeverEnsureOrigin`).
+fn xcm_origin_is_privileged(ty: &Type, aliases: &Aliases, depth: usize) -> bool {
+    if depth > 8 {
+        return false;
+    }
+    if origin_is_privileged(ty, aliases, depth) {
+        return true;
+    }
+    if let Type::Paren(inner) = ty {
+        return xcm_origin_is_privileged(&inner.elem, aliases, depth + 1);
+    }
+    let Some(path) = type_path(ty) else {
+        return false;
+    };
+    let Some(segment) = path.segments.last() else {
+        return false;
+    };
+    let ident = segment.ident.to_string();
+    if ident == "NeverEnsureOrigin" {
+        return true;
+    }
+    if ident == "EnsureXcmOrigin" {
+        return generic_type_args(segment)
+            .get(1)
+            .is_some_and(|converter| is_unit_or_alias_unit(converter, aliases, depth + 1));
+    }
+    if path.segments.len() == 1 && segment.arguments.is_empty() {
+        return unique_alias(aliases, &ident)
+            .is_some_and(|alias| xcm_origin_is_privileged(alias, aliases, depth + 1));
+    }
+    false
+}
+
+/// True when `impl pallet_xcm::Config for Runtime` closes every permissionless
+/// local outbound XCM path (`send`, `execute`, `teleport_assets`,
+/// `reserve_transfer_assets`), across all `#[cfg]` alternatives in the impl.
+fn pallet_xcm_outbound_is_privileged(item_impl: &ItemImpl, aliases: &Aliases) -> bool {
+    let all_items = |name: &str, pred: &dyn Fn(&Type) -> bool| {
+        let items = impl_types_named(item_impl, name);
+        !items.is_empty() && items.iter().all(|item| pred(&item.ty))
+    };
+    let send_privileged = all_items("SendXcmOrigin", &|ty| {
+        xcm_origin_is_privileged(ty, aliases, 0)
+    });
+    let execute_privileged = all_items("XcmExecuteFilter", &|ty| is_nothing_filter(ty, aliases, 0))
+        || all_items("ExecuteXcmOrigin", &|ty| {
+            xcm_origin_is_privileged(ty, aliases, 0)
+        });
+    let teleport_blocked = all_items("XcmTeleportFilter", &|ty| is_nothing_filter(ty, aliases, 0));
+    let reserve_blocked = all_items("XcmReserveTransferFilter", &|ty| {
+        is_nothing_filter(ty, aliases, 0)
+    });
+    send_privileged && execute_privileged && teleport_blocked && reserve_blocked
+}
+
 fn xcm_fee_diagnostics(
     rule: &dyn LintRule,
     ctx: &FileContext,
     config: &Config,
-    kind: XcmFeeFinding,
+    is_waived_rule: bool,
     default: Severity,
     explanation: &str,
     suggestion: &str,
 ) -> Option<Vec<Diagnostic>> {
-    runtime_scope(ctx, &config.runtime_config)?;
+    let krate = runtime_scope(ctx, &config.runtime_config)?;
     let file = production_ast(ctx.ast.as_ref()?);
     let severity = config.rule_severity(rule.id(), default);
     non_empty(
         xcm_fee_findings(&file)
             .into_iter()
-            .filter(|(found, _, _)| *found == kind)
-            .map(|(_, line, message)| {
-                diagnostic(rule, ctx, severity, line, message, explanation, suggestion)
+            .filter(|(found, _, _)| match found {
+                XcmFeeFinding::FeeManagerWaived | XcmFeeFinding::RouterDeliveryFree => {
+                    is_waived_rule
+                }
+                XcmFeeFinding::Burned => !is_waived_rule,
+            })
+            .map(|(found, line, mut message)| {
+                let low_confidence = found == XcmFeeFinding::FeeManagerWaived
+                    && krate.local_outbound_xcm_privileged_only;
+                if low_confidence {
+                    message.push_str(
+                        " (local `pallet_xcm` outbound paths appear privileged-only; verify \
+                         whether inbound XCM can trigger onward sends)",
+                    );
+                }
+                let mut diag =
+                    diagnostic(rule, ctx, severity, line, message, explanation, suggestion);
+                if low_confidence {
+                    diag.confidence = Confidence::Low;
+                }
+                diag
             })
             .collect(),
     )
@@ -1187,7 +2082,7 @@ impl LintRule for XcmFeesWaived {
             self,
             ctx,
             config,
-            XcmFeeFinding::Waived,
+            true,
             Severity::Warning,
             "XCM delivery fees are the congestion control for cross-chain messaging. When they are \
              waived or priced at zero, any account can fill the outbound XCMP/UMP/DMP queues for \
@@ -1218,7 +2113,7 @@ impl LintRule for XcmFeesBurned {
             self,
             ctx,
             config,
-            XcmFeeFinding::Burned,
+            false,
             Severity::Warning,
             "`impl FeeManager for ()` never waives a fee and its `handle_fee` does nothing, which the \
              trait documents as silently burning the fees (polkadot/xcm/xcm-executor/src/traits/\
@@ -1915,23 +2810,85 @@ fn covers(a: &CallPat, b: &CallPat) -> bool {
     a.0 == b.0 && (a.1.is_none() || a.1 == b.1)
 }
 
+/// Known operational-only pallet crates whose admission via `is_superset` is
+/// treated as a non-value policy mismatch rather than a high-impact escalation.
+/// Any unknown, custom, or renamed pallet fails closed as high impact.
+/// `pallet_collator_selection` is absent because its calls reserve candidacy
+/// bonds (fellows runtimes #1341). `pallet_session` is absent because
+/// `set_keys` holds a `KeyDeposit` and replaces collator or validator keys.
+const LOW_IMPACT_PROXY_CRATES: &[&str] = &[
+    "pallet_timestamp",
+    "pallet_aura",
+    "pallet_authorship",
+    "cumulus_pallet_parachain_system",
+    "pallet_message_queue",
+    "frame_system",
+];
+
+struct SubsetWitness {
+    display: String,
+    high_impact: bool,
+}
+
+/// Every declaration of `pallet` uses a low-impact crate. A variant with no
+/// declaration, or a declaration without a visible crate, is high impact.
+fn is_low_impact_pallet(
+    pallet: &str,
+    pallet_crates: &HashMap<String, Vec<Option<String>>>,
+) -> bool {
+    pallet_crates.get(pallet).is_some_and(|crates| {
+        !crates.is_empty()
+            && crates.iter().all(|krate| {
+                krate
+                    .as_deref()
+                    .is_some_and(|krate| LOW_IMPACT_PROXY_CRATES.contains(&krate))
+            })
+    })
+}
+
 /// Calls `sub` admits that `sup` does not, if evident: "`Pallet` calls", "`Pallet::call`".
-fn subset_witness(sub: &Calls, sup: &Calls) -> Option<String> {
-    let show = |(pallet, call): &CallPat| {
-        call.as_ref()
-            .map_or(format!("`{pallet}` calls"), |c| format!("`{pallet}::{c}`"))
+/// Inspects every uncovered pattern and prefers a high-impact witness whenever
+/// one exists, so low-impact patterns never mask a high-impact escalation.
+fn subset_witness(
+    sub: &Calls,
+    sup: &Calls,
+    pallet_crates: &HashMap<String, Vec<Option<String>>>,
+) -> Option<SubsetWitness> {
+    let show = |(pallet, call): &CallPat| SubsetWitness {
+        display: call
+            .as_ref()
+            .map_or(format!("`{pallet}` calls"), |c| format!("`{pallet}::{c}`")),
+        high_impact: !is_low_impact_pallet(pallet, pallet_crates),
+    };
+    let pick = |uncovered: Vec<&CallPat>| -> Option<SubsetWitness> {
+        let mut first_low: Option<SubsetWitness> = None;
+        for pat in uncovered {
+            let witness = show(pat);
+            if witness.high_impact {
+                return Some(witness);
+            }
+            if first_low.is_none() {
+                first_low = Some(witness);
+            }
+        }
+        first_low
     };
     match (sub, sup) {
-        (Calls::Deny(_), Calls::Allow(_)) => Some("calls".into()),
+        (Calls::Deny(_), Calls::Allow(_)) => Some(SubsetWitness {
+            display: "calls".into(),
+            high_impact: true,
+        }),
         (Calls::Unknown | Calls::Deny(_), _) | (_, Calls::Unknown) => None,
-        (Calls::Allow(sub), Calls::Allow(sup)) => sub
-            .iter()
-            .find(|s| !sup.iter().any(|a| covers(a, s)))
-            .map(show),
-        (Calls::Allow(sub), Calls::Deny(sup)) => sub
-            .iter()
-            .find(|s| sup.iter().any(|d| covers(d, s) || covers(s, d)))
-            .map(show),
+        (Calls::Allow(sub), Calls::Allow(sup)) => pick(
+            sub.iter()
+                .filter(|s| !sup.iter().any(|a| covers(a, s)))
+                .collect(),
+        ),
+        (Calls::Allow(sub), Calls::Deny(sup)) => pick(
+            sub.iter()
+                .filter(|s| sup.iter().any(|d| covers(d, s) || covers(s, d)))
+                .collect(),
+        ),
     }
 }
 
@@ -2073,18 +3030,32 @@ impl LintRule for ProxyFilterFailsOpen {
                 if !admits_add_proxy(sup_calls) {
                     continue;
                 }
-                let escapes: Vec<String> = proxies
+                let escapes: Vec<(String, bool)> = proxies
                     .iter()
                     .filter(|(y, _)| y != x && !is_decided(y))
                     .filter_map(|(y, calls)| {
-                        let call = subset_witness(calls, sup_calls)?;
-                        Some(format!(
-                            "`{x}` can add `{y}` proxies, which admit {call} `{x}` does not"
+                        let witness = subset_witness(calls, sup_calls, &krate.pallet_crates)?;
+                        if config
+                            .runtime_config
+                            .rtc008_reports_value_escalations_only()
+                            && !witness.high_impact
+                        {
+                            return None;
+                        }
+                        Some((
+                            format!(
+                                "`{x}` can add `{y}` proxies, which admit {} `{x}` does not",
+                                witness.display
+                            ),
+                            witness.high_impact,
                         ))
                     })
                     .collect();
                 if !escapes.is_empty() {
-                    diagnostics.push(diagnostic(
+                    let any_high_impact = escapes.iter().any(|(_, high)| *high);
+                    let descriptions: Vec<&str> =
+                        escapes.iter().map(|(text, _)| text.as_str()).collect();
+                    let mut diag = diagnostic(
                         self,
                         ctx,
                         severity,
@@ -2092,11 +3063,17 @@ impl LintRule for ProxyFilterFailsOpen {
                         format!(
                             "`is_superset` arm `{} => true` lets `{x}` escalate: {}",
                             compact_tokens(&arm.pat),
-                            escapes.join("; ")
+                            descriptions.join("; ")
                         ),
                         "A proxy can add or remove any proxy type it is a superset of.",
                         "List the subsumed proxy types instead of `_`.",
-                    ));
+                    );
+                    diag.confidence = if any_high_impact {
+                        Confidence::High
+                    } else {
+                        Confidence::Medium
+                    };
+                    diagnostics.push(diag);
                 }
             }
         }
@@ -2108,13 +3085,14 @@ impl LintRule for ProxyFilterFailsOpen {
 // RTC009: known-vulnerable Polkadot crate version in Cargo.lock
 // ---------------------------------------------------------------------------
 
-/// `(crate, first vulnerable, first fixed on that major line, advisory, url)`.
+/// `(crate, first vulnerable, first fixed on that major line, advisory, url, precondition)`.
 type VulnerableRelease = (
     &'static str,
     Version,
     Option<Version>,
     &'static str,
     &'static str,
+    Option<&'static str>,
 );
 type Version = (u64, u64, u64);
 
@@ -2132,7 +3110,8 @@ fn vulnerable_releases() -> Vec<VulnerableRelease> {
             let row = line.split('\t').collect::<Vec<_>>();
             let version = |field: &str| parse_version(field).expect("valid version in TSV");
             let fixed = (row[2] != "-").then(|| version(row[2]));
-            (row[0], version(row[1]), fixed, row[3], row[4])
+            let precondition = row.get(5).copied().filter(|value| *value != "-");
+            (row[0], version(row[1]), fixed, row[3], row[4], precondition)
         })
         .collect()
 }
@@ -2165,8 +3144,531 @@ fn package_line(lock: &str, name: &str, version: &str) -> usize {
     1
 }
 
+/// A crates.io `Cargo.lock` package with at least one advisory: index, name,
+/// version, parsed version and the releases that affect it.
+type AffectedPackage<'a> = (usize, &'a str, &'a str, Version, Vec<&'a VulnerableRelease>);
+
+/// The crates.io packages of `packages` that an advisory affects. Path and
+/// git packages are the workspace's own code, and a private registry may
+/// serve a patched fork under the same name and version.
+fn affected_packages<'a>(
+    packages: &'a [toml::Value],
+    advisories: &'a [VulnerableRelease],
+) -> Vec<AffectedPackage<'a>> {
+    packages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, package)| {
+            let field = |key| package.get(key).and_then(toml::Value::as_str);
+            let (name, version, source) = (field("name")?, field("version")?, field("source")?);
+            let installed = parse_version(version)?;
+            if !CRATES_IO_SOURCES.contains(&source) {
+                return None;
+            }
+            let releases = advisories
+                .iter()
+                .filter(|(krate, first_vulnerable, fixed, ..)| {
+                    *krate == name
+                        && installed.0 == first_vulnerable.0
+                        && installed >= *first_vulnerable
+                        && fixed.is_none_or(|fixed| installed < fixed)
+                })
+                .collect::<Vec<_>>();
+            (!releases.is_empty()).then_some((idx, name, version, installed, releases))
+        })
+        .collect()
+}
+
+/// The `Cargo.lock` at `path` has a crates.io package that an advisory affects.
+fn lock_has_affected_package(path: &Path) -> bool {
+    let Some(lock) = fs::read_to_string(path)
+        .ok()
+        .and_then(|content| content.parse::<toml::Table>().ok())
+    else {
+        return false;
+    };
+    let packages = lock
+        .get("package")
+        .and_then(toml::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    !affected_packages(packages, &vulnerable_releases()).is_empty()
+}
+
 fn version_string((major, minor, patch): Version) -> String {
     format!("{major}.{minor}.{patch}")
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct WorkspaceRuntimesKey(PathBuf);
+
+/// Every runtime crate under a workspace directory. See [`workspace_crates`].
+fn workspace_runtimes(lock_dir: &Path) -> Vec<Arc<RuntimeCrate>> {
+    workspace_crates(lock_dir)
+        .iter()
+        .filter(|krate| krate.is_runtime)
+        .cloned()
+        .collect()
+}
+
+/// Discovers every Cargo package under a workspace directory (skipping hidden
+/// directories, `target`, and `node_modules`), cached per scan.
+fn workspace_crates(lock_dir: &Path) -> Arc<Vec<Arc<RuntimeCrate>>> {
+    let key =
+        WorkspaceRuntimesKey(fs::canonicalize(lock_dir).unwrap_or_else(|_| lock_dir.to_path_buf()));
+    scan_cached(key, |WorkspaceRuntimesKey(root)| {
+        let mut runtimes = Vec::new();
+        let walker = WalkDir::new(root)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.depth() == 0 {
+                    return true;
+                }
+                if entry.file_type().is_dir() {
+                    let name = entry.file_name().to_string_lossy();
+                    return !name.starts_with('.') && name != "target" && name != "node_modules";
+                }
+                true
+            });
+        for entry in walker.filter_map(Result::ok) {
+            if entry.file_type().is_file() && entry.file_name() == "Cargo.toml" {
+                if let Some(pkg_dir) = entry.path().parent() {
+                    let canonical =
+                        fs::canonicalize(pkg_dir).unwrap_or_else(|_| pkg_dir.to_path_buf());
+                    // The source rules never see a manifest-only crate, so the
+                    // text check cannot hide a runtime from them.
+                    let krate = if may_declare_runtime(&canonical) {
+                        scan_cached(canonical, |dir| Arc::new(load_runtime_crate(dir)))
+                    } else {
+                        scan_cached(ManifestOnlyKey(canonical), |ManifestOnlyKey(dir)| {
+                            Arc::new(load_crate(dir, CrateLoad::ManifestOnly))
+                        })
+                    };
+                    if krate.package.is_some() {
+                        runtimes.push(krate);
+                    }
+                }
+            }
+        }
+        Arc::new(runtimes)
+    })
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct ManifestOnlyKey(PathBuf);
+
+/// Some Rust file under the crate directory `root`, outside nested crates and
+/// test paths (`mock.rs`, `tests/`), has text that a runtime declaration
+/// needs: `construct_runtime`, or `runtime` then optional whitespace and `]`
+/// (`#[frame_support::runtime]`, `#[runtime]`) or `(`
+/// (`#[frame_support::runtime(..)]`). Reading text is much cheaper than
+/// parsing the module tree, which RTC009 needs only for a possible runtime. A
+/// pallet's mock runtime is in a test path, so the pallet is not parsed.
+fn may_declare_runtime(root: &Path) -> bool {
+    WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            if entry.depth() == 0 || !entry.file_type().is_dir() {
+                return true;
+            }
+            let name = entry.file_name().to_string_lossy();
+            !name.starts_with('.')
+                && name != "target"
+                && name != "node_modules"
+                && !entry.path().join("Cargo.toml").is_file()
+        })
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rs"))
+        .filter(|entry| !is_test_path(entry.path().strip_prefix(root).unwrap_or(entry.path())))
+        .any(|entry| fs::read_to_string(entry.path()).is_ok_and(|text| has_runtime_text(&text)))
+}
+
+/// See [`may_declare_runtime`].
+fn has_runtime_text(text: &str) -> bool {
+    text.contains("construct_runtime")
+        || text.match_indices("runtime").any(|(start, needle)| {
+            text[start + needle.len()..]
+                .trim_start()
+                .starts_with([']', '('])
+        })
+}
+
+/// The runtime belongs to a workspace other than the one rooted at
+/// `lock_root`, so another lockfile describes it.
+fn is_other_workspace(krate: &RuntimeCrate, lock_root: &Path) -> bool {
+    krate
+        .workspace
+        .as_ref()
+        .is_some_and(|workspace| workspace != lock_root)
+}
+
+/// A runtime root in `Cargo.lock`: a local production runtime crate parsed
+/// from source, or a package whose source was not inspected.
+#[derive(Clone)]
+enum ReachRoot {
+    Local(Arc<RuntimeCrate>),
+    External,
+}
+
+/// The package builds a runtime WASM blob: it depends on this crate.
+///
+/// Runtime libraries such as `sp-runtime` or `polkadot-runtime-common` do not
+/// depend on it, so a `runtime` name token alone does not identify a runtime.
+///
+/// `Cargo.lock` resolves every feature of a workspace member, so it keeps a
+/// member's optional `substrate-wasm-builder` build dependency. For a package
+/// outside the workspace (git, registry or an outside path) it keeps an
+/// optional dependency only when some feature enables it, so a remote
+/// runtime can lack the edge (checked with `cargo generate-lockfile`, Cargo
+/// 1.93).
+const WASM_BUILDER_CRATE: &str = "substrate-wasm-builder";
+
+/// Every FRAME runtime depends on this crate directly.
+const FRAME_EXECUTIVE_CRATE: &str = "frame-executive";
+
+/// Name prefixes of library families with a `runtime` name token that are not
+/// runtimes (`sp-runtime`, `sp-runtime-interface`, `bp-runtime`,
+/// `frame-try-runtime`).
+const RUNTIME_NAMED_LIBRARY_PREFIXES: &[&str] = &["sp-", "bp-", "frame-try-"];
+
+fn is_runtime_named_library(name: &str) -> bool {
+    RUNTIME_NAMED_LIBRARY_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// The package name ends in a `runtime` token, as most runtime crates do
+/// (`asset-hub-polkadot-runtime`), and is not a known library.
+fn ends_in_runtime_token(name: &str) -> bool {
+    name_tokens(name).last().as_deref() == Some("runtime") && !is_runtime_named_library(name)
+}
+
+/// The package name has a `runtime` token anywhere (`runtime-eden`,
+/// `interlay-runtime-parachain`) and is not a known library.
+fn has_runtime_token(name: &str) -> bool {
+    name_tokens(name).any(|token| token == "runtime") && !is_runtime_named_library(name)
+}
+
+/// True when a `Cargo.lock` package that no parsed runtime matches passes the
+/// test, dev and testnet runtime name filters.
+fn is_included_external_runtime(name: &str, config: &RuntimeConfigConfig) -> bool {
+    if has_name_token(name, &config.test_runtime_tokens) {
+        return false;
+    }
+    if !config.include_dev_runtimes
+        && (has_name_token(name, &config.dev_runtime_tokens)
+            || config.dev_runtime_packages.iter().any(|p| p == name))
+    {
+        return false;
+    }
+    if config.excludes_testnet_runtimes() && has_name_token(name, &config.testnet_runtime_tokens) {
+        return false;
+    }
+    true
+}
+
+/// Parse a `Cargo.lock` `dependencies` entry (`name`, `name version`, or
+/// `name version (source)`).
+///
+/// Cargo writes a git source without the `#<commit>` suffix that the
+/// package's own `source` has, so compare sources with [`source_base`].
+fn parse_lock_dep_spec(spec: &str) -> Option<(&str, Option<&str>, Option<&str>)> {
+    let mut parts = spec.split_ascii_whitespace();
+    let dep_name = parts.next()?;
+    let mut dep_version = None;
+    let mut dep_source = None;
+    for part in parts {
+        if let Some(src) = part.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
+            dep_source = Some(src);
+        } else if dep_version.is_none() {
+            dep_version = Some(part);
+        }
+    }
+    Some((dep_name, dep_version, dep_source))
+}
+
+/// A `Cargo.lock` source without its `#<commit>` suffix.
+fn source_base(source: &str) -> &str {
+    source.split_once('#').map_or(source, |(base, _)| base)
+}
+
+/// Reachability of `Cargo.lock` packages from included production runtime crates.
+struct LockReachability {
+    /// For each package index in `Cargo.lock`, the production runtime roots
+    /// that transitively depend on it.
+    reaching_roots: Vec<Vec<ReachRoot>>,
+}
+
+impl LockReachability {
+    /// Returns `Some(reachability)` when `lock_dir` is a Cargo workspace with
+    /// at least one included production runtime rooted in `packages` and
+    /// dependency edges. Returns `None` for a standalone lockfile, a
+    /// non-runtime workspace, a workspace whose runtimes are all excluded, or
+    /// a lockfile that an included local runtime does not match, so every
+    /// finding keeps its normal severity.
+    fn build(
+        lock_dir: Option<&Path>,
+        packages: &[toml::Value],
+        config: &RuntimeConfigConfig,
+    ) -> Option<Self> {
+        let lock_dir = match lock_dir {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        if !lock_dir.join("Cargo.toml").is_file() {
+            return None;
+        }
+        let has_dep_edges = packages.iter().any(|pkg| {
+            pkg.get("dependencies")
+                .and_then(toml::Value::as_array)
+                .is_some_and(|deps| !deps.is_empty())
+        });
+        if !has_dep_edges {
+            return None;
+        }
+
+        let all_crates = workspace_crates(lock_dir);
+        let all_runtimes = all_crates
+            .iter()
+            .filter(|krate| krate.is_runtime)
+            .collect::<Vec<_>>();
+        if all_runtimes.is_empty() {
+            return None;
+        }
+
+        struct LockPkg<'a> {
+            idx: usize,
+            version: &'a str,
+            source: Option<&'a str>,
+        }
+
+        // Index Cargo.lock packages by name.
+        let mut by_name: HashMap<&str, Vec<LockPkg<'_>>> = HashMap::new();
+        let mut names = vec![None; packages.len()];
+        for (idx, pkg) in packages.iter().enumerate() {
+            if let (Some(name), Some(version)) = (
+                pkg.get("name").and_then(toml::Value::as_str),
+                pkg.get("version").and_then(toml::Value::as_str),
+            ) {
+                let source = pkg.get("source").and_then(toml::Value::as_str);
+                names[idx] = Some(name);
+                by_name.entry(name).or_default().push(LockPkg {
+                    idx,
+                    version,
+                    source,
+                });
+            }
+        }
+
+        // Build adjacency list for Cargo.lock `dependencies` entries, honoring
+        // version and `(source)` disambiguation when present. A source that
+        // matches no package keeps the edge to every package of that name and
+        // version (fail closed).
+        let mut adj: Vec<Vec<usize>> = vec![Vec::new(); packages.len()];
+        for (idx, pkg) in packages.iter().enumerate() {
+            let Some(deps) = pkg.get("dependencies").and_then(toml::Value::as_array) else {
+                continue;
+            };
+            for dep in deps.iter().filter_map(toml::Value::as_str) {
+                let Some((dep_name, dep_version, dep_source)) = parse_lock_dep_spec(dep) else {
+                    continue;
+                };
+                let Some(candidates) = by_name.get(dep_name) else {
+                    continue;
+                };
+                let versioned = candidates
+                    .iter()
+                    .filter(|target| dep_version.is_none_or(|ver| ver == target.version))
+                    .collect::<Vec<_>>();
+                let sourced = versioned
+                    .iter()
+                    .filter(|target| {
+                        dep_source.is_none_or(|src| {
+                            target.source.map(source_base) == Some(source_base(src))
+                        })
+                    })
+                    .map(|target| target.idx)
+                    .collect::<Vec<_>>();
+                if sourced.is_empty() {
+                    adj[idx].extend(versioned.iter().map(|target| target.idx));
+                } else {
+                    adj[idx].extend(sourced);
+                }
+            }
+        }
+
+        // A package is identified by (name, version, source). A parsed local
+        // runtime matches only a `source`-less entry of its name and version,
+        // so its source never describes a git or registry package of the same
+        // name. Runtimes of another workspace have their own lockfile.
+        let lock_root = fs::canonicalize(lock_dir).unwrap_or_else(|_| lock_dir.to_path_buf());
+        let mut matched: Vec<Vec<&Arc<RuntimeCrate>>> = vec![Vec::new(); packages.len()];
+        for &rt in &all_runtimes {
+            if is_other_workspace(rt, &lock_root) {
+                continue;
+            }
+            let local = rt
+                .package
+                .as_deref()
+                .and_then(|name| by_name.get(name))
+                .into_iter()
+                .flatten()
+                .filter(|pkg| pkg.source.is_none())
+                .collect::<Vec<_>>();
+            let hits = match rt.version.as_deref() {
+                Some(version) => local
+                    .iter()
+                    .filter(|pkg| pkg.version == version)
+                    .map(|pkg| pkg.idx)
+                    .collect::<Vec<_>>(),
+                None if local.len() == 1 => vec![local[0].idx],
+                None => Vec::new(),
+            };
+            // A stale lockfile, or a version that cannot be resolved: the
+            // lockfile does not show what this runtime reaches.
+            if hits.is_empty() && is_included_runtime_crate(rt, config) {
+                return None;
+            }
+            for idx in hits {
+                matched[idx].push(rt);
+            }
+        }
+
+        // A matched entry is a local root unless the filters exclude every
+        // runtime that matches it. Only an entry matched by exactly one parsed
+        // crate can use that crate's `AssetTransactor` mitigation.
+        let mut local_roots = Vec::new();
+        let mut external_roots = Vec::new();
+        for (idx, runtimes) in matched.iter().enumerate() {
+            match runtimes.as_slice() {
+                [] => {}
+                [rt] if is_included_runtime_crate(rt, config) => {
+                    local_roots.push((idx, Arc::clone(rt)));
+                }
+                runtimes
+                    if runtimes
+                        .iter()
+                        .any(|rt| is_included_runtime_crate(rt, config)) =>
+                {
+                    external_roots.push(idx);
+                }
+                _ => {}
+            }
+        }
+
+        // An unmatched package that depends on `substrate-wasm-builder`,
+        // directly or through other unmatched packages (the `polkadot-sdk`
+        // umbrella, a helper build crate), may build a runtime the parser did
+        // not see, so it is an external root. The search passes through a
+        // package that the name filters exclude, because a package that
+        // depends on it can still build a runtime.
+        let mut dependents = vec![Vec::new(); packages.len()];
+        for (idx, deps) in adj.iter().enumerate() {
+            for &dep in deps {
+                dependents[dep].push(idx);
+            }
+        }
+        let mut builds_wasm = vec![false; packages.len()];
+        let mut queue = (0..packages.len())
+            .filter(|&idx| names[idx] == Some(WASM_BUILDER_CRATE))
+            .collect::<VecDeque<_>>();
+        while let Some(node) = queue.pop_front() {
+            for &dependent in &dependents[node] {
+                if builds_wasm[dependent] || !matched[dependent].is_empty() {
+                    continue;
+                }
+                builds_wasm[dependent] = true;
+                queue.push_back(dependent);
+            }
+        }
+
+        // Cargo omits an optional dependency of a package outside the
+        // workspace unless a feature enables it, so a git or registry runtime
+        // may show no `substrate-wasm-builder` edge. Every FRAME runtime
+        // depends on `frame-executive`, and most have a `runtime` name token,
+        // so an unmatched package with either is an external root too. A
+        // workspace member keeps its builder edge, so the `frame-executive`
+        // edge and an inner `runtime` token skip a source-less entry of a
+        // local package that the parser found is not a runtime (a pallet with
+        // `frame-executive` as a dev-dependency). A source-less entry that no
+        // parsed crate matches (a member in a hidden directory, a path
+        // package outside the workspace) is code the parser did not read, so
+        // it is a root.
+        let executive = (0..packages.len())
+            .filter(|&idx| names[idx] == Some(FRAME_EXECUTIVE_CRATE))
+            .collect::<HashSet<_>>();
+        let parsed = all_crates
+            .iter()
+            .filter(|krate| !is_other_workspace(krate, &lock_root))
+            .filter_map(|krate| {
+                let key = (krate.package.as_deref()?, krate.version.as_deref()?);
+                Some((key, krate.sources_read && !krate.is_runtime))
+            })
+            .collect::<Vec<_>>();
+        let local_libraries = parsed
+            .iter()
+            .filter(|(_, library)| *library)
+            .map(|(key, _)| *key)
+            .collect::<HashSet<_>>();
+        let local_crates = parsed.iter().map(|(key, _)| *key).collect::<HashSet<_>>();
+        for (idx, name) in names.iter().enumerate() {
+            let Some(name) = name else { continue };
+            let local = packages[idx]
+                .get("source")
+                .is_none()
+                .then(|| packages[idx].get("version").and_then(toml::Value::as_str))
+                .map(|version| version.map(|version| (*name, version)));
+            let is_local_library = local
+                .flatten()
+                .is_some_and(|key| local_libraries.contains(&key));
+            let is_unparsed_local =
+                local.is_some_and(|key| key.is_none_or(|key| !local_crates.contains(&key)));
+            let root_like = builds_wasm[idx]
+                || is_unparsed_local
+                || ends_in_runtime_token(name)
+                || (!is_local_library
+                    && (adj[idx].iter().any(|dep| executive.contains(dep))
+                        || has_runtime_token(name)));
+            if matched[idx].is_empty() && root_like && is_included_external_runtime(name, config) {
+                external_roots.push(idx);
+            }
+        }
+
+        // If no included production runtime is rooted in this lockfile, do not
+        // apply reachability downgrades (fail closed).
+        if local_roots.is_empty() && external_roots.is_empty() {
+            return None;
+        }
+
+        let mut reaching_roots: Vec<Vec<ReachRoot>> = vec![Vec::new(); packages.len()];
+        let mut walk = |roots: &[usize], root_kind: ReachRoot| {
+            let mut visited = vec![false; packages.len()];
+            let mut queue = VecDeque::new();
+            for &root in roots {
+                if !visited[root] {
+                    visited[root] = true;
+                    queue.push_back(root);
+                }
+            }
+            while let Some(node) = queue.pop_front() {
+                reaching_roots[node].push(root_kind.clone());
+                for &next in &adj[node] {
+                    if !visited[next] {
+                        visited[next] = true;
+                        queue.push_back(next);
+                    }
+                }
+            }
+        };
+        for (idx, rt) in local_roots {
+            walk(&[idx], ReachRoot::Local(rt));
+        }
+        walk(&external_roots, ReachRoot::External);
+
+        Some(Self { reaching_roots })
+    }
 }
 
 pub struct KnownVulnerableCrateVersion;
@@ -2187,35 +3689,23 @@ impl LintRule for KnownVulnerableCrateVersion {
             return None;
         }
         let lock = ctx.content.parse::<toml::Table>().ok()?;
-        let severity = config.rule_severity(self.id(), Severity::Error);
+        let packages = lock.get("package")?.as_array()?;
         let advisories = vulnerable_releases();
+        let affected = affected_packages(packages, &advisories);
+        if affected.is_empty() {
+            return None;
+        }
+        // Reachability parses every crate of the workspace, so it is built
+        // only for a lockfile with an affected package.
+        let reachability =
+            LockReachability::build(ctx.path.parent(), packages, &config.runtime_config);
         let mut diagnostics = Vec::new();
-        for package in lock.get("package")?.as_array()? {
-            let field = |key| package.get(key).and_then(toml::Value::as_str);
-            // Path and git packages are the workspace's own code, not a release.
-            let (Some(name), Some(version), Some(source)) =
-                (field("name"), field("version"), field("source"))
-            else {
-                continue;
-            };
-            let Some(installed) = parse_version(version) else {
-                continue;
-            };
-            // A private registry may serve a patched fork under the same name
-            // and version.
-            if !CRATES_IO_SOURCES.contains(&source) {
-                continue;
-            }
-            for (_, first_vulnerable, fixed, advisory, url) in
-                advisories
-                    .iter()
-                    .filter(|(krate, first_vulnerable, fixed, ..)| {
-                        *krate == name
-                            && installed.0 == first_vulnerable.0
-                            && installed >= *first_vulnerable
-                            && fixed.is_none_or(|fixed| installed < fixed)
-                    })
-            {
+        for (pkg_idx, name, version, installed, releases) in affected {
+            let reaching = reachability
+                .as_ref()
+                .map(|r| r.reaching_roots[pkg_idx].as_slice());
+            let unreachable_from_prod_runtime = reaching.is_some_and(|roots| roots.is_empty());
+            for (_, first_vulnerable, fixed, advisory, url, precondition) in releases {
                 let line = package_line(ctx.content, name, version);
                 let fix = match fixed {
                     Some(fixed) => format!("upgrade to {} or later", version_string(*fixed)),
@@ -2236,19 +3726,55 @@ impl LintRule for KnownVulnerableCrateVersion {
                         )
                     }
                 };
-                diagnostics.push(diagnostic(
+                // For advisories with `precondition = asset_transactor`,
+                // downgrade to advisory/low confidence when every reaching
+                // production runtime is a local runtime setting
+                // `AssetTransactor = ()` (e.g. Hyperbridge Nexus).
+                let mitigated_by_unit_transactor = *precondition == Some("asset_transactor")
+                    && reaching.is_some_and(|roots| {
+                        !roots.is_empty()
+                            && roots.iter().all(|root| match root {
+                                ReachRoot::Local(rt) => rt.unit_asset_transactor_only,
+                                ReachRoot::External => false,
+                            })
+                    });
+                let downgraded = unreachable_from_prod_runtime || mitigated_by_unit_transactor;
+                let default_sev = if downgraded {
+                    Severity::Advisory
+                } else {
+                    Severity::Error
+                };
+                let severity = config.rule_severity(self.id(), default_sev);
+                let mut message =
+                    format!("{name} {version} is affected by \"{advisory}\" ({url}): {fix}");
+                if unreachable_from_prod_runtime {
+                    message.push_str(
+                        " (not reachable from any included production runtime crate in this \
+                         workspace)",
+                    );
+                } else if mitigated_by_unit_transactor {
+                    message.push_str(
+                        " (every reaching production runtime sets `AssetTransactor = ()`, \
+                         so withdrawal debits are not reachable)",
+                    );
+                }
+                let mut diag = diagnostic(
                     self,
                     ctx,
                     severity,
                     line,
-                    format!("{name} {version} is affected by \"{advisory}\" ({url}): {fix}"),
+                    message,
                     "This Polkadot crate release has a known security bug whose fix shipped as a \
                      patch release without a RustSec/GHSA advisory, so cargo-audit may not \
                      report it. A runtime built from this lockfile still contains the bug.",
                     "Bump the crate to the first fixed release on its line (for example with \
                      `cargo update -p <crate> --precise <version>` or psvm), rebuild the runtime \
                      and ship it in a runtime upgrade.",
-                ));
+                );
+                if downgraded {
+                    diag.confidence = Confidence::Low;
+                }
+                diagnostics.push(diag);
             }
         }
         non_empty(diagnostics)

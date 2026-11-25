@@ -1,5 +1,6 @@
 use std::{
     any::{Any, TypeId},
+    borrow::Cow,
     cell::RefCell,
     collections::HashMap,
     hash::Hash,
@@ -105,18 +106,51 @@ impl LintEngine {
         no_default_features: bool,
         features: &[String],
     ) -> Vec<Diagnostic> {
-        let _scan_cache = ScanCache::begin();
-        let mut diagnostics = Vec::new();
-        let project_model =
-            ProjectModel::discover_with_features(root, no_default_features, features);
-        if let Some(model) = &project_model {
-            log::debug!(
-                "Loaded project model for {} with {} rustc cfgs",
-                root.display(),
-                model.rustc_cfgs().len()
-            );
-        }
+        self.scan_paths(&[root.to_path_buf()], no_default_features, features)
+    }
 
+    /// Scans every root with one configuration, so `exclude_testnet_runtimes`
+    /// is decided once over all of them. The result keeps the roots' order and
+    /// sorts each root's findings by file, then line.
+    pub fn scan_paths(
+        &self,
+        roots: &[PathBuf],
+        no_default_features: bool,
+        features: &[String],
+    ) -> Vec<Diagnostic> {
+        let _scan_cache = ScanCache::begin();
+        let models = roots
+            .iter()
+            .map(|root| {
+                let model =
+                    ProjectModel::discover_with_features(root, no_default_features, features);
+                if let Some(model) = &model {
+                    log::debug!(
+                        "Loaded project model for {} with {} rustc cfgs",
+                        root.display(),
+                        model.rustc_cfgs().len()
+                    );
+                }
+                model
+            })
+            .collect::<Vec<_>>();
+        let config = self.scan_config(roots, &models);
+        let mut diagnostics = Vec::new();
+        for (root, model) in roots.iter().zip(&models) {
+            let mut found = self.scan_root(root, model.as_ref(), &config);
+            found.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+            diagnostics.append(&mut found);
+        }
+        diagnostics
+    }
+
+    fn scan_root(
+        &self,
+        root: &Path,
+        project_model: Option<&ProjectModel>,
+        config: &Config,
+    ) -> Vec<Diagnostic> {
+        let mut diagnostics = Vec::new();
         for entry in self.walk(root) {
             let path = entry.path();
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -133,7 +167,6 @@ impl LintEngine {
             };
 
             let source_target_kinds = project_model
-                .as_ref()
                 .map(|model| model.target_kinds_for_file(path))
                 .unwrap_or_default();
 
@@ -142,47 +175,128 @@ impl LintEngine {
             } else {
                 None
             };
-            if let (Some(model), Some(ast)) = (&project_model, &mut ast) {
+            if let (Some(model), Some(ast)) = (project_model, &mut ast) {
                 if let Some(active_cfg) = model.active_cfg_for_file(path) {
                     expand_active_cfg_attrs(ast, active_cfg);
                 }
             }
 
             let class_path = classification_path(path, rel_path);
+            let (is_test_file, is_benchmark_file) =
+                Self::test_and_bench(&source_target_kinds, &class_path, &content);
             let file_ctx = FileContext {
                 path: path.to_path_buf(),
                 rel_path: rel_path.to_path_buf(),
                 content: &content,
                 is_rust,
                 is_text,
-                is_test_file: source_target_kinds
-                    .iter()
-                    .any(|kind| matches!(kind, SourceTargetKind::Test))
-                    || Self::is_test_file(&class_path, &content),
-                is_benchmark_file: source_target_kinds
-                    .iter()
-                    .any(|kind| matches!(kind, SourceTargetKind::Bench))
-                    || Self::is_benchmark_file(&class_path),
+                is_test_file,
+                is_benchmark_file,
                 source_target_kinds,
                 ast,
                 classification_path: class_path,
             };
 
             for rule in &self.rules {
-                if !self.config.rule_enabled(rule.id()) {
+                if !config.rule_enabled(rule.id()) {
                     continue;
                 }
 
-                if let Some(mut diags) = rule.check(&file_ctx, &self.config) {
+                if let Some(mut diags) = rule.check(&file_ctx, config) {
                     diagnostics.append(&mut diags);
                 }
             }
         }
-
-        // Sort by file, then line
-        diagnostics.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
-
         diagnostics
+    }
+
+    /// Whether a file is test code and benchmark code, from Cargo target kinds
+    /// and its classification path.
+    fn test_and_bench(
+        kinds: &[SourceTargetKind],
+        class_path: &Path,
+        content: &str,
+    ) -> (bool, bool) {
+        (
+            kinds
+                .iter()
+                .any(|kind| matches!(kind, SourceTargetKind::Test))
+                || Self::is_test_file(class_path, content),
+            kinds
+                .iter()
+                .any(|kind| matches!(kind, SourceTargetKind::Bench))
+                || Self::is_benchmark_file(class_path),
+        )
+    }
+
+    /// The config for a scan of `roots`. When `exclude_testnet_runtimes` would
+    /// skip every runtime the scan lints, the scan lints them anyway. The
+    /// runtimes are those of the files the scan reads, after include and
+    /// exclude globs and test classification, and the local runtimes that
+    /// RTC009 roots in a scanned `Cargo.lock`. Both cases name the testnet
+    /// runtimes on stderr.
+    fn scan_config(&self, roots: &[PathBuf], models: &[Option<ProjectModel>]) -> Cow<'_, Config> {
+        let runtime_rules = self
+            .rules
+            .iter()
+            .filter(|rule| rule.family() == "runtime-config" && self.config.rule_enabled(rule.id()))
+            .map(|rule| rule.id())
+            .collect::<Vec<_>>();
+        let lints_sources = runtime_rules.iter().any(|id| *id != "RTC009");
+        let lints_locks = runtime_rules.contains(&"RTC009");
+        let runtime = &self.config.runtime_config;
+        if !(lints_sources || lints_locks) || !runtime.excludes_testnet_runtimes() {
+            return Cow::Borrowed(&self.config);
+        }
+        let mut scanned = rules::runtime_config::ScannedRuntimes::new(runtime);
+        for (root, model) in roots.iter().zip(models) {
+            for entry in self.walk(root) {
+                let path = entry.path();
+                if entry.file_name() == "Cargo.lock" {
+                    if lints_locks {
+                        scanned.add_lock(path);
+                    }
+                    continue;
+                }
+                if !lints_sources || path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let rel_path = path.strip_prefix(root).unwrap_or(path);
+                let kinds = model
+                    .as_ref()
+                    .map(|model| model.target_kinds_for_file(path))
+                    .unwrap_or_default();
+                let (is_test, is_bench) =
+                    Self::test_and_bench(&kinds, &classification_path(path, rel_path), "");
+                if !is_test && !is_bench {
+                    scanned.add_source(path, rel_path);
+                }
+            }
+        }
+        let (testnets, all) = scanned.testnets(runtime);
+        if testnets.is_empty() {
+            return Cow::Borrowed(&self.config);
+        }
+        let names = testnets.join(", ");
+        let scope = roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        if all {
+            eprintln!(
+                "polkadot-linter: exclude_testnet_runtimes would skip every runtime in {scope}, \
+                 so these are linted anyway: {names}"
+            );
+            let mut config = self.config.clone();
+            config.runtime_config.exclude_testnet_runtimes = Some(false);
+            Cow::Owned(config)
+        } else {
+            eprintln!(
+                "polkadot-linter: exclude_testnet_runtimes skips these runtimes in {scope}: {names}"
+            );
+            Cow::Borrowed(&self.config)
+        }
     }
 
     pub fn is_test_file(path: &Path, _content: &str) -> bool {

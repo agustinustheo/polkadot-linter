@@ -12,8 +12,11 @@ polkadot-linter [OPTIONS] [PATHS]...
 | Flag | Default | What it does |
 | --- | --- | --- |
 | `-c`, `--config <FILE>` | `polkadot-linter.toml` | Config file. If you name a file that does not exist, the run fails. |
-| `-f`, `--format <FMT>` | `human` | `human`, `json` or `sarif`. |
+| `--profile <NAME>` | none | Built-in rule profile (`default`, `security`, or `all`) overlaid on top of the loaded config, preserving project excludes and severity overrides. A rule that the project file lists in `[rules.enabled]` keeps that setting. `default` leaves the project config unchanged. `security` also turns on `exclude_testnet_runtimes` and `rtc008_value_escalations_only` when the project config leaves them unset; stderr names the testnet runtimes it skips, or says that it lints them because they are every runtime in the scan. |
+| `-f`, `--format <FMT>` | `human` | `human`, `json` or `sarif`. JSON diagnostics include `confidence` (`low`/`medium`/`high`) and optional `also_in`. |
 | `-s`, `--severity <LEVEL>` | `advisory` | Lowest severity to show: `advisory`, `warning` or `error`. |
+| `--confidence <LEVEL>` | `low` | Lowest triage confidence to show (`low`, `medium`, or `high`). Applied before exit-code calculation. |
+| `--group` | off | Group diagnostics with identical rule ID and message into one entry (keeping the highest-severity/confidence occurrence first, with secondary locations in `also_in` / SARIF `relatedLocations`). Applied after inline allows and baselines. |
 | `--fail-on-warning` | off | Exit with code 1 on a warning too. |
 | `--rules <IDS>` | all enabled rules | Rule IDs or families, for example `RTC,SEC020`. Rules that are off stay off. |
 | `--include <GLOBS>` | none | Only scan files that match. |
